@@ -91,10 +91,19 @@ impl SmtSolver {
     }
 }
 
+/// Mirrors `adsmt-abduce::rank::RankedCandidate` + `Candidate` flattened:
+/// `rank` and `score` come from the engine's ranking layer (the
+/// `score` is `adsmt-abduce/rank.rs`'s native value — smaller =
+/// stronger), and `hypotheses` / `explanations` / `sources` are the
+/// lock-step lists that describe each hypothesis the candidate
+/// proposes (per Y4 `smt-cross-validation-tracker.md` §9 schema).
 #[derive(Debug, Clone)]
 pub struct AbductiveCandidate {
-    pub hypothesis: String,
     pub rank: u32,
+    pub score: f64,
+    pub hypotheses: Vec<String>,
+    pub explanations: Vec<Option<String>>,
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,7 +111,7 @@ pub enum SmtVerdict {
     Sat,
     Unsat,
     Unknown { reason: String },
-    Abductive { candidates: Vec<AbductiveCandidate>, explain: String },
+    Abductive { candidates: Vec<AbductiveCandidate> },
 }
 
 pub struct Context {
