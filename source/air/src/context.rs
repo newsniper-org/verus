@@ -103,7 +103,11 @@ impl SmtSolver {
 /// stronger), and `hypotheses` / `explanations` / `sources` are the
 /// lock-step lists that describe each hypothesis the candidate
 /// proposes (per Y4 `smt-cross-validation-tracker.md` §9 schema).
-#[derive(Debug, Clone)]
+///
+/// The `Serialize` impl round-trips the same field shape lu-smt
+/// emits, so the rust_verify reporter can splice these straight
+/// into its jsonl output under `-V report-abductive-on-unknown`.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AbductiveCandidate {
     pub rank: u32,
     pub score: f64,

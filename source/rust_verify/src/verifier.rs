@@ -12,7 +12,7 @@ use crate::util::{HashMapAbsorbWith, error};
 use crate::verus_items::{VerusItem, VerusItems};
 use air::ast::AssertId;
 use air::ast::{Command, CommandX, Commands};
-use air::context::{QueryContext, SmtSolver, ValidityResult};
+use air::context::{AbductiveCandidate, QueryContext, SmtSolver, ValidityResult};
 use air::messages::{ArcDynMessage, Diagnostics as _};
 use air::profiler::Profiler;
 use rustc_errors::{Diag, EmissionGuarantee};
@@ -350,11 +350,23 @@ pub struct Verifier {
 pub struct FuncDetails {
     pub obligation_proof_notes: HashSet<String>,
     pub failed_proof_notes: HashSet<String>,
+    /// Populated only when the adsmt backend returns the 4th
+    /// verdict (`abductive`) AND the user passed
+    /// `-V report-abductive-on-unknown`.  Each entry is one
+    /// ranked candidate (Y4 `smt-cross-validation-tracker.md`
+    /// §9 schema); `serde` emits the field as
+    /// `abductive_candidates` in the jsonl output.
+    #[serde(rename = "abductive_candidates", skip_serializing_if = "Vec::is_empty")]
+    pub abductive_candidates: Vec<AbductiveCandidate>,
 }
 
 impl Default for FuncDetails {
     fn default() -> Self {
-        Self { obligation_proof_notes: Default::default(), failed_proof_notes: Default::default() }
+        Self {
+            obligation_proof_notes: Default::default(),
+            failed_proof_notes: Default::default(),
+            abductive_candidates: Default::default(),
+        }
     }
 }
 
@@ -362,6 +374,7 @@ impl FuncDetails {
     fn absorb(&mut self, other: Self) {
         self.obligation_proof_notes.extend(other.obligation_proof_notes);
         self.failed_proof_notes.extend(other.failed_proof_notes);
+        self.abductive_candidates.extend(other.abductive_candidates);
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -975,10 +988,15 @@ impl Verifier {
                     // adsmt's 4th verdict.  The query is treated as
                     // a verification failure (mirrors the Canceled
                     // path: counts the function as failed, reports
-                    // an error) but the ranked candidates are also
-                    // surfaced to the user via stderr.  P-vb.7
-                    // upgrades this to a jsonl emit gated by
-                    // `-V report-abductive-on-unknown`.
+                    // an error) and, when the user passed
+                    // `-V report-abductive-on-unknown`, the ranked
+                    // candidates are routed into the jsonl reporter
+                    // through `FuncDetails.abductive_candidates`
+                    // so downstream tooling (Y4 cross-validation
+                    // sweeps) can pick them up structurally.  The
+                    // stderr render stays unconditional — even
+                    // without `--output-json`, the user still sees
+                    // every candidate inline with the failure.
                     if is_first_check && level == Some(MessageLevel::Error) {
                         self.count_errors += 1;
                         self.func_fails.insert(context.fun.clone());
@@ -1003,6 +1021,12 @@ impl Verifier {
                     }
                     if let Some(level) = level {
                         reporter.report(&message(level, msg, &context.span).to_any());
+                    }
+                    if self.args.report_abductive_on_unknown {
+                        self.record_func_abductive_candidates(
+                            context.fun.clone(),
+                            candidates,
+                        );
                     }
                     break;
                 }
@@ -3081,6 +3105,32 @@ impl Verifier {
             Entry::Vacant(vacant_entry) => {
                 let _ = vacant_entry.insert(FuncDetails {
                     failed_proof_notes: failed_proof_notes,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    /// Stores the ranked abductive candidates returned by the adsmt
+    /// backend's 4th verdict under the function that triggered the
+    /// query.  The verifier consults this map at jsonl-emit time
+    /// (`output_json`), so an entry only matters when the user also
+    /// passed `--output-json` — but the flag-gating is the caller's
+    /// responsibility (`run_command_queries` checks
+    /// `args.report_abductive_on_unknown` before invoking this).
+    fn record_func_abductive_candidates(
+        &mut self,
+        func: Fun,
+        candidates: Vec<AbductiveCandidate>,
+    ) {
+        use std::collections::hash_map::Entry;
+        match self.func_details.entry(func) {
+            Entry::Occupied(mut occupied_entry) => {
+                occupied_entry.get_mut().abductive_candidates.extend(candidates);
+            }
+            Entry::Vacant(vacant_entry) => {
+                let _ = vacant_entry.insert(FuncDetails {
+                    abductive_candidates: candidates,
                     ..Default::default()
                 });
             }
