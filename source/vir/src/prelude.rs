@@ -72,19 +72,18 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
             :qid prelude_height_lt
             :skolemid skolem_prelude_height_lt
             )))),
-        SmtSolver::Cvc5 => nodes_vec!(
+        // Adsmt rides the same user-declared partial-order encoding
+        // as Cvc5: lu-smt's parser doesn't recognise Z3's
+        // `(_ partial-order N)` indexed-identifier extension, so
+        // the prelude declares the relation explicitly and
+        // unfolds the reflexivity / antisymmetry / transitivity
+        // axioms by hand.
+        SmtSolver::Cvc5 | SmtSolver::Adsmt => nodes_vec!(
                     (declare-fun partial-order (Height Height) Bool)
                     (axiom (forall ((x Height)) (partial-order x x)))
                     (axiom (forall ((x Height) (y Height)) (=> (and (partial-order x y) (partial-order y x)) (= x y))))
                     (axiom (forall ((x Height) (y Height) (z Height)) (=> (and (partial-order x y) (partial-order y z)) (partial-order x z))))
                     (axiom (forall ((x Height) (y Height)) (= (height_lt x y) (and (partial-order x y) (not (= x y))))))),
-        SmtSolver::Adsmt => nodes_vec!(
-        (axiom (forall ((x [Height]) (y [Height])) (!
-            (= ([height_lt] x y) (and ([height_le] x y) (not (= x y))))
-            :pattern (([height_lt] x y))
-            :qid prelude_height_lt
-            :skolemid skolem_prelude_height_lt
-            )))),
     };
     let box_int = str_to_node(BOX_INT);
     let box_bool = str_to_node(BOX_BOOL);
