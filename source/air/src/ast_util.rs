@@ -283,7 +283,7 @@ pub fn mk_option_command(s1: &str, s2: &str) -> Command {
 
 pub fn mk_bitvector_option(solver: &SmtSolver) -> Vec<Command> {
     match solver {
-        SmtSolver::Z3 => vec![
+        SmtSolver::Z3 | SmtSolver::OxiZ => vec![
             mk_option_command("sat.euf", "true"),
             mk_option_command("tactic.default_tactic", "sat"),
             mk_option_command("smt.ematching", "false"),
@@ -294,6 +294,7 @@ pub fn mk_bitvector_option(solver: &SmtSolver) -> Vec<Command> {
         {
             vec![]
         }
+        SmtSolver::Adsmt => vec![], // adsmt does not accept z3-style bit-vector options
     }
 }
 

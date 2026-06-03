@@ -15,6 +15,12 @@ impl SolverInfo {
             SmtSolver::Cvc5 => {
                 SolverInfo { executable_name: "cvc5", env_path_var: "VERUS_CVC5_PATH" }
             }
+            SmtSolver::OxiZ => {
+                SolverInfo { executable_name: "oxiz", env_path_var: "VERUS_OXIZ_PATH" }
+            }
+            SmtSolver::Adsmt => {
+                SolverInfo { executable_name: "adsmt", env_path_var: "VERUS_ADSMT_PATH" }
+            }
         }
     }
 
@@ -79,8 +85,9 @@ fn reader_thread(
                 empty_lines = 0;
                 if line
                     == match solver {
-                        SmtSolver::Z3 => DONE,
+                        SmtSolver::Z3 | SmtSolver::OxiZ => DONE,
                         SmtSolver::Cvc5 => DONE_QUOTED,
+                        SmtSolver::Adsmt => DONE,
                     }
                 {
                     responses
@@ -102,7 +109,7 @@ impl SmtProcess {
         let solver_info = SolverInfo::new(solver);
         let mut child = match std::process::Command::new(solver_info.executable())
             .args(match solver {
-                SmtSolver::Z3 => vec!["-smt2", "-in"],
+                SmtSolver::Z3 | SmtSolver::OxiZ => vec!["-smt2", "-in"],
                 SmtSolver::Cvc5 => vec![
                     "--no-interactive",    // We don't need a human interface
                     "--produce-models",    // Needed for error reporting
@@ -112,6 +119,7 @@ impl SmtProcess {
                     "--rlimit",
                     "1666666", // ~= 5s
                 ],
+                SmtSolver::Adsmt => vec!["--smt2", "--stdin"], // placeholder, refined in P-vb.5
             })
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

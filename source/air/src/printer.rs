@@ -379,7 +379,7 @@ impl Printer {
                         if let Some(s) = qid {
                             nodes.push(str_to_node(":qid"));
                             nodes.push(str_to_node(s));
-                            if matches!(self.solver, SmtSolver::Z3) {
+                            if self.solver.is_z3_compatible() {
                                 nodes.push(str_to_node(":skolemid"));
                                 nodes.push(str_to_node(&mk_skolem_id(s)));
                             }

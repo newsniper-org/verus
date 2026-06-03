@@ -71,16 +71,38 @@ impl<'a, 'b: 'a> Default for QueryContext<'a, 'b> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmtSolver {
     Z3,
     Cvc5,
+    OxiZ,
+    Adsmt,
 }
 
 impl Default for SmtSolver {
     fn default() -> Self {
         SmtSolver::Z3
     }
+}
+
+impl SmtSolver {
+    pub fn is_z3_compatible(&self) -> bool {
+        matches!(self, SmtSolver::Z3 | SmtSolver::OxiZ)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AbductiveCandidate {
+    pub hypothesis: String,
+    pub rank: u32,
+}
+
+#[derive(Debug, Clone)]
+pub enum SmtVerdict {
+    Sat,
+    Unsat,
+    Unknown { reason: String },
+    Abductive { candidates: Vec<AbductiveCandidate>, explain: String },
 }
 
 pub struct Context {
@@ -172,8 +194,9 @@ impl Context {
             time_smt_init: Duration::new(0, 0),
             time_smt_run: Duration::new(0, 0),
             rlimit_count: match solver {
-                SmtSolver::Z3 => Some((0, 0)),
+                SmtSolver::Z3 | SmtSolver::OxiZ => Some((0, 0)),
                 SmtSolver::Cvc5 => None,
+                SmtSolver::Adsmt => None,
             },
             state: ContextState::NotStarted,
             expected_solver_version: None,
@@ -261,7 +284,7 @@ impl Context {
 
     pub fn set_rlimit(&mut self, rlimit: u32) {
         self.rlimit = rlimit;
-        if matches!(self.solver, SmtSolver::Z3) {
+        if self.solver.is_z3_compatible() {
             self.air_initial_log.log_set_option("rlimit", &rlimit.to_string());
             self.air_middle_log.log_set_option("rlimit", &rlimit.to_string());
             self.air_final_log.log_set_option("rlimit", &rlimit.to_string());
@@ -307,7 +330,7 @@ impl Context {
     pub(crate) fn set_z3_param_bool(&mut self, option: &str, value: bool, write_to_logs: bool) {
         if option == "air_recommended_options" && value {
             match self.solver {
-                SmtSolver::Z3 => {
+                SmtSolver::Z3 | SmtSolver::OxiZ => {
                     self.set_z3_param_bool("auto_config", false, true);
                     self.set_z3_param_bool("smt.mbqi", false, true);
                     self.set_z3_param_u32("smt.case_split", 3, true);
@@ -321,6 +344,9 @@ impl Context {
                 SmtSolver::Cvc5 => {
                     self.smt_log.log_node(&node!((set-logic {str_to_node("ALL")})));
                     self.set_z3_param_bool("incremental", true, true);
+                }
+                SmtSolver::Adsmt => {
+                    // adsmt does not accept z3-style parameters; no-op
                 }
             }
         } else if option == "disable_incremental_solving" && value {
@@ -336,7 +362,7 @@ impl Context {
     }
 
     pub(crate) fn set_z3_param_u32(&mut self, option: &str, value: u32, write_to_logs: bool) {
-        if option == "rlimit" && write_to_logs && matches!(self.solver, SmtSolver::Z3) {
+        if option == "rlimit" && write_to_logs && self.solver.is_z3_compatible() {
             self.set_rlimit(value);
         } else {
             if write_to_logs {

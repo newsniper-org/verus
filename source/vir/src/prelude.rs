@@ -65,7 +65,7 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     #[allow(non_snake_case)]
     let Height = str_to_node(T_HEIGHT);
     let height_axioms = match config.solver {
-        SmtSolver::Z3 => nodes_vec!(
+        SmtSolver::Z3 | SmtSolver::OxiZ => nodes_vec!(
         (axiom (forall ((x [Height]) (y [Height])) (!
             (= ([height_lt] x y) (and ([height_le] x y) (not (= x y))))
             :pattern (([height_lt] x y))
@@ -78,6 +78,13 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
                     (axiom (forall ((x Height) (y Height)) (=> (and (partial-order x y) (partial-order y x)) (= x y))))
                     (axiom (forall ((x Height) (y Height) (z Height)) (=> (and (partial-order x y) (partial-order y z)) (partial-order x z))))
                     (axiom (forall ((x Height) (y Height)) (= (height_lt x y) (and (partial-order x y) (not (= x y))))))),
+        SmtSolver::Adsmt => nodes_vec!(
+        (axiom (forall ((x [Height]) (y [Height])) (!
+            (= ([height_lt] x y) (and ([height_le] x y) (not (= x y))))
+            :pattern (([height_lt] x y))
+            :qid prelude_height_lt
+            :skolemid skolem_prelude_height_lt
+            )))),
     };
     let box_int = str_to_node(BOX_INT);
     let box_bool = str_to_node(BOX_BOOL);

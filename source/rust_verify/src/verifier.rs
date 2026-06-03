@@ -1378,14 +1378,19 @@ impl Verifier {
             air_context.set_expected_solver_version(match self.args.solver {
                 air::context::SmtSolver::Z3 => crate::consts::EXPECTED_Z3_VERSION.to_string(),
                 air::context::SmtSolver::Cvc5 => crate::consts::EXPECTED_CVC5_VERSION.to_string(),
+                air::context::SmtSolver::OxiZ => crate::consts::EXPECTED_OXIZ_VERSION.to_string(),
+                air::context::SmtSolver::Adsmt => {
+                    crate::consts::EXPECTED_ADSMT_VERSION.to_string()
+                }
             });
         }
 
         let mut spunoff_time_smt_init = Duration::ZERO;
         let mut spunoff_time_smt_run = Duration::ZERO;
         let mut spunoff_rlimit_count: Option<(u64, u64)> = match self.args.solver {
-            SmtSolver::Z3 => Some((0, 0)),
+            SmtSolver::Z3 | SmtSolver::OxiZ => Some((0, 0)),
             SmtSolver::Cvc5 => None,
+            SmtSolver::Adsmt => None,
         };
 
         let module = &ctx.module_path();
@@ -1575,8 +1580,11 @@ impl Verifier {
                         let mut func_curr_smt_time = Duration::ZERO;
 
                         let mut func_curr_smt_rlimit_count = match self.args.solver {
-                            air::context::SmtSolver::Z3 => Some(0),
+                            air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
+                                Some(0)
+                            }
                             air::context::SmtSolver::Cvc5 => None,
+                            air::context::SmtSolver::Adsmt => None,
                         };
                         for cmds in commands_with_context_list.iter() {
                             if is_recommend && cmds.skip_recommends {
@@ -1822,8 +1830,7 @@ impl Verifier {
                             let func_stats = func_time.entry(function.x.name.clone()).or_insert(
                                 FunctionSmtStats {
                                     smt_time: Duration::ZERO,
-                                    rlimit_count: matches!(self.args.solver, SmtSolver::Z3)
-                                        .then(|| 0),
+                                    rlimit_count: self.args.solver.is_z3_compatible().then(|| 0),
                                 },
                             );
                             func_stats.smt_time += func_curr_smt_time;

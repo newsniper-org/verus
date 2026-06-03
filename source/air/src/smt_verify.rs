@@ -119,15 +119,17 @@ pub(crate) fn smt_add_decl<'ctx>(context: &mut Context, decl: &Decl) {
 impl SmtSolver {
     pub fn reason_unknown_canceled_str(&self) -> &str {
         match self {
-            SmtSolver::Z3 => "(:reason-unknown \"canceled\")",
+            SmtSolver::Z3 | SmtSolver::OxiZ => "(:reason-unknown \"canceled\")",
             SmtSolver::Cvc5 => "(:reason-unknown resourceout)",
+            SmtSolver::Adsmt => "(:reason-unknown \"canceled\")",
         }
     }
 
     pub fn reason_unknown_incomplete_str(&self) -> &str {
         match self {
-            SmtSolver::Z3 => "(:reason-unknown \"(incomplete",
+            SmtSolver::Z3 | SmtSolver::OxiZ => "(:reason-unknown \"(incomplete",
             SmtSolver::Cvc5 => "(:reason-unknown incomplete)",
+            SmtSolver::Adsmt => "(:reason-unknown \"(incomplete",
         }
     }
 }
@@ -206,7 +208,7 @@ pub(crate) fn smt_check_assertion<'ctx>(
         context.smt_log.log_assert(&None, &disabled_expr);
     }
 
-    if matches!(context.solver, SmtSolver::Z3) {
+    if context.solver.is_z3_compatible() {
         context.smt_log.log_set_option("rlimit", &context.rlimit.to_string());
         context.set_z3_param_u32("rlimit", context.rlimit, false);
     }
@@ -261,7 +263,7 @@ pub(crate) fn smt_check_assertion<'ctx>(
         }
     }
 
-    if matches!(context.solver, SmtSolver::Z3) {
+    if context.solver.is_z3_compatible() {
         context.smt_log.log_set_option("rlimit", "0");
         context.set_z3_param_u32("rlimit", 0, false);
     }
@@ -362,7 +364,7 @@ pub(crate) fn smt_check_assertion<'ctx>(
 }
 
 pub(crate) fn smt_get_rlimit_count(context: &mut Context) -> Result<u64, ValidityResult> {
-    assert!(matches!(context.solver, SmtSolver::Z3)); // the CVC5 output format for statistics is different
+    assert!(context.solver.is_z3_compatible()); // CVC5 and adsmt output format for statistics is different
 
     context.smt_log.log_get_info("all-statistics");
     let smt_data = context.smt_log.take_pipe_data();
@@ -484,7 +486,7 @@ pub(crate) fn smt_check_query<'ctx>(
         context.push_name_scope();
     }
 
-    let rlimit_count_1 = if matches!(context.solver, SmtSolver::Z3) {
+    let rlimit_count_1 = if context.solver.is_z3_compatible() {
         let rlimit_count = match smt_get_rlimit_count(context) {
             Ok(rlimit_count) => rlimit_count,
             Err(e) => return e,
@@ -525,7 +527,7 @@ pub(crate) fn smt_check_query<'ctx>(
     let not_expr = Arc::new(ExprX::Unary(UnaryOp::Not, labeled_assertion));
     context.smt_log.log_assert(&None, &not_expr);
 
-    let rlimit_count_2 = if matches!(context.solver, SmtSolver::Z3) {
+    let rlimit_count_2 = if context.solver.is_z3_compatible() {
         let rlimit_count = match smt_get_rlimit_count(context) {
             Ok(rlimit_count) => rlimit_count,
             Err(e) => return e,
@@ -538,7 +540,7 @@ pub(crate) fn smt_check_query<'ctx>(
     let result =
         smt_check_assertion(context, diagnostics, infos, air_model, false, report_long_running);
 
-    if matches!(context.solver, SmtSolver::Z3) {
+    if context.solver.is_z3_compatible() {
         let (ctx_rlimit_init, ctx_rlimit_run) = context.rlimit_count.unwrap();
         let rlimit_count_3 = match smt_get_rlimit_count(context) {
             Ok(rlimit_count) => rlimit_count,
