@@ -681,3 +681,135 @@ pub(crate) fn smt_check_query<'ctx>(
 
     result
 }
+
+#[cfg(test)]
+mod abductive_parse_tests {
+    use super::parse_abductive_candidates_line;
+
+    /// Y4 `smt-cross-validation-tracker.md` §9 — single multi-field
+    /// candidate, exact JSON shape lu-smt emits.
+    #[test]
+    fn parses_y4_single_candidate_example() {
+        let line = r#"{"abductive_candidates":[
+            {"rank":1,"score":1.025,
+             "hypotheses":["forall c, revoked(c) implies not alive(owner(c).frame)"],
+             "explanations":[null],
+             "sources":["abducible-frame-revoke-chain"]}
+        ]}"#;
+        let candidates = parse_abductive_candidates_line(line).expect("parse");
+        assert_eq!(candidates.len(), 1);
+        let c = &candidates[0];
+        assert_eq!(c.rank, 1);
+        assert!((c.score - 1.025).abs() < f64::EPSILON);
+        assert_eq!(c.hypotheses.len(), 1);
+        assert_eq!(c.explanations, vec![None]);
+        assert_eq!(c.sources, vec!["abducible-frame-revoke-chain".to_string()]);
+    }
+
+    /// Multi-candidate, ascending rank, with a mix of null / Some
+    /// explanations.  Mirrors what `rank_candidates` produces for a
+    /// real abductive Tier-4 escalation.
+    #[test]
+    fn parses_multi_candidate_with_explanations() {
+        let line = r#"{"abductive_candidates":[
+            {"rank":1,"score":2.013,
+             "hypotheses":["P(x)","Q(x)"],
+             "explanations":["from P", null],
+             "sources":["src-a","src-b"]},
+            {"rank":2,"score":3.001,
+             "hypotheses":["R(y)"],
+             "explanations":[null],
+             "sources":["src-c"]}
+        ]}"#;
+        let candidates = parse_abductive_candidates_line(line).expect("parse");
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].rank, 1);
+        assert_eq!(candidates[0].hypotheses.len(), 2);
+        assert_eq!(candidates[0].explanations[0].as_deref(), Some("from P"));
+        assert_eq!(candidates[0].explanations[1], None);
+        assert_eq!(candidates[1].rank, 2);
+        assert_eq!(candidates[1].hypotheses, vec!["R(y)".to_string()]);
+    }
+
+    /// Malformed JSON must be rejected, not silently dropped.
+    #[test]
+    fn rejects_malformed_json() {
+        let err = parse_abductive_candidates_line("not even json")
+            .expect_err("must reject non-JSON");
+        assert!(err.contains("not valid JSON"));
+    }
+
+    /// Lock-step invariant: `hypotheses`, `explanations`, `sources`
+    /// must have equal lengths.  Spec drift would silently pair the
+    /// wrong explanation with a hypothesis.
+    #[test]
+    fn rejects_lock_step_mismatch() {
+        let line = r#"{"abductive_candidates":[
+            {"rank":1,"score":1.0,
+             "hypotheses":["a","b"],
+             "explanations":[null],
+             "sources":["s1","s2"]}
+        ]}"#;
+        let err = parse_abductive_candidates_line(line)
+            .expect_err("must reject mismatched list lengths");
+        assert!(err.contains("lock-step lists out of sync"));
+    }
+
+    /// Top-level missing the `abductive_candidates` key is a
+    /// protocol violation — the engine always emits the wrapping
+    /// object even for empty lists.
+    #[test]
+    fn rejects_missing_top_level_key() {
+        let line = r#"{"verdict":"abductive"}"#;
+        let err = parse_abductive_candidates_line(line)
+            .expect_err("must reject missing top-level array");
+        assert!(err.contains("abductive_candidates"));
+    }
+
+    /// Per-candidate missing fields surface descriptive errors so
+    /// schema drift fails fast.
+    #[test]
+    fn rejects_missing_per_candidate_field() {
+        let line = r#"{"abductive_candidates":[
+            {"rank":1,"score":1.0,
+             "hypotheses":["a"],
+             "sources":["s1"]}
+        ]}"#;
+        let err = parse_abductive_candidates_line(line)
+            .expect_err("must reject candidate missing `explanations`");
+        assert!(err.contains("explanations"));
+    }
+
+    /// Empty candidate list is accepted (engine returned abductive
+    /// but minimisation eliminated every candidate).  This is the
+    /// degenerate but legitimate case.
+    #[test]
+    fn accepts_empty_candidate_list() {
+        let line = r#"{"abductive_candidates":[]}"#;
+        let candidates = parse_abductive_candidates_line(line).expect("parse");
+        assert!(candidates.is_empty());
+    }
+
+    /// Verbatim output captured from `lu-smt 1.0.0-rc.8` for the
+    /// quintessential abductive trigger
+    /// `(assert (P a)) (assert (forall ((x U)) (=> (P x) (P (next x)))))`:
+    /// each round produces a fresh instance `(P (next^k a))`, the
+    /// quantifier-instantiation loop never fixpoints, so Tier-4
+    /// escalation fires.  Pins the wire-level shape against
+    /// silent schema drift on the adsmt side.
+    #[test]
+    fn parses_lu_smt_rc8_quant_tier4_output() {
+        let line = r#"{"abductive_candidates":[{"explanations":["quantifier `∀x:U. or (not (P x)) (P (next x))` needs a witness instantiation the engine could not synthesize (tier 4 escalation)"],"hypotheses":["forall (λx:U. or (not (P x)) (P (next x)))"],"rank":1,"score":1.007,"sources":["quant-tier4"]}]}"#;
+        let candidates = parse_abductive_candidates_line(line).expect("parse");
+        assert_eq!(candidates.len(), 1);
+        let c = &candidates[0];
+        assert_eq!(c.rank, 1);
+        assert!((c.score - 1.007).abs() < 1e-9);
+        assert_eq!(c.hypotheses.len(), 1);
+        assert!(c.hypotheses[0].contains("forall"));
+        assert!(c.hypotheses[0].contains("(P (next x))"));
+        assert_eq!(c.explanations.len(), 1);
+        assert!(c.explanations[0].as_deref().unwrap().contains("tier 4 escalation"));
+        assert_eq!(c.sources, vec!["quant-tier4".to_string()]);
+    }
+}
