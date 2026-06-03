@@ -16,10 +16,16 @@ impl SolverInfo {
                 SolverInfo { executable_name: "cvc5", env_path_var: "VERUS_CVC5_PATH" }
             }
             SmtSolver::OxiZ => {
+                // `oxiz` is the binary name shipped by oxiz-cli's
+                // `[[bin]]` table (Honey-Be/oxiz fork, branch
+                // `0.2.3-feat/writer`).
                 SolverInfo { executable_name: "oxiz", env_path_var: "VERUS_OXIZ_PATH" }
             }
             SmtSolver::Adsmt => {
-                SolverInfo { executable_name: "adsmt", env_path_var: "VERUS_ADSMT_PATH" }
+                // `lu-smt` is the binary name shipped by adsmt-cli's
+                // `[[bin]]` table (newsniper-org/adsmt, testing channel
+                // per Y4 unified-toolkit-pin §10.6).
+                SolverInfo { executable_name: "lu-smt", env_path_var: "VERUS_ADSMT_PATH" }
             }
         }
     }
@@ -109,7 +115,14 @@ impl SmtProcess {
         let solver_info = SolverInfo::new(solver);
         let mut child = match std::process::Command::new(solver_info.executable())
             .args(match solver {
-                SmtSolver::Z3 | SmtSolver::OxiZ => vec!["-smt2", "-in"],
+                SmtSolver::Z3 => vec!["-smt2", "-in"],
+                SmtSolver::OxiZ => vec![
+                    // oxiz-cli reads SMT-LIB2 from stdin when no input
+                    // file is given; `--quiet` suppresses progress
+                    // diagnostics so the only stdout lines are the
+                    // verdict + `(echo)` sentinel responses.
+                    "--quiet",
+                ],
                 SmtSolver::Cvc5 => vec![
                     "--no-interactive",    // We don't need a human interface
                     "--produce-models",    // Needed for error reporting
@@ -119,7 +132,11 @@ impl SmtProcess {
                     "--rlimit",
                     "1666666", // ~= 5s
                 ],
-                SmtSolver::Adsmt => vec!["--smt2", "--stdin"], // placeholder, refined in P-vb.5
+                SmtSolver::Adsmt => vec![
+                    // lu-smt reads SMT-LIB2 from stdin when no input
+                    // file is given (adsmt-cli main.rs); no extra
+                    // args are needed for the response pipe to work.
+                ],
             })
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
