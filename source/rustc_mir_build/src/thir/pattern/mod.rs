@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use rustc_abi::{FieldIdx, Integer};
 use rustc_ast::LitKind;
-use rustc_data_structures::assert_matches;
+use std::assert_matches;
 use rustc_errors::codes::*;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::pat_util::EnumerateAndAdjustIterator;

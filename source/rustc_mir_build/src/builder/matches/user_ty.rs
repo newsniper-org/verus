@@ -7,7 +7,7 @@
 use std::iter;
 
 use rustc_abi::{FieldIdx, VariantIdx};
-use rustc_data_structures::assert_matches;
+use std::assert_matches;
 use rustc_data_structures::smallvec::SmallVec;
 use rustc_middle::mir::{ProjectionElem, UserTypeProjection, UserTypeProjections};
 use rustc_middle::ty::{AdtDef, UserTypeAnnotationIndex};
