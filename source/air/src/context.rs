@@ -49,6 +49,12 @@ pub enum ValidityResult {
     Canceled,
     TypeError(TypeError),
     UnexpectedOutput(String),
+    /// adsmt-only 4th verdict — the engine could not decide the
+    /// query but offers a ranked list of additional hypothesis
+    /// sets that, if accepted, would settle it.  The Verus
+    /// reporter (jsonl emit, P-vb.7) surfaces these to the user
+    /// via `-V report-abductive-on-unknown`.
+    Abductive { candidates: Vec<AbductiveCandidate> },
 }
 
 #[derive(Clone, Debug)]

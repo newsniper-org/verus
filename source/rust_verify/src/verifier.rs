@@ -971,6 +971,41 @@ impl Verifier {
                     util::PANIC_ON_DROP_VEC.store(false, std::sync::atomic::Ordering::SeqCst);
                     panic!("unexpected output from solver: {} {}", &context.span.as_string, err);
                 }
+                ValidityResult::Abductive { candidates } => {
+                    // adsmt's 4th verdict.  The query is treated as
+                    // a verification failure (mirrors the Canceled
+                    // path: counts the function as failed, reports
+                    // an error) but the ranked candidates are also
+                    // surfaced to the user via stderr.  P-vb.7
+                    // upgrades this to a jsonl emit gated by
+                    // `-V report-abductive-on-unknown`.
+                    if is_first_check && level == Some(MessageLevel::Error) {
+                        self.count_errors += 1;
+                        self.func_fails.insert(context.fun.clone());
+                        invalidity = true;
+                    }
+                    if self.expand_flag {
+                        invalidity = true;
+                    }
+                    let mut msg = format!(
+                        "{}: adsmt returned an abductive verdict ({} ranked candidate{})",
+                        context.desc,
+                        candidates.len(),
+                        if candidates.len() == 1 { "" } else { "s" },
+                    );
+                    for c in &candidates {
+                        msg.push_str(&format!(
+                            "\n  rank {} (score {:.4}): {}",
+                            c.rank,
+                            c.score,
+                            c.hypotheses.join(" ∧ "),
+                        ));
+                    }
+                    if let Some(level) = level {
+                        reporter.report(&message(level, msg, &context.span).to_any());
+                    }
+                    break;
+                }
             }
         }
 

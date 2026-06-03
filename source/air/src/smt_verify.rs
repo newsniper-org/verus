@@ -3,7 +3,9 @@ use crate::ast::{
     UnaryOp,
 };
 use crate::ast_util::{ident_var, mk_and, mk_not};
-use crate::context::{AssertionInfo, AxiomInfo, Context, ContextState, SmtSolver, ValidityResult};
+use crate::context::{
+    AbductiveCandidate, AssertionInfo, AxiomInfo, Context, ContextState, SmtSolver, ValidityResult,
+};
 use crate::def::{GLOBAL_PREFIX_LABEL, PREFIX_LABEL};
 use crate::messages::{ArcDynMessage, Diagnostics};
 pub use crate::model::{Model, ModelDef};
@@ -85,6 +87,90 @@ fn label_asserts<'ctx>(
 
 /// In SMT-LIB, functions applied to zero arguments are considered constants.
 /// REVIEW: maybe AIR should follow this design for consistency.
+/// Parses the single-line abductive payload that `lu-smt` emits on
+/// the line right after a literal `abductive` verdict.  Schema is
+/// pinned by Y4 `smt-cross-validation-tracker.md` §9 and matches
+/// the engine's `adsmt-abduce::rank::RankedCandidate` +
+/// `Candidate { hypotheses, explanations, sources }` 1:1.  All
+/// fields are required (`null` is only allowed inside the
+/// `explanations` array's per-hypothesis slot).
+fn parse_abductive_candidates_line(line: &str) -> Result<Vec<AbductiveCandidate>, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("not valid JSON: {}", e))?;
+    let array = root
+        .get("abductive_candidates")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "top-level object missing `abductive_candidates` array".to_string())?;
+    array
+        .iter()
+        .map(|entry| -> Result<AbductiveCandidate, String> {
+            let rank = entry
+                .get("rank")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| "candidate missing `rank` (non-negative integer)".to_string())?
+                as u32;
+            let score = entry
+                .get("score")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| "candidate missing `score` (number)".to_string())?;
+            let hypotheses = entry
+                .get("hypotheses")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| "candidate missing `hypotheses` array".to_string())?
+                .iter()
+                .map(|h| {
+                    h.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "hypothesis entry is not a string".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let explanations = entry
+                .get("explanations")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| "candidate missing `explanations` array".to_string())?
+                .iter()
+                .map(|e| -> Result<Option<String>, String> {
+                    if e.is_null() {
+                        Ok(None)
+                    } else {
+                        e.as_str()
+                            .map(|s| Some(s.to_string()))
+                            .ok_or_else(|| {
+                                "explanation entry is neither a string nor null".to_string()
+                            })
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let sources = entry
+                .get("sources")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| "candidate missing `sources` array".to_string())?
+                .iter()
+                .map(|s| {
+                    s.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "source entry is not a string".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if hypotheses.len() != explanations.len() || hypotheses.len() != sources.len() {
+                return Err(format!(
+                    "candidate lock-step lists out of sync: hypotheses={} explanations={} sources={}",
+                    hypotheses.len(),
+                    explanations.len(),
+                    sources.len(),
+                ));
+            }
+            Ok(AbductiveCandidate {
+                rank,
+                score,
+                hypotheses,
+                explanations,
+                sources,
+            })
+        })
+        .collect()
+}
+
 fn elim_zero_args_expr(expr: &Expr) -> Expr {
     crate::visitor::map_expr_visitor(expr, &mut |expr| match &**expr {
         ExprX::Apply(x, es) if es.len() == 0 => Arc::new(ExprX::Var(x.clone())),
@@ -234,25 +320,52 @@ pub(crate) fn smt_check_assertion<'ctx>(
     };
     context.time_smt_run += smt_run_start_time.elapsed();
 
-    #[derive(PartialEq, Eq)]
     enum SmtOutput {
         Unsat,
         Sat,
         Unknown,
+        /// adsmt-only 4th verdict.  `lu-smt` prints the literal
+        /// `abductive` followed by a single-line JSON object on the
+        /// very next line — schema is pinned by Y4
+        /// `smt-cross-validation-tracker.md` §9 and matches
+        /// `adsmt-abduce::rank::RankedCandidate` +
+        /// `Candidate { hypotheses, explanations, sources }` 1:1.
+        Abductive(Vec<AbductiveCandidate>),
     }
 
     // Process SMT results
-    let mut unsat = None;
+    let mut unsat: Option<SmtOutput> = None;
+    let mut expect_abductive_json = false;
     for line in smt_output {
-        if line == "unsat" {
-            assert!(unsat == None);
+        if expect_abductive_json {
+            match parse_abductive_candidates_line(&line) {
+                Ok(candidates) => {
+                    unsat = Some(SmtOutput::Abductive(candidates));
+                }
+                Err(why) => {
+                    return ValidityResult::UnexpectedOutput(format!(
+                        "malformed adsmt abductive JSON ({}): {}",
+                        why, line
+                    ));
+                }
+            }
+            expect_abductive_json = false;
+        } else if line == "unsat" {
+            assert!(unsat.is_none());
             unsat = Some(SmtOutput::Unsat);
         } else if line == "sat" {
-            assert!(unsat == None);
+            assert!(unsat.is_none());
             unsat = Some(SmtOutput::Sat);
         } else if line == "unknown" || line == "cvc5 interrupted by timeout." {
-            assert!(unsat == None);
+            assert!(unsat.is_none());
             unsat = Some(SmtOutput::Unknown);
+        } else if line == "abductive" && matches!(context.solver, SmtSolver::Adsmt) {
+            assert!(unsat.is_none());
+            // The next line of stdout is the lu-smt single-line JSON
+            // payload describing the ranked candidates.  Switch the
+            // loop into "expect JSON" mode so we route it to the
+            // parser rather than the unexpected-output path.
+            expect_abductive_json = true;
         } else if context.ignore_unexpected_smt {
             diagnostics.report(&context.message_interface.bare(
                 crate::messages::MessageLevel::Warning,
@@ -261,6 +374,11 @@ pub(crate) fn smt_check_assertion<'ctx>(
         } else {
             return ValidityResult::UnexpectedOutput(line);
         }
+    }
+    if expect_abductive_json {
+        return ValidityResult::UnexpectedOutput(
+            "adsmt emitted `abductive` verdict but no JSON payload followed".to_string(),
+        );
     }
 
     if context.solver.is_z3_compatible() {
@@ -278,6 +396,16 @@ pub(crate) fn smt_check_assertion<'ctx>(
     let unsat_result = match unsat {
         SmtOutput::Unsat => ResultDetermination::Undetermined(true),
         SmtOutput::Sat => ResultDetermination::Undetermined(false),
+        SmtOutput::Abductive(candidates) => {
+            // adsmt's 4th verdict.  The candidates are propagated
+            // verbatim through `ValidityResult::Abductive` so the
+            // Verus reporter (P-vb.7) can emit them under the
+            // `-V report-abductive-on-unknown` flag.  Mark the
+            // context state mirroring the other terminal-but-
+            // not-decided paths (Canceled).
+            context.state = ContextState::Canceled;
+            ResultDetermination::Determined(ValidityResult::Abductive { candidates })
+        }
         SmtOutput::Unknown => {
             context.smt_log.log_get_info("reason-unknown");
             let smt_data = context.smt_log.take_pipe_data();
