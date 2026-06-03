@@ -115,6 +115,7 @@ pub struct ArgsX {
     pub report_long_running: bool,
     pub use_crate_name: bool,
     pub solver: SmtSolver,
+    pub report_abductive_on_unknown: bool,
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
     pub no_bv_simplify: bool,
@@ -162,6 +163,7 @@ impl ArgsX {
             report_long_running: Default::default(),
             use_crate_name: Default::default(),
             solver: Default::default(),
+            report_abductive_on_unknown: Default::default(),
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
             no_bv_simplify: Default::default(),
@@ -403,6 +405,9 @@ pub fn parse_args_with_imports(
     const EXTENDED_SPINOFF_ALL: &str = "spinoff-all";
     const EXTENDED_CAPTURE_PROFILES: &str = "capture-profiles";
     const EXTENDED_CVC5: &str = "cvc5";
+    const EXTENDED_OXIZ: &str = "oxiz";
+    const EXTENDED_ADSMT: &str = "adsmt";
+    const EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN: &str = "report-abductive-on-unknown";
     const EXTENDED_ALLOW_INLINE_AIR: &str = "allow-inline-air";
     const EXTENDED_USE_CRATE_NAME: &str = "use-crate-name";
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
@@ -421,6 +426,15 @@ pub fn parse_args_with_imports(
             "Always collect prover performance data, but don't generate output reports",
         ),
         (EXTENDED_CVC5, "Use the cvc5 SMT solver, rather than the default (Z3)"),
+        (EXTENDED_OXIZ, "Use the OxiZ SMT solver (pure-Rust Z3 reimplementation, Z3 protocol parity)"),
+        (
+            EXTENDED_ADSMT,
+            "Use the adsmt abductive-deductive HOL+HKT solver (4th verdict 'Abductive' available)",
+        ),
+        (
+            EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN,
+            "When -V adsmt returns Unknown, emit ranked abductive candidate JSON to the jsonl reporter (no-op for z3/cvc5/oxiz)",
+        ),
         (EXTENDED_ALLOW_INLINE_AIR, "Allow the POTENTIALLY UNSOUND use of inline_air_stmt"),
         (
             EXTENDED_USE_CRATE_NAME,
@@ -824,7 +838,16 @@ pub fn parse_args_with_imports(
         trace: matches.opt_present(OPT_TRACE),
         report_long_running: !matches.opt_present(OPT_NO_REPORT_LONG_RUNNING),
         use_crate_name: extended.contains_key(EXTENDED_USE_CRATE_NAME),
-        solver: if extended.contains_key(EXTENDED_CVC5) { SmtSolver::Cvc5 } else { SmtSolver::Z3 },
+        solver: if extended.contains_key(EXTENDED_ADSMT) {
+            SmtSolver::Adsmt
+        } else if extended.contains_key(EXTENDED_OXIZ) {
+            SmtSolver::OxiZ
+        } else if extended.contains_key(EXTENDED_CVC5) {
+            SmtSolver::Cvc5
+        } else {
+            SmtSolver::Z3
+        },
+        report_abductive_on_unknown: extended.contains_key(EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN),
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
