@@ -5,3 +5,9 @@
 /.vscode/settings.json
 /.vscode/launch.json
 /.vscode/tasks.json
+
+# -V adsmt smoke driver build artifact (.rlib emitted alongside
+# `source/rust_verify_test/tests/*.rs` when running the smoke
+# fixture by hand; the regular workspace build stages into
+# `/rust`, but the manual smoke driver writes next to the test).
+/source/libverus_smoke.rlib
