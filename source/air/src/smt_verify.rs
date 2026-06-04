@@ -294,7 +294,12 @@ pub(crate) fn smt_check_assertion<'ctx>(
         context.smt_log.log_assert(&None, &disabled_expr);
     }
 
-    if context.solver.is_z3_compatible() {
+    if context.solver.is_z3_compatible() || matches!(context.solver, SmtSolver::Adsmt) {
+        // Adsmt's lu-smt option dispatcher recognises
+        // `(set-option :rlimit N)` and routes it into
+        // `check_sat_with_deadline`, so the same emit path serves
+        // both Z3 / OxiZ and Adsmt; only Cvc5 takes its limit at
+        // process spawn instead.
         context.smt_log.log_set_option("rlimit", &context.rlimit.to_string());
         context.set_z3_param_u32("rlimit", context.rlimit, false);
     }
@@ -381,7 +386,9 @@ pub(crate) fn smt_check_assertion<'ctx>(
         );
     }
 
-    if context.solver.is_z3_compatible() {
+    if context.solver.is_z3_compatible() || matches!(context.solver, SmtSolver::Adsmt) {
+        // Clear the deadline on adsmt the same way we clear it on
+        // Z3/OxiZ — lu-smt treats `:rlimit 0` as "unlimited".
         context.smt_log.log_set_option("rlimit", "0");
         context.set_z3_param_u32("rlimit", 0, false);
     }

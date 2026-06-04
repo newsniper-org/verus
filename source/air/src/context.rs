@@ -303,7 +303,13 @@ impl Context {
 
     pub fn set_rlimit(&mut self, rlimit: u32) {
         self.rlimit = rlimit;
-        if self.solver.is_z3_compatible() {
+        // Adsmt accepts `(set-option :rlimit N)` per the same Z3
+        // resource-unit convention (≈ 1 µs / unit) — lu-smt's
+        // option dispatcher pipes it into `check_sat`'s wall-clock
+        // deadline.  Cvc5 takes its rlimit at process spawn
+        // (`--rlimit ...` CLI arg), so the SMT-LIB option emit
+        // covers only the SMT-LIB-routed backends.
+        if self.solver.is_z3_compatible() || matches!(self.solver, SmtSolver::Adsmt) {
             self.air_initial_log.log_set_option("rlimit", &rlimit.to_string());
             self.air_middle_log.log_set_option("rlimit", &rlimit.to_string());
             self.air_final_log.log_set_option("rlimit", &rlimit.to_string());
