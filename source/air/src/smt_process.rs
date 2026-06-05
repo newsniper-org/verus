@@ -110,34 +110,84 @@ fn reader_thread(
     }
 }
 
+/// Builds the per-solver argv that [`SmtProcess::launch`] hands to
+/// `std::process::Command`.
+///
+/// For [`SmtSolver::Adsmt`] this is the §3.5.I integration point.  Two env
+/// vars opt the active backend into the cross-process artefact handoff that
+/// the verus-fork ack of `.local-replies-from/adsmt/2026-06-04-3.1-aot-prelude-bank-self-initiate.md`
+/// and the §3.5 design at
+/// `.local-requests-to/adsmt/2026-06-04-3.5-jit-on-aot-prelude.md` describe:
+///
+/// - `VERUS_ADSMT_AOT_LUART` — path to a `.luart` (v0) or `.luart-cdcl` (v1)
+///   artefact baked by `lu-smt --aot-bake [--aot-include-cdcl]`.  When set
+///   to an existing file, threads `--aot-load <path>` so the prelude is
+///   pre-asserted before the per-query stream starts.
+/// - `VERUS_ADSMT_JIT_TRACE` — path to a `.lutrace` (v0 / v1) trace emitted
+///   by `lu-smt --jit-trace-emit`.  When set to an existing file, threads
+///   `--jit-trace-load <path>` so the §3.5.F gate evaluates the trace's
+///   guards before every per-query `(check-sat)`.
+///
+/// Both vars are best-effort: an unset var, an empty string, or a path that
+/// no longer exists is skipped silently.  When neither resolves, the argv is
+/// empty and lu-smt falls through to its regular streaming-stdin path —
+/// identical to the pre-§3.5.I behaviour.
+///
+/// **Activation caveat.**  verus's existing SMT emission writes the whole
+/// prelude to lu-smt's stdin every session (`vir::prelude::prelude`).  When
+/// `VERUS_ADSMT_AOT_LUART` resolves, lu-smt accepts the duplicated
+/// declarations + assertions without error but pays the asserting work
+/// twice — measured at ~2× the streaming-only wall on the `verus_smoke`
+/// fixture.  Setting `VERUS_ADSMT_AOT_LUART` is only a net win once the
+/// §3.5.H vargo hook (or an equivalent verus-side prelude-suppression
+/// flag gated on the same env var) elides the prelude from the per-query
+/// stdin payload.  The argv threading lands now so the engine side has a
+/// working pull-target as soon as that gate ships.
+fn solver_argv(solver: &SmtSolver) -> Vec<String> {
+    match solver {
+        SmtSolver::Z3 => vec!["-smt2".into(), "-in".into()],
+        SmtSolver::OxiZ => vec![
+            // oxiz-cli reads SMT-LIB2 from stdin when no input
+            // file is given; `--quiet` suppresses progress
+            // diagnostics so the only stdout lines are the
+            // verdict + `(echo)` sentinel responses.
+            "--quiet".into(),
+        ],
+        SmtSolver::Cvc5 => vec![
+            "--no-interactive".into(),    // We don't need a human interface
+            "--produce-models".into(),    // Needed for error reporting
+            "--quant-dsplit=none".into(), // Recommended by Andrew Reynolds (@ajreynol)
+            "--no-cbqi".into(),           // Recommended by Andrew Reynolds (@ajreynol)
+            "--user-pat=strict".into(),   // Recommended by Andrew Reynolds (@ajreynol)
+            "--rlimit".into(),
+            "1666666".into(), // ~= 5s
+        ],
+        SmtSolver::Adsmt => {
+            // lu-smt reads SMT-LIB2 from stdin when no input file is given
+            // (adsmt-cli main.rs).  §3.5.I optional add-ons:
+            let mut args: Vec<String> = Vec::new();
+            if let Ok(path) = std::env::var("VERUS_ADSMT_AOT_LUART") {
+                if !path.is_empty() && std::path::Path::new(&path).exists() {
+                    args.push("--aot-load".into());
+                    args.push(path);
+                }
+            }
+            if let Ok(path) = std::env::var("VERUS_ADSMT_JIT_TRACE") {
+                if !path.is_empty() && std::path::Path::new(&path).exists() {
+                    args.push("--jit-trace-load".into());
+                    args.push(path);
+                }
+            }
+            args
+        }
+    }
+}
+
 impl SmtProcess {
     pub fn launch(solver: &SmtSolver, transcript_log: Option<Box<dyn std::io::Write>>) -> Self {
         let solver_info = SolverInfo::new(solver);
         let mut child = match std::process::Command::new(solver_info.executable())
-            .args(match solver {
-                SmtSolver::Z3 => vec!["-smt2", "-in"],
-                SmtSolver::OxiZ => vec![
-                    // oxiz-cli reads SMT-LIB2 from stdin when no input
-                    // file is given; `--quiet` suppresses progress
-                    // diagnostics so the only stdout lines are the
-                    // verdict + `(echo)` sentinel responses.
-                    "--quiet",
-                ],
-                SmtSolver::Cvc5 => vec![
-                    "--no-interactive",    // We don't need a human interface
-                    "--produce-models",    // Needed for error reporting
-                    "--quant-dsplit=none", // Recommended by Andrew Reynolds (@ajreynol)
-                    "--no-cbqi",           // Recommended by Andrew Reynolds (@ajreynol)
-                    "--user-pat=strict",   // Recommended by Andrew Reynolds (@ajreynol)
-                    "--rlimit",
-                    "1666666", // ~= 5s
-                ],
-                SmtSolver::Adsmt => vec![
-                    // lu-smt reads SMT-LIB2 from stdin when no input
-                    // file is given (adsmt-cli main.rs); no extra
-                    // args are needed for the response pipe to work.
-                ],
-            })
+            .args(solver_argv(solver))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
