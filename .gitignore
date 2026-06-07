@@ -11,3 +11,7 @@
 # fixture by hand; the regular workspace build stages into
 # `/rust`, but the manual smoke driver writes next to the test).
 /source/libverus_smoke.rlib
+
+# §3.5.H AOT prelude bank cache (baked artefacts, regenerable)
+/source/target-verus/*/aot/
+/target-verus/*/aot/

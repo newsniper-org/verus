@@ -73,6 +73,16 @@ status:
     @echo "✓ Snapshot refreshed at ${VERUS_FORK_STATUS_DIR:-$HOME/verus-fork-status}/"
     @echo "  HEAD: $(cat ${VERUS_FORK_STATUS_DIR:-$HOME/verus-fork-status}/head.txt)"
 
+# §3.5.H — bake the adsmt AOT prelude bank (.luart-cdcl) and print the
+# `export VERUS_ADSMT_AOT_LUART=…` activation line.  Frontend-agnostic:
+# `just aot-bake-prelude` bakes the Verus prelude; pass `--from-smt2 <f>` for
+# an arbitrary SMT-LIB axiom set.  Cache dir is $VERUS_ADSMT_AOT_CACHE_DIR
+# (default target-verus/release/aot).  Activate with:
+#   eval "$(just aot-bake-prelude --quiet)"
+# Bake the adsmt AOT prelude bank + print its activation line.
+aot-bake-prelude *ARGS:
+    @scripts/aot-bake-prelude.sh {{ARGS}}
+
 # Slow — runs the full workspace suite.  Run before sharing the
 # snapshot externally if the count matters to the consumer.
 # Run the test suite and cache the passing count in the snapshot.
