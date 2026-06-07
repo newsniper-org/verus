@@ -1,0 +1,111 @@
+# ============================================================================
+# Example justfile for a project that *consumes* this verus-fork as its
+# verification toolchain — e.g. Y4 (github.com/newsniper-org/y4), which unifies
+# seL4 (Isabelle/HOL) + new Verus-verified code through adsmt as the common
+# engine.
+#
+# Copy this into your project root, adjust the `_*` variables at the top, and
+# run `just --list`.  It wires four things the verus-fork backend work enables:
+#
+#   1. verify with a pluggable SMT backend (z3 default | cvc5 | oxiz | adsmt)
+#   2. an adsmt AOT prelude-bank warm-up (§3.5.H) for faster per-query checks
+#   3. a z3-vs-adsmt cross-check (differential verdict audit)
+#   4. adsmt-cert emit to Isabelle/HOL or Rocq (the ~/adsmt-contrib bridge)
+#
+# Nothing here is Y4-specific except the `_src` default; the rest is a generic
+# "verify my Verus crate with adsmt" template.
+# ============================================================================
+
+# --- adjust these for your project -------------------------------------------
+
+# Path to a built verus-fork checkout (the `vargo build --release` output).
+_verus_fork := env_var_or_default("VERUS_FORK", env_var("HOME") + "/verus-fork")
+
+# The verus binary + the §3.5.H prelude-bake helper from that checkout.
+_verus      := _verus_fork / "source/target-verus/release/verus"
+_aot_bake   := _verus_fork / "scripts/aot-bake-prelude.sh"
+
+# Custom-built solver binaries (adsmt's lu-smt, oxiz).  z3/cvc5 are found on
+# PATH by verus directly; these two are pinned to your local builds.
+_lu_smt     := env_var_or_default("VERUS_ADSMT_PATH", env_var("HOME") + "/AD1/target/release/lu-smt")
+_oxiz       := env_var_or_default("VERUS_OXIZ_PATH", "oxiz")
+
+# Your top-level Verus source / crate to verify.
+_src        := env_var_or_default("VERUS_SRC", "src/lib.rs")
+
+# Extra verus flags (rlimit, features, …).
+_flags      := env_var_or_default("VERUS_FLAGS", "--rlimit 30")
+
+# Where the adsmt cert (for emit) gets logged.
+_cert_dir   := env_var_or_default("ADSMT_CERT_DIR", "target/adsmt-cert")
+
+# Default: list recipes.
+default:
+    @just --list
+
+# --- 1. verify with a chosen backend -----------------------------------------
+
+# Verify with the default z3 backend.
+verify:
+    {{_verus}} --crate-type=lib {{_flags}} {{_src}}
+
+# Verify with the adsmt backend (lu-smt) — sound (rc.28) + OR-of-AND complete (rc.29).
+verify-adsmt:
+    VERUS_ADSMT_PATH={{_lu_smt}} \
+        {{_verus}} --crate-type=lib -V adsmt {{_flags}} {{_src}}
+
+# Verify with cvc5 / oxiz (the other pluggable backends).
+verify-cvc5:
+    {{_verus}} --crate-type=lib -V cvc5 {{_flags}} {{_src}}
+verify-oxiz:
+    VERUS_OXIZ_PATH={{_oxiz}} \
+        {{_verus}} --crate-type=lib -V oxiz {{_flags}} {{_src}}
+
+# --- 2. adsmt AOT prelude bank (§3.5.H) --------------------------------------
+
+# Skips re-flattening the (large, fixed) vstd/builtin prelude on every query.
+# Cache: $VERUS_ADSMT_AOT_CACHE_DIR (default the verus-fork tree; point it at a
+# shared dir to reuse the bank across projects).
+# Bake the §3.5.H AOT prelude bank, then verify with it activated.
+verify-adsmt-fast:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(VERUS_ADSMT_PATH={{_lu_smt}} {{_aot_bake}} --quiet)"
+    echo "bank: $VERUS_ADSMT_AOT_LUART"
+    VERUS_ADSMT_PATH={{_lu_smt}} VERUS_ADSMT_AOT_LUART="$VERUS_ADSMT_AOT_LUART" \
+        {{_verus}} --crate-type=lib -V adsmt {{_flags}} {{_src}}
+
+# Just (re)bake the bank and print its activation line (eval-able).
+aot-bake:
+    @VERUS_ADSMT_PATH={{_lu_smt}} {{_aot_bake}}
+
+# --- 3. differential audit (z3 vs adsmt) -------------------------------------
+
+# Verify with z3 AND adsmt and diff the verdict (differential soundness audit).
+cross-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    z3_out=$({{_verus}} --crate-type=lib {{_flags}} {{_src}} 2>&1; echo "exit=$?")
+    ad_out=$(VERUS_ADSMT_PATH={{_lu_smt}} {{_verus}} --crate-type=lib -V adsmt {{_flags}} {{_src}} 2>&1; echo "exit=$?")
+    z3_res=$(echo "$z3_out" | grep -oE '[0-9]+ verified, [0-9]+ errors' || echo "?")
+    ad_res=$(echo "$ad_out" | grep -oE '[0-9]+ verified, [0-9]+ errors' || echo "?")
+    echo "z3:    $z3_res"
+    echo "adsmt: $ad_res"
+    if [ "$z3_res" = "$ad_res" ] && [ "$z3_res" != "?" ]; then
+        echo "✓ backends agree"
+    else
+        echo "✗ DIVERGENCE — file a minrepro (a backend disagreeing on a verdict is a soundness bug)"
+        exit 1
+    fi
+
+# --- 4. cert emit to a proof assistant (~/adsmt-contrib) ----------------------
+
+# Merges a Verus-discharged obligation into the same logic as the seL4 Isabelle
+# proofs (requires ~/adsmt-contrib built; the Y4-unification endgame).
+# Emit the adsmt cert as Isabelle/HOL .thy (~/adsmt-contrib).
+emit-isabelle:
+    @echo "Run adsmt with --log-cert to {{_cert_dir}}, then:"
+    @echo "  cargo run -p adsmt-emit-isabelle -- {{_cert_dir}}/<cert>.json > AdsmtCert.thy"
+emit-rocq:
+    @echo "Run adsmt with --log-cert to {{_cert_dir}}, then:"
+    @echo "  cargo run -p adsmt-emit-rocq -- {{_cert_dir}}/<cert>.json > AdsmtCert.v"
