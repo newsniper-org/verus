@@ -116,6 +116,13 @@ pub struct ArgsX {
     pub use_crate_name: bool,
     pub solver: SmtSolver,
     pub report_abductive_on_unknown: bool,
+    // Y4 R7.11 cert-emit bridge (-V adsmt only).  `None` = not requested;
+    // `Some(None)` = requested, default out dir; `Some(Some(path))` = out dir
+    // override.  After a 0-error `-V adsmt` run, each `<seq>.cert.<ext>` in
+    // `$ADSMT_CERT_DIR` is fed to `adsmt-emit run <target>` to produce ITP
+    // source.  See `crate::adsmt_emit`.
+    pub emit_isabelle: Option<Option<String>>,
+    pub emit_rocq: Option<Option<String>>,
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
     pub no_bv_simplify: bool,
@@ -164,6 +171,8 @@ impl ArgsX {
             use_crate_name: Default::default(),
             solver: Default::default(),
             report_abductive_on_unknown: Default::default(),
+            emit_isabelle: Default::default(),
+            emit_rocq: Default::default(),
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
             no_bv_simplify: Default::default(),
@@ -413,6 +422,9 @@ pub fn parse_args_with_imports(
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
     const EXTENDED_CHECK_API_SAFETY: &str = "check-api-safety";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
+    const EXTENDED_EMIT_ISABELLE: &str = "emit-isabelle";
+    const EXTENDED_EMIT_ROCQ: &str = "emit-rocq";
+    const EXTENDED_JIT_TRACE_LOAD: &str = "jit-trace-load";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
         (EXTENDED_IGNORE_UNEXPECTED_SMT, "Ignore unexpected SMT output"),
         (EXTENDED_DEBUG, "Enable debugging of proof failures"),
@@ -448,6 +460,18 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_NO_BV_SIMPLIFY,
             "internal option to disable simplification of bit-vector assertions before sending to the SMT solver",
+        ),
+        (
+            EXTENDED_EMIT_ISABELLE,
+            "After a 0-error -V adsmt run, emit Isabelle/HOL from each adsmt cert in $ADSMT_CERT_DIR via `adsmt-emit run isabelle`. Optional out dir: -V emit-isabelle=<dir> (default $ADSMT_CERT_DIR/emit-isabelle). Requires $ADSMT_CERT_DIR + an installed adsmt-emit toolchain.",
+        ),
+        (
+            EXTENDED_EMIT_ROCQ,
+            "After a 0-error -V adsmt run, emit Rocq (Coq) from each adsmt cert in $ADSMT_CERT_DIR via `adsmt-emit run rocq`. Optional out dir: -V emit-rocq=<dir> (default $ADSMT_CERT_DIR/emit-rocq).",
+        ),
+        (
+            EXTENDED_JIT_TRACE_LOAD,
+            "Forward --jit-trace-load=<path> to the -V adsmt sub-process (alias for the VERUS_ADSMT_JIT_TRACE env var). Replay-evaluation gate for a lu-smt --jit-trace-emit trace; no functional effect until adsmt §3.5.F lands.",
         ),
     ];
 
@@ -848,6 +872,9 @@ pub fn parse_args_with_imports(
             SmtSolver::Z3
         },
         report_abductive_on_unknown: extended.contains_key(EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN),
+        // `-V emit-isabelle` -> Some(None); `-V emit-isabelle=<dir>` -> Some(Some(dir)); absent -> None.
+        emit_isabelle: extended.get(EXTENDED_EMIT_ISABELLE).cloned(),
+        emit_rocq: extended.get(EXTENDED_EMIT_ROCQ).cloned(),
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
@@ -855,6 +882,18 @@ pub fn parse_args_with_imports(
 
     if args.compile && args.no_erasure_check {
         error("--compile and --no-erasure-check are mutually exclusive".to_string())
+    }
+
+    // `-V jit-trace-load=<path>` is a config-flag alias for the
+    // VERUS_ADSMT_JIT_TRACE env var that `air::smt_process::solver_argv`
+    // threads into the `-V adsmt` sub-process as `--jit-trace-load`.  Bridging
+    // through the env keeps the §3.5.I argv plumbing as the single source of
+    // truth.  Safe here: arg parsing is single-threaded and runs before any
+    // verification worker (or solver sub-process) is spawned.
+    if let Some(Some(path)) = extended.get(EXTENDED_JIT_TRACE_LOAD) {
+        if !path.is_empty() {
+            unsafe { std::env::set_var("VERUS_ADSMT_JIT_TRACE", path) };
+        }
     }
 
     (Arc::new(args), unmatched)

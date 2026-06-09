@@ -11,12 +11,21 @@ a fragmented verification workflow — seL4 verified in Isabelle/HOL, new code
 verified in Verus — by routing both through **adsmt as the common engine**:
 
 ```
-Verus code ──▶ adsmt (verify) ──▶ adsmt-cert ──▶ adsmt-emit-isabelle ──▶ .thy
-                                                  (~/adsmt-contrib)        │
-                                                                          ▼
+Verus code ──▶ adsmt -V adsmt ──▶ $ADSMT_CERT_DIR/<seq>.cert.cbor
+  (-V emit-isabelle)                       │
+                                           ▼
+                          adsmt-emit run isabelle ──▶ .thy   (WASM emitter,
+                          (one `adsmt-emit` PM binary,        ~/adsmt-contrib)
+                           not a per-prover binary)           │
+                                                              ▼
                                           merges into the same logic as the
                                           seL4 Isabelle/HOL proofs
 ```
+
+The emitters are **WASM modules** run by the single `adsmt-emit` package-manager
+binary (`adsmt-emit run <target>`), not standalone `adsmt-emit-<prover>` binaries.
+Install them once with `just emit-install` (an `adsmt-emit.toml` manifest that
+points at the `~/adsmt-contrib` emitter packages), then `-V emit-*` drives them.
 
 ## Usage
 
@@ -38,7 +47,8 @@ Verus code ──▶ adsmt (verify) ──▶ adsmt-cert ──▶ adsmt-emit-is
 | `verify-adsmt-fast` | bake the §3.5.H AOT prelude bank, then verify with it activated |
 | `aot-bake` | (re)bake the bank + print its `export VERUS_ADSMT_AOT_LUART=…` line |
 | `cross-check` | verify with z3 **and** adsmt, diff the verdict (differential soundness audit) |
-| `emit-isabelle` / `emit-rocq` | emit the adsmt cert to a proof assistant via `~/adsmt-contrib` |
+| `emit-install` | one-time: `adsmt-emit install` — build the WASM emitters from `adsmt-emit.toml` |
+| `emit-isabelle` / `emit-rocq` | verify with `-V adsmt -V emit-*`; auto-emit `.thy`/`.v` per discharged cert |
 
 ## Soundness notes
 

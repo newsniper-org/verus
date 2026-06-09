@@ -178,6 +178,27 @@ fn solver_argv(solver: &SmtSolver) -> Vec<String> {
                     args.push(path);
                 }
             }
+            // P2a cert-emit producer (the Y4 R7.11 `Verus -> adsmt-cert ->
+            // Isabelle/Rocq` bridge).  `ADSMT_CERT_DIR` threads lu-smt's
+            // rc.32 `--emit-cert-dir <DIR>`, which writes one
+            // `<seq>.cert.<ext>` per `unsat` `(check-sat)` in the canonical
+            // `adsmt-cert::Certificate` wire the `adsmt-emit` runtime reads.
+            // `VERUS_ADSMT_CERT_FORMAT` (cbor|json) picks the wire; lu-smt
+            // defaults to cbor (the emitters' default), so we only thread it
+            // when set.  The dir is created if absent so lu-smt can write.
+            if let Ok(dir) = std::env::var("ADSMT_CERT_DIR") {
+                if !dir.is_empty() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    args.push("--emit-cert-dir".into());
+                    args.push(dir);
+                    if let Ok(fmt) = std::env::var("VERUS_ADSMT_CERT_FORMAT") {
+                        if !fmt.is_empty() {
+                            args.push("--emit-cert-format".into());
+                            args.push(fmt);
+                        }
+                    }
+                }
+            }
             args
         }
     }

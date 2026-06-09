@@ -28,6 +28,7 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 extern crate rustc_type_ir;
 
+mod adsmt_emit;
 mod attributes;
 mod buckets;
 pub mod commands;

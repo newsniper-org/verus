@@ -98,14 +98,33 @@ cross-check:
         exit 1
     fi
 
-# --- 4. cert emit to a proof assistant (~/adsmt-contrib) ----------------------
+# --- 4. cert emit to a proof assistant (adsmt-emit runtime) -------------------
 
 # Merges a Verus-discharged obligation into the same logic as the seL4 Isabelle
-# proofs (requires ~/adsmt-contrib built; the Y4-unification endgame).
-# Emit the adsmt cert as Isabelle/HOL .thy (~/adsmt-contrib).
+# proofs (the Y4-unification endgame).  The adsmt-emit toolchain is a WASM
+# package manager (`adsmt-emit`), not a per-prover binary: install the emitters
+# once, then `verus -V emit-*` drives them automatically on a 0-error run.
+#
+# One-time setup (per project root — needs an `adsmt-emit.toml` manifest that
+# points at the ~/adsmt-contrib isabelle/rocq emitter packages):
+#   adsmt-emit install          # builds wasm -> .adsmt-emitters/ + adsmt-emit.lock
+#
+# verus then: writes certs to $ADSMT_CERT_DIR (--emit-cert-dir, wired in the
+# adsmt backend) and, on a clean run, invokes `adsmt-emit run <target>` per
+# cert.  `adsmt-emit` must be on PATH (or set VERUS_ADSMT_EMIT_PATH).
+
+# Verify with adsmt AND auto-emit Isabelle/HOL (.thy) per discharged cert.
 emit-isabelle:
-    @echo "Run adsmt with --log-cert to {{_cert_dir}}, then:"
-    @echo "  cargo run -p adsmt-emit-isabelle -- {{_cert_dir}}/<cert>.json > AdsmtCert.thy"
+    ADSMT_CERT_DIR={{_cert_dir}} VERUS_ADSMT_PATH={{_lu_smt}} \
+        {{_verus}} --crate-type=lib -V adsmt -V emit-isabelle {{_flags}} {{_src}}
+    @echo "Isabelle sources -> {{_cert_dir}}/emit-isabelle/*.thy"
+
+# Verify with adsmt AND auto-emit Rocq (.v) per discharged cert.
 emit-rocq:
-    @echo "Run adsmt with --log-cert to {{_cert_dir}}, then:"
-    @echo "  cargo run -p adsmt-emit-rocq -- {{_cert_dir}}/<cert>.json > AdsmtCert.v"
+    ADSMT_CERT_DIR={{_cert_dir}} VERUS_ADSMT_PATH={{_lu_smt}} \
+        {{_verus}} --crate-type=lib -V adsmt -V emit-rocq {{_flags}} {{_src}}
+    @echo "Rocq sources -> {{_cert_dir}}/emit-rocq/*.v"
+
+# Install the adsmt-emit WASM emitters from an adsmt-emit.toml manifest (one-time).
+emit-install:
+    adsmt-emit install

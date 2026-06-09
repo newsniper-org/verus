@@ -3539,5 +3539,18 @@ impl VerifierCallbacksEraseMacro {
                 }
             );
         }
+
+        // Y4 R7.11 cert-emit bridge: on a clean (-V adsmt, 0-error) run, turn
+        // the emitted certs into Isabelle/Rocq source.  Self-gates on the
+        // solver + `-V emit-*`; runs here, well after the per-bucket verify
+        // loop (and its `PanicOnDropVec` teardown), so it never interacts with
+        // that path.
+        if !self.verifier.args.no_verify
+            && !self.verifier.encountered_error
+            && !self.verifier.encountered_vir_error
+            && self.verifier.count_errors == 0
+        {
+            crate::adsmt_emit::run_cert_emit(&self.verifier.args);
+        }
     }
 }
