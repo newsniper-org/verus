@@ -576,7 +576,21 @@ fn smt_get_model(
             }
         }
     }
-    let discovered_error = discovered_error.expect("discovered_error");
+    // A solver that answered `unknown` can hand back a `(get-model)` response
+    // that parses but pins no assertion label to `true` — there is no real
+    // counterexample to point at.  This is exactly adsmt's native
+    // `(:reason-unknown "(incomplete …")` path: lu-smt returns `unknown` fast,
+    // stays alive, and the follow-on `(get-model)` yields no falsified label
+    // (and no literal "model is not available" line).  Rather than
+    // `.expect()`-panicking here — which, mid-unwind, trips the
+    // `PanicOnDropVec` #1044 guard in the verus driver and aborts the whole
+    // run ("panic in a destructor during cleanup") instead of reporting one
+    // not-verified obligation — fall back to the same plain not-verified
+    // result as the "model is not available" branch above.
+    let Some(discovered_error) = discovered_error else {
+        context.state = ContextState::FoundInvalid(infos, None);
+        return ValidityResult::Invalid(None, None, None);
+    };
     let mut axiom_infos: Vec<Arc<AxiomInfo>> =
         context.axiom_infos.map().values().cloned().collect();
     axiom_infos.sort_by_key(|info| info.label.clone());
