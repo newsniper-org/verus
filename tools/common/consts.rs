@@ -13,7 +13,7 @@ pub const EXPECTED_OXIZ_VERSION: &str = "0.2.2";
 // (Y4 unified-toolkit-pin §10.6, rolling). Bare workspace version
 // from ~/AD1/Cargo.toml — `adsmt-cli` (lu-smt) shares the
 // workspace version through `version.workspace = true`.
-pub const EXPECTED_ADSMT_VERSION: &str = "1.0.0-rc.33";
+pub const EXPECTED_ADSMT_VERSION: &str = "1.0.0-rc.34";
 #[allow(dead_code)] // actually used in `rust_verify/util.rs`, but missed by the dead code checker, possibly due to the use of `#[path(...)]` for this file
 pub const VERUS_GITHUB_BUG_REPORT_URL: &str =
     "https://github.com/verus-lang/verus/issues/new?template=bug_report.md";
