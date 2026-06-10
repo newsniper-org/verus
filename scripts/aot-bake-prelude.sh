@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# §3.5.H — bake an adsmt AOT prelude/axiom bank (.luart-cdcl) and print the
-# `VERUS_ADSMT_AOT_LUART` line that activates it on the §3.5.I SmtProcess path.
+# §3.5.H — bake an adsmt AOT prelude/axiom bank (.luart-cdcl) AND a JIT replay
+# trace (.lutrace) from the warm-up query, printing the `VERUS_ADSMT_AOT_LUART`
+# + `VERUS_ADSMT_JIT_TRACE` lines that activate them on the §3.5.I SmtProcess
+# path (the §3.5.F consult fires only when both are present).
 #
 # Frontend-agnostic by design (Y4 unified-verification goal): the bank caches
 # the SMT-LIB *axiom set* a frontend feeds adsmt.  Two input modes:
@@ -63,8 +65,9 @@ fi
 cache_dir="${VERUS_ADSMT_AOT_CACHE_DIR:-$repo_root/target-verus/release/aot}"
 mkdir -p "$cache_dir"
 
-tmp_bake="$(mktemp --suffix=.smt2)"
-trap 'rm -f "$tmp_bake"' EXIT
+tmp_bake="$(mktemp --suffix=.smt2)"   # prelude/axiom prefix → the .luart-cdcl bank
+tmp_full="$(mktemp --suffix=.smt2)"   # full warm-up incl. (check-sat) → the .lutrace
+trap 'rm -f "$tmp_bake" "$tmp_full"' EXIT
 
 # --- obtain the SMT-LIB axiom set (the "bake input") --------------------------
 case "$mode" in
@@ -72,6 +75,8 @@ case "$mode" in
         # Arbitrary SMT-LIB axiom set: bake everything up to (but not
         # including) the first (check-sat) — the axioms, not the query.
         awk '/^\(check-sat\)/{stop=1} !stop' "$input" > "$tmp_bake"
+        # The trace warm-up is the whole file (axioms + query + check-sat).
+        cp "$input" "$tmp_full"
         log "§3.5.H: baking SMT-LIB axiom set from $input"
         ;;
     verus)
@@ -107,14 +112,21 @@ RS
             echo "error: verus produced no smt-transcript at $transcript" >&2
             [ -n "$src_tmpdir" ] && rm -rf "$src_tmpdir"; rm -rf "$logdir"; exit 1
         fi
-        # Strip the transcript's QUERY/RESPONSE framing → SMT-LIB, then keep
-        # the prelude prefix (everything before the per-query (check-sat)).
+        # Strip the transcript's QUERY/RESPONSE framing → SMT-LIB.  The bank
+        # is the prelude prefix (before verus's trailing (get-info :version));
+        # the trace warm-up is the same SMT-LIB but keeps the obligation's
+        # (check-sat) so the recorder sees a real solve.  verus's version
+        # probe (a separate get-info query) is dropped from both.
+        qlines="$(mktemp --suffix=.smt2)"
         awk '
             /^;;;>>> QUERY/    { q=1; r=0; next }
             /^;;;>>> RESPONSE/ { q=0; r=1; next }
             /^;;;<<</          { q=0; r=0; next }
             q
-        ' "$transcript" | awk '/^\(get-info :version\)/{stop=1} !stop' > "$tmp_bake"
+        ' "$transcript" > "$qlines"
+        awk '/^\(get-info :version\)/{stop=1} !stop' "$qlines" > "$tmp_bake"
+        grep -v '^(get-info :version)$' "$qlines" > "$tmp_full"
+        rm -f "$qlines"
         [ -n "$src_tmpdir" ] && rm -rf "$src_tmpdir"
         rm -rf "$logdir"
         ;;
@@ -138,7 +150,39 @@ else
     log "§3.5.H: baked $(stat -c%s "$out" 2>/dev/null || echo '?') bytes"
 fi
 
-# --- emit the activation line -------------------------------------------------
-# stdout carries ONLY the export line so callers can `eval "$(...)"`.
+# --- §3.5.H: also bake the JIT replay trace from the warm-up query ------------
+# Record the warm-up obligation's CDCL event stream + §3.5.E GF(2) signature
+# with the bank active (matching the replay config), so a re-run of the *same*
+# obligation can short-circuit to the recorded verdict (§3.5.F consult, gated
+# on both --aot-load and --jit-trace-load — exactly the §3.5.I argv shape).
+# Keyed on the full-transcript SHA so a query change invalidates it; the bank
+# SHA (prelude prefix only) wouldn't.  Best-effort: a trace failure never
+# breaks the bank export.
+trace_out=""
+if [ -s "$tmp_full" ] && grep -q '^(check-sat)' "$tmp_full"; then
+    trace_sha="$(sha256sum "$tmp_full" | cut -c1-16)"
+    trace_out="$cache_dir/trace-${trace_sha}-${lu_smt_version}.lutrace"
+    if [ -f "$trace_out" ]; then
+        log "§3.5.H: trace cache hit — $trace_out"
+    else
+        log "§3.5.H: recording JIT trace → $trace_out"
+        # NB: lu-smt's exit code follows the SMT verdict (sat=0, unsat=1,
+        # unknown=2), and a *useful* warm-up trace comes from an `unsat` →
+        # exit 1.  So gate on the artefact (`-s`), not the exit code.
+        "$lu_smt" --aot-load "$out" --jit-trace-emit "$trace_out" "$tmp_full" >/dev/null 2>&1 || true
+        if [ -s "$trace_out" ]; then
+            log "§3.5.H: traced $(stat -c%s "$trace_out" 2>/dev/null || echo '?') bytes"
+        else
+            log "§3.5.H: warn — JIT trace emit produced nothing; bank still usable, JIT inactive"
+            rm -f "$trace_out"; trace_out=""
+        fi
+    fi
+else
+    log "§3.5.H: no (check-sat) in the warm-up — baking the bank only, no trace"
+fi
+
+# --- emit the activation line(s) ----------------------------------------------
+# stdout carries ONLY the export line(s) so callers can `eval "$(...)"`.
 echo "export VERUS_ADSMT_AOT_LUART=$out"
+[ -n "$trace_out" ] && echo "export VERUS_ADSMT_JIT_TRACE=$trace_out"
 log "§3.5.H: to activate, run:  eval \"\$(scripts/aot-bake-prelude.sh -q)\""
