@@ -166,10 +166,17 @@ if [ -s "$tmp_full" ] && grep -q '^(check-sat)' "$tmp_full"; then
         log "§3.5.H: trace cache hit — $trace_out"
     else
         log "§3.5.H: recording JIT trace → $trace_out"
-        # NB: lu-smt's exit code follows the SMT verdict (sat=0, unsat=1,
-        # unknown=2), and a *useful* warm-up trace comes from an `unsat` →
-        # exit 1.  So gate on the artefact (`-s`), not the exit code.
-        "$lu_smt" --aot-load "$out" --jit-trace-emit "$trace_out" "$tmp_full" >/dev/null 2>&1 || true
+        # §3.5.J slim-trace (verdict-only, adsmt rc.34.2): the consult's
+        # exact-match route reads only the §3.5.E signature + a terminal
+        # level-0 conflict, so `--jit-trace-emit-slim` records exactly that
+        # (signature + synthetic [Restart, Conflict@0]) and drops the
+        # Decide/Propagate/Backjump stream — MB → hundreds of bytes, and the
+        # consult's trace-load cost collapses.  The warm-up obligation is
+        # `unsat` (that's why the trace exists), so the slim path fires.
+        # NB: lu-smt's exit code follows the verdict (sat=0, unsat=1,
+        # unknown=2) — a useful unsat warm-up exits 1 — so gate on the
+        # artefact (`-s`), not the exit code.
+        "$lu_smt" --aot-load "$out" --jit-trace-emit-slim "$trace_out" "$tmp_full" >/dev/null 2>&1 || true
         if [ -s "$trace_out" ]; then
             log "§3.5.H: traced $(stat -c%s "$trace_out" 2>/dev/null || echo '?') bytes"
         else
