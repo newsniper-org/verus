@@ -25,5 +25,27 @@ win32job = "1"
 [features]
 singular = []
 
+# Temporary verus-side guard for the adsmt/lu-smt native `distinct`
+# finite-domain SOUNDNESS bug (filed P0 to adsmt 2026-06-12).
+#
+# lu-smt's native engine models an uninterpreted sort as a fixed,
+# ~52-element finite domain, so a `(distinct …)` over MORE than ~52
+# fresh constants becomes a spurious UNSAT by pigeonhole.  Verus's
+# prelude emits a 56-way `(distinct fuel%… )` over the `FuelId` sort
+# (vir/src/context.rs), which therefore makes lu-smt judge the whole
+# prelude `F` UNSAT — and every obligation `F ∧ ¬G` is then vacuously
+# UNSAT, i.e. EVERYTHING "verifies" (even `ensures false`).
+#
+# Until lu-smt lands the fix, the air SMT printer (printer.rs) expands
+# any `(distinct …)` with more than `distinct_max_arity` operands into
+# the semantically-identical pairwise `(and (not (= a b)) …)` form,
+# but ONLY for the Adsmt backend (Z3/cvc5/oxiz keep native distinct).
+# `build.rs` reads the value below and bakes it in as a compile-time
+# env var; edit it here and rebuild to fine-tune.  Set comfortably
+# below the engine's empirical 52/53 cliff.  Raise toward Z3 parity
+# (or remove the guard) once lu-smt fixes the finite-domain modelling.
+[package.metadata.adsmt]
+distinct_max_arity = 48
+
 [lints]
 workspace = true

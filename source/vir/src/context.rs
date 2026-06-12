@@ -878,9 +878,45 @@ impl Ctx {
             let decl = Arc::new(DeclX::Const(id, str_typ(&FUEL_ID)));
             commands.push(Arc::new(CommandX::Global(decl)));
         }
-        let distinct = Arc::new(air::ast::ExprX::Multi(MultiOp::Distinct, Arc::new(ids)));
-        let decl = mk_unnamed_axiom(distinct);
-        commands.push(Arc::new(CommandX::Global(decl)));
+        // TEMPORARY SOUNDNESS GUARD for the adsmt backend (P0 filed to
+        // adsmt 2026-06-12).  lu-smt's native engine models an
+        // uninterpreted sort (here `FuelId`) as a FIXED ~52-element
+        // finite domain, so any constraint forcing more than ~52 of its
+        // constants to be pairwise-distinct — a `(distinct …)` OR its
+        // pairwise `(and (not (= a b)) …)` expansion alike — collapses to
+        // a spurious UNSAT by pigeonhole.  vstd declares 56+ fuel groups,
+        // so the fuel `distinct` makes lu-smt judge the whole prelude
+        // UNSAT and EVERY obligation then verifies vacuously (even
+        // `ensures false`).  Rewriting `distinct`→pairwise does NOT help
+        // (same cardinality contradiction); the working escape is to
+        // carry distinctness through the INFINITE `Int` sort via an
+        // injection `ord : FuelId → Int` with `ord(fuel_i) = i`
+        // (a function pinning each constant to a distinct integer forces
+        // them apart without bounding `FuelId`).  Adsmt-only, and only
+        // past the `air/Cargo.toml` `[package.metadata.adsmt]
+        // distinct_max_arity` cutoff so Z3/cvc5/oxiz and small distincts
+        // keep the native, cheaper encoding.  Remove once lu-smt fixes
+        // its uninterpreted-sort cardinality modelling.
+        let use_int_injection = matches!(self.global.solver, SmtSolver::Adsmt)
+            && ids.len() > air::printer::adsmt_distinct_max_arity();
+        if use_int_injection {
+            let ord: air::ast::Ident = Arc::new("%%fuel_distinct_ord%%".to_string());
+            let ord_decl = Arc::new(DeclX::Fun(
+                ord.clone(),
+                Arc::new(vec![str_typ(&FUEL_ID)]),
+                air::ast_util::int_typ(),
+            ));
+            commands.push(Arc::new(CommandX::Global(ord_decl)));
+            for (i, id_expr) in ids.iter().enumerate() {
+                let app = air::ast_util::ident_apply(&ord, &vec![id_expr.clone()]);
+                let eq = air::ast_util::mk_eq(&app, &air::ast_util::mk_nat(i));
+                commands.push(Arc::new(CommandX::Global(mk_unnamed_axiom(eq))));
+            }
+        } else {
+            let distinct = Arc::new(air::ast::ExprX::Multi(MultiOp::Distinct, Arc::new(ids)));
+            let decl = mk_unnamed_axiom(distinct);
+            commands.push(Arc::new(CommandX::Global(decl)));
+        }
         for group in &self.reveal_groups {
             crate::sst_to_air_func::broadcast_forall_group_axioms(
                 self,
