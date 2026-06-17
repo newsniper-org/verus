@@ -2,7 +2,7 @@ use crate::ast::{
     Axiom, BinaryOp, BindX, Decl, DeclX, Expr, ExprX, Ident, MultiOp, Quant, Query, StmtX, TypX,
     UnaryOp,
 };
-use crate::ast_util::{ident_var, mk_and, mk_not};
+use crate::ast_util::{ident_var, mk_and, mk_nat, mk_not};
 use crate::context::{
     AbductiveCandidate, AssertionInfo, AxiomInfo, Context, ContextState, SmtSolver, ValidityResult,
 };
@@ -674,6 +674,17 @@ pub(crate) fn smt_check_query<'ctx>(
 
     // check assertion
     let not_expr = Arc::new(ExprX::Unary(UnaryOp::Not, labeled_assertion));
+
+    // A2a: when abduction is requested, wrap the negated-goal assertion and
+    // its `(check-sat)` in a nested `(push)`/`(pop)` so that — on a failed
+    // query — we can `(pop)` the `¬goal` back off and run `(abduce <goal>)`
+    // against `F` ALONE.  The abduce's consistency test (`SAT(F ∧ H)`) would
+    // be vacuously false if `¬goal` were still on the stack.
+    let do_abduce =
+        context.request_abductive_on_unknown && matches!(context.solver, SmtSolver::Adsmt);
+    if do_abduce {
+        context.smt_log.log_push();
+    }
     context.smt_log.log_assert(&None, &not_expr);
 
     let rlimit_count_2 = if context.solver.is_z3_compatible() {
@@ -686,8 +697,22 @@ pub(crate) fn smt_check_query<'ctx>(
         None
     };
 
-    let result =
+    let mut result =
         smt_check_assertion(context, diagnostics, infos, air_model, false, report_long_running);
+
+    if do_abduce {
+        // Balance the nested push regardless of the verdict, dropping `¬goal`
+        // (and any model-disabling label asserts) back to `F`.
+        context.smt_log.log_pop();
+        if matches!(result, ValidityResult::Invalid(..) | ValidityResult::Canceled) {
+            let candidates = run_abduction(context, &assertion, &query.local);
+            if !candidates.is_empty() {
+                // Mirror the native `Abductive` verdict's bookkeeping.
+                context.state = ContextState::Canceled;
+                result = ValidityResult::Abductive { candidates };
+            }
+        }
+    }
 
     if context.solver.is_z3_compatible() {
         let (ctx_rlimit_init, ctx_rlimit_run) = context.rlimit_count.unwrap();
@@ -701,6 +726,81 @@ pub(crate) fn smt_check_query<'ctx>(
     }
 
     result
+}
+
+/// A2a — the "verify-or-explain" abduction.  Called (Adsmt only) after a
+/// query failed to verify and its `¬goal` has been popped back off the
+/// stack, so the solver context is `F` alone.  Declares a focused abducible
+/// vocabulary — sign/positivity predicates over the integer constants in
+/// scope for this query — turns on the theory-aware search, and asks adsmt
+/// for the minimal ranked hypothesis set `H` (drawn from those abducibles)
+/// such that `F ∧ H ⊨ goal`.  Returns the parsed candidates (empty if adsmt
+/// found none, or on any malformed payload — the caller then keeps the
+/// original not-verified verdict).
+/// Recursively peel verus's error-localization wrappers
+/// (`LabeledAssertion` → `(location …)`, `LabeledAxiom` → `(axiom_location …)`)
+/// off an expression, leaving the bare SMT-LIB term.  adsmt's `(abduce …)`
+/// surface rejects the verus-only `location` operator.
+fn strip_labels(expr: &Expr) -> Expr {
+    crate::visitor::map_expr_visitor(expr, &mut |e| match &**e {
+        ExprX::LabeledAssertion(_, _, _, inner) => inner.clone(),
+        ExprX::LabeledAxiom(_, _, inner) => inner.clone(),
+        _ => e.clone(),
+    })
+}
+
+fn run_abduction(
+    context: &mut Context,
+    goal: &Expr,
+    local: &crate::ast::Decls,
+) -> Vec<AbductiveCandidate> {
+    // Theory-aware minimal-subset search (rc.36+), so the entailment /
+    // consistency checks delegate through the same complete path the main
+    // solve uses (verus's axiomatized `Add`/`Poly`/… encoding needs it).
+    context.smt_log.log_set_option("abduct-theory", "true");
+    // Focused vocabulary: `(>= v 0)` and `(> v 0)` for each integer constant
+    // `v` declared local to this query (the parameters/locals the goal is
+    // built from).  Kept deliberately tight — the search is
+    // O(check-sat × subsets), so a small, goal-relevant basis is the point.
+    for decl in local.iter() {
+        if let DeclX::Const(id, typ) = &**decl {
+            if matches!(&**typ, TypX::Int) {
+                let v = ident_var(id);
+                let ge0 = Arc::new(ExprX::Binary(BinaryOp::Ge, v.clone(), mk_nat("0")));
+                let gt0 = Arc::new(ExprX::Binary(BinaryOp::Gt, v.clone(), mk_nat("0")));
+                context.smt_log.log_declare_abducible(&ge0);
+                context.smt_log.log_declare_abducible(&gt0);
+            }
+        }
+    }
+    // Strip verus's `LabeledAssertion`/`LabeledAxiom` wrappers (which the
+    // printer renders as `(location …)` / `(axiom_location …)`) — adsmt's
+    // `(abduce …)` parser only knows plain SMT-LIB operators, so the goal
+    // must be the bare term `G`, exactly as the de-risk fed it.
+    let bare_goal = strip_labels(goal);
+    context.smt_log.log_abduce(&bare_goal);
+    // Reset the option so it doesn't leak into the next function's queries
+    // (set-option is not push/pop-scoped).
+    context.smt_log.log_set_option("abduct-theory", "false");
+
+    let smt_data = context.smt_log.take_pipe_data();
+    let smt_output = context.get_smt_process().send_commands(smt_data);
+
+    // adsmt prints the literal `abductive` then a single-line JSON payload.
+    let mut expect_json = false;
+    let mut candidates: Vec<AbductiveCandidate> = Vec::new();
+    for line in smt_output {
+        if expect_json {
+            if let Ok(parsed) = parse_abductive_candidates_line(&line) {
+                candidates = parsed;
+            }
+            expect_json = false;
+        } else if line == "abductive" {
+            expect_json = true;
+        }
+        // Any other line (set-option acks, blanks) is ignored.
+    }
+    candidates
 }
 
 #[cfg(test)]

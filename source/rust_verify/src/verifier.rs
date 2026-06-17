@@ -1218,6 +1218,7 @@ impl Verifier {
         let mut air_context =
             air::context::Context::new(message_interface.clone(), self.args.solver);
         air_context.set_ignore_unexpected_smt(self.args.ignore_unexpected_smt);
+        air_context.set_request_abductive_on_unknown(self.args.request_abductive_on_unknown);
         air_context.set_debug(self.args.debugger);
         if let Some(profile_file_name) = profile_file_name {
             air_context.set_profile_with_logfile_name(

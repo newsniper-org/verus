@@ -116,6 +116,13 @@ pub struct ArgsX {
     pub use_crate_name: bool,
     pub solver: SmtSolver,
     pub report_abductive_on_unknown: bool,
+    // A2a (-V adsmt only).  When a query is NOT verified, actively emit an
+    // `(abduce <goal>)` follow-up (with `:abduct-theory true` + a focused
+    // `(declare-abducible …)` vocabulary over the goal's integer variables)
+    // and surface the ranked abducts as the `Abductive` verdict — the
+    // "verify-or-explain" path.  Distinct from `report-abductive-on-unknown`,
+    // which only forwards a verdict adsmt volunteers on its own.
+    pub request_abductive_on_unknown: bool,
     // Y4 R7.11 cert-emit bridge (-V adsmt only).  `None` = not requested;
     // `Some(None)` = requested, default out dir; `Some(Some(path))` = out dir
     // override.  After a 0-error `-V adsmt` run, each `<seq>.cert.<ext>` in
@@ -171,6 +178,7 @@ impl ArgsX {
             use_crate_name: Default::default(),
             solver: Default::default(),
             report_abductive_on_unknown: Default::default(),
+            request_abductive_on_unknown: Default::default(),
             emit_isabelle: Default::default(),
             emit_rocq: Default::default(),
             axiom_usage_info: Default::default(),
@@ -417,6 +425,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_OXIZ: &str = "oxiz";
     const EXTENDED_ADSMT: &str = "adsmt";
     const EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN: &str = "report-abductive-on-unknown";
+    const EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN: &str = "request-abductive-on-unknown";
     const EXTENDED_ALLOW_INLINE_AIR: &str = "allow-inline-air";
     const EXTENDED_USE_CRATE_NAME: &str = "use-crate-name";
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
@@ -446,6 +455,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN,
             "When -V adsmt returns Unknown, emit ranked abductive candidate JSON to the jsonl reporter (no-op for z3/cvc5/oxiz)",
+        ),
+        (
+            EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN,
+            "When -V adsmt does NOT verify a query, actively abduce a missing hypothesis (verify-or-explain) and report it as the Abductive verdict (no-op for z3/cvc5/oxiz)",
         ),
         (EXTENDED_ALLOW_INLINE_AIR, "Allow the POTENTIALLY UNSOUND use of inline_air_stmt"),
         (
@@ -872,6 +885,7 @@ pub fn parse_args_with_imports(
             SmtSolver::Z3
         },
         report_abductive_on_unknown: extended.contains_key(EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN),
+        request_abductive_on_unknown: extended.contains_key(EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN),
         // `-V emit-isabelle` -> Some(None); `-V emit-isabelle=<dir>` -> Some(Some(dir)); absent -> None.
         emit_isabelle: extended.get(EXTENDED_EMIT_ISABELLE).cloned(),
         emit_rocq: extended.get(EXTENDED_EMIT_ROCQ).cloned(),

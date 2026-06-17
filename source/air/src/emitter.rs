@@ -156,6 +156,28 @@ impl Emitter {
         }
     }
 
+    /// A2a: `(declare-abducible <expr>)` — register `expr` as a candidate
+    /// hypothesis for the adsmt abductive surface.
+    pub fn log_declare_abducible(&mut self, expr: &Expr) {
+        if !self.is_none() {
+            self.log_node(&Node::List(vec![
+                Node::Atom("declare-abducible".to_string()),
+                self.printer.expr_to_node(expr),
+            ]));
+        }
+    }
+
+    /// A2a: `(abduce <goal>)` — ask adsmt for a ranked minimal hypothesis
+    /// set `H` (drawn from the declared abducibles) such that `F ∧ H ⊨ goal`.
+    pub fn log_abduce(&mut self, goal: &Expr) {
+        if !self.is_none() {
+            self.log_node(&Node::List(vec![
+                Node::Atom("abduce".to_string()),
+                self.printer.expr_to_node(goal),
+            ]));
+        }
+    }
+
     pub fn log_query(&mut self, query: &Query) {
         if !self.is_none() {
             self.log_node(&self.printer.query_to_node(query));

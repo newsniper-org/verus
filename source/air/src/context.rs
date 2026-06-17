@@ -156,6 +156,9 @@ pub struct Context {
     pub(crate) usage_info_enabled: bool,
     pub(crate) check_valid_used: bool,
     pub(crate) solver: SmtSolver,
+    /// A2a: when a `-V adsmt` query is not verified, emit an `(abduce …)`
+    /// follow-up and surface the ranked abducts as the `Abductive` verdict.
+    pub(crate) request_abductive_on_unknown: bool,
 }
 
 impl Context {
@@ -224,6 +227,7 @@ impl Context {
             usage_info_enabled: false,
             check_valid_used: false,
             solver,
+            request_abductive_on_unknown: false,
         };
         context.axiom_infos.push_scope(false);
         context.array_map.push_scope(false);
@@ -282,6 +286,10 @@ impl Context {
 
     pub fn set_ignore_unexpected_smt(&mut self, ignore_unexpected_smt: bool) {
         self.ignore_unexpected_smt = ignore_unexpected_smt;
+    }
+
+    pub fn set_request_abductive_on_unknown(&mut self, b: bool) {
+        self.request_abductive_on_unknown = b;
     }
 
     pub fn get_time(&self) -> (Duration, Duration) {
