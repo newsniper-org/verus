@@ -1,8 +1,8 @@
 use crate::ast::{
-    Axiom, BinaryOp, BindX, Decl, DeclX, Expr, ExprX, Ident, MultiOp, Quant, Query, StmtX, TypX,
-    UnaryOp,
+    Axiom, BinaryOp, BindX, Constant, Decl, DeclX, Expr, ExprX, Ident, MultiOp, Quant, Query,
+    StmtX, TypX, UnaryOp,
 };
-use crate::ast_util::{ident_var, mk_and, mk_nat, mk_not};
+use crate::ast_util::{ident_var, mk_and, mk_nat, mk_neg, mk_not};
 use crate::context::{
     AbductiveCandidate, AssertionInfo, AxiomInfo, Context, ContextState, SmtSolver, ValidityResult,
 };
@@ -757,7 +757,24 @@ fn strip_labels(expr: &Expr) -> Expr {
 /// integer constants `(a, b)`: `a > b` and `a ≥ b` (the `<`/`≤` orderings
 /// fall out of the reversed pair).  For each boolean constant `b`: `b` and
 /// `¬b`.  Internal verus symbols (the `%%…%%` labels) are skipped.
-fn abducible_vocabulary(local: &crate::ast::Decls) -> Vec<Expr> {
+/// The distinct nonzero integer literal magnitudes appearing in `goal`
+/// (as decimal strings), so the abducible basis can include bounds against
+/// the very constants the obligation talks about.
+fn goal_int_magnitudes(goal: &Expr) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    crate::visitor::map_expr_visitor(goal, &mut |e| {
+        if let ExprX::Const(Constant::Nat(n)) = &**e {
+            let s = (**n).clone();
+            if s != "0" && !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        e.clone()
+    });
+    out
+}
+
+fn abducible_vocabulary(local: &crate::ast::Decls, goal: &Expr) -> Vec<Expr> {
     let is_user = |id: &Ident| !id.starts_with("%%");
     let int_vars: Vec<Ident> = local
         .iter()
@@ -806,6 +823,23 @@ fn abducible_vocabulary(local: &crate::ast::Decls) -> Vec<Expr> {
             }
         }
     }
+    // Constant-literal bounds: for each integer variable and each nonzero
+    // literal magnitude `c` the goal mentions, both directions at ±c —
+    // `v ≤ c`, `v ≥ c`, `v ≤ -c`, `v ≥ -c` — so a missing bound like
+    // `x < 100` (from `ensures … x < 100 …`) is in reach without the search
+    // having to guess the constant.
+    let mags = goal_int_magnitudes(goal);
+    for id in &int_vars {
+        let var = ident_var(id);
+        for m in &mags {
+            let c = mk_nat(m);
+            let neg_c = mk_neg(&mk_nat(m));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, var.clone(), c.clone())));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, var.clone(), c)));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, var.clone(), neg_c.clone())));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, var.clone(), neg_c)));
+        }
+    }
     v
 }
 
@@ -817,15 +851,16 @@ fn run_abduction(
     // Theory-aware minimal-subset search (rc.36+), so the entailment /
     // consistency checks delegate through the same complete path the main
     // solve uses (verus's axiomatized `Add`/`Poly`/… encoding needs it).
-    context.smt_log.log_set_option("abduct-theory", "true");
-    for e in abducible_vocabulary(local).iter() {
-        context.smt_log.log_declare_abducible(e);
-    }
     // Strip verus's `LabeledAssertion`/`LabeledAxiom` wrappers (which the
     // printer renders as `(location …)` / `(axiom_location …)`) — adsmt's
     // `(abduce …)` parser only knows plain SMT-LIB operators, so the goal
-    // must be the bare term `G`, exactly as the de-risk fed it.
+    // must be the bare term `G`, exactly as the de-risk fed it.  Compute it
+    // first so the vocabulary can mine its literal constants for bounds.
     let bare_goal = strip_labels(goal);
+    context.smt_log.log_set_option("abduct-theory", "true");
+    for e in abducible_vocabulary(local, &bare_goal).iter() {
+        context.smt_log.log_declare_abducible(e);
+    }
     context.smt_log.log_abduce(&bare_goal);
     // Reset the option so it doesn't leak into the next function's queries
     // (set-option is not push/pop-scoped).
@@ -854,8 +889,17 @@ fn run_abduction(
 #[cfg(test)]
 mod abducible_vocabulary_tests {
     use super::abducible_vocabulary;
-    use crate::ast::{BinaryOp, Constant, Decl, DeclX, Expr, ExprX, TypX, UnaryOp};
+    use crate::ast::{BinaryOp, Constant, Decl, DeclX, Expr, ExprX, MultiOp, TypX, UnaryOp};
     use std::sync::Arc;
+
+    /// A goal with no integer literals — the default for the var-only
+    /// vocabulary tests, so literal-bound generation contributes nothing.
+    fn no_lit_goal() -> Expr {
+        Arc::new(ExprX::Var(Arc::new("g".to_string())))
+    }
+    fn nat(n: &str) -> Expr {
+        Arc::new(ExprX::Const(Constant::Nat(Arc::new(n.to_string()))))
+    }
 
     fn int(name: &str) -> Decl {
         Arc::new(DeclX::Const(Arc::new(name.to_string()), Arc::new(TypX::Int)))
@@ -873,6 +917,7 @@ mod abducible_vocabulary_tests {
             ExprX::Var(x) => (**x).clone(),
             ExprX::Const(Constant::Nat(n)) => (**n).clone(),
             ExprX::Unary(UnaryOp::Not, a) => format!("(not {})", render(a)),
+            ExprX::Multi(MultiOp::Sub, es) if es.len() == 1 => format!("(- {})", render(&es[0])),
             ExprX::Binary(op, a, b) => {
                 let s = match op {
                     BinaryOp::Ge => ">=",
@@ -887,8 +932,11 @@ mod abducible_vocabulary_tests {
             _ => "?".to_string(),
         }
     }
+    fn rendered_with_goal(decls: Vec<Decl>, goal: &Expr) -> Vec<String> {
+        abducible_vocabulary(&Arc::new(decls), goal).iter().map(|e| render(e)).collect()
+    }
     fn rendered(decls: Vec<Decl>) -> Vec<String> {
-        abducible_vocabulary(&Arc::new(decls)).iter().map(|e| render(e)).collect()
+        rendered_with_goal(decls, &no_lit_goal())
     }
 
     #[test]
@@ -920,6 +968,41 @@ mod abducible_vocabulary_tests {
     fn bool_const_gives_literal_and_negation() {
         let v = rendered(vec![boolean("b!")]);
         assert_eq!(v, vec!["b!".to_string(), "(not b!)".to_string()]);
+    }
+
+    #[test]
+    fn goal_literals_add_bounds_at_plus_minus_c() {
+        // goal `(< x! 100)` → per int var, bounds at ±100 in both directions.
+        let goal = Arc::new(ExprX::Binary(BinaryOp::Lt, ident("x!"), nat("100")));
+        let v = rendered_with_goal(vec![int("x!")], &goal);
+        // 6 var-only (4 signs + =0 + ≠0) + 4 literal bounds = 10
+        assert_eq!(v.len(), 10);
+        for p in ["(<= x! 100)", "(>= x! 100)", "(<= x! (- 100))", "(>= x! (- 100))"] {
+            assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
+        }
+    }
+
+    #[test]
+    fn goal_literals_dedup_and_skip_zero() {
+        // `0` is already covered by the sign/eq family; repeated literals dedup.
+        let goal = Arc::new(ExprX::Multi(
+            MultiOp::And,
+            Arc::new(vec![
+                Arc::new(ExprX::Binary(BinaryOp::Lt, ident("x!"), nat("5"))),
+                Arc::new(ExprX::Binary(BinaryOp::Gt, ident("x!"), nat("5"))),
+                Arc::new(ExprX::Binary(BinaryOp::Eq, ident("x!"), nat("0"))),
+            ]),
+        ));
+        let v = rendered_with_goal(vec![int("x!")], &goal);
+        // one distinct nonzero magnitude (5) → 4 literal bounds (6 + 4 = 10);
+        // the `0` adds none (already covered by the sign/eq family), and the
+        // repeated `5` is deduped — otherwise the count would be > 10.
+        assert_eq!(v.len(), 10);
+        assert!(v.contains(&"(<= x! 5)".to_string()), "missing literal bound in {:?}", v);
+    }
+
+    fn ident(name: &str) -> Expr {
+        Arc::new(ExprX::Var(Arc::new(name.to_string())))
     }
 
     #[test]
