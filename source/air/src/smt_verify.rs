@@ -838,6 +838,87 @@ fn run_abduction(
 }
 
 #[cfg(test)]
+mod abducible_vocabulary_tests {
+    use super::abducible_vocabulary;
+    use crate::ast::{BinaryOp, Constant, Decl, DeclX, Expr, ExprX, TypX, UnaryOp};
+    use std::sync::Arc;
+
+    fn int(name: &str) -> Decl {
+        Arc::new(DeclX::Const(Arc::new(name.to_string()), Arc::new(TypX::Int)))
+    }
+    fn boolean(name: &str) -> Decl {
+        Arc::new(DeclX::Const(Arc::new(name.to_string()), Arc::new(TypX::Bool)))
+    }
+
+    /// A minimal hermetic renderer for the small fragment the vocabulary
+    /// emits (Var, Nat const, the four int relations, boolean negation) —
+    /// avoids dragging a full `Printer` (and its message interface) into the
+    /// test just to compare predicate shapes.
+    fn render(e: &Expr) -> String {
+        match &**e {
+            ExprX::Var(x) => (**x).clone(),
+            ExprX::Const(Constant::Nat(n)) => (**n).clone(),
+            ExprX::Unary(UnaryOp::Not, a) => format!("(not {})", render(a)),
+            ExprX::Binary(op, a, b) => {
+                let s = match op {
+                    BinaryOp::Ge => ">=",
+                    BinaryOp::Gt => ">",
+                    BinaryOp::Le => "<=",
+                    BinaryOp::Lt => "<",
+                    _ => "?",
+                };
+                format!("({} {} {})", s, render(a), render(b))
+            }
+            _ => "?".to_string(),
+        }
+    }
+    fn rendered(decls: Vec<Decl>) -> Vec<String> {
+        abducible_vocabulary(&Arc::new(decls)).iter().map(|e| render(e)).collect()
+    }
+
+    #[test]
+    fn single_int_gives_four_signs() {
+        let v = rendered(vec![int("x!")]);
+        assert_eq!(v.len(), 4);
+        for p in ["(>= x! 0)", "(> x! 0)", "(<= x! 0)", "(< x! 0)"] {
+            assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
+        }
+    }
+
+    #[test]
+    fn two_ints_add_ordered_pair_relations() {
+        let v = rendered(vec![int("x!"), int("y!")]);
+        // 4 signs each (8) + 2 ordered pairs * (>,>=) (4) = 12
+        assert_eq!(v.len(), 12);
+        for p in ["(> x! y!)", "(>= x! y!)", "(> y! x!)", "(>= y! x!)"] {
+            assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
+        }
+    }
+
+    #[test]
+    fn bool_const_gives_literal_and_negation() {
+        let v = rendered(vec![boolean("b!")]);
+        assert_eq!(v, vec!["b!".to_string(), "(not b!)".to_string()]);
+    }
+
+    #[test]
+    fn internal_label_symbols_are_skipped() {
+        // `%%location_label%%0` (Bool) and `%%global_…%%` must not leak into
+        // the abducible basis — they are verus's error-localization machinery.
+        let v = rendered(vec![int("x!"), boolean("%%location_label%%0")]);
+        assert_eq!(v.len(), 4); // only x!'s four signs
+        assert!(v.iter().all(|s| !s.contains("%%")), "label leaked into {:?}", v);
+    }
+
+    #[test]
+    fn mixed_locals_compose() {
+        // 2 ints (12) + 1 bool (2) = 14
+        let v = rendered(vec![int("x!"), int("y!"), boolean("b!")]);
+        assert_eq!(v.len(), 14);
+    }
+}
+
+#[cfg(test)]
 mod abductive_parse_tests {
     use super::parse_abductive_candidates_line;
 
