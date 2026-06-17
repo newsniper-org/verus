@@ -749,6 +749,52 @@ fn strip_labels(expr: &Expr) -> Expr {
     })
 }
 
+/// A2a — the focused abducible basis for a query.  Drawn from the query's
+/// own local constants (the function parameters / locals the goal is built
+/// from), so the search stays goal-relevant and the subset BFS stays
+/// tractable (it is O(check-sat × subsets)).  For each integer constant `v`:
+/// the four sign/bound facts `v ≷ 0`.  For each ordered pair of distinct
+/// integer constants `(a, b)`: `a > b` and `a ≥ b` (the `<`/`≤` orderings
+/// fall out of the reversed pair).  For each boolean constant `b`: `b` and
+/// `¬b`.  Internal verus symbols (the `%%…%%` labels) are skipped.
+fn abducible_vocabulary(local: &crate::ast::Decls) -> Vec<Expr> {
+    let is_user = |id: &Ident| !id.starts_with("%%");
+    let int_vars: Vec<Ident> = local
+        .iter()
+        .filter_map(|d| match &**d {
+            DeclX::Const(id, typ) if matches!(&**typ, TypX::Int) && is_user(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut v: Vec<Expr> = Vec::new();
+    let zero = mk_nat("0");
+    for id in &int_vars {
+        let var = ident_var(id);
+        for op in [BinaryOp::Ge, BinaryOp::Gt, BinaryOp::Le, BinaryOp::Lt] {
+            v.push(Arc::new(ExprX::Binary(op, var.clone(), zero.clone())));
+        }
+    }
+    for a in &int_vars {
+        for b in &int_vars {
+            if a != b {
+                let (va, vb) = (ident_var(a), ident_var(b));
+                v.push(Arc::new(ExprX::Binary(BinaryOp::Gt, va.clone(), vb.clone())));
+                v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, va, vb)));
+            }
+        }
+    }
+    for d in local.iter() {
+        if let DeclX::Const(id, typ) = &**d {
+            if matches!(&**typ, TypX::Bool) && is_user(id) {
+                let b = ident_var(id);
+                v.push(b.clone());
+                v.push(Arc::new(ExprX::Unary(UnaryOp::Not, b)));
+            }
+        }
+    }
+    v
+}
+
 fn run_abduction(
     context: &mut Context,
     goal: &Expr,
@@ -758,20 +804,8 @@ fn run_abduction(
     // consistency checks delegate through the same complete path the main
     // solve uses (verus's axiomatized `Add`/`Poly`/… encoding needs it).
     context.smt_log.log_set_option("abduct-theory", "true");
-    // Focused vocabulary: `(>= v 0)` and `(> v 0)` for each integer constant
-    // `v` declared local to this query (the parameters/locals the goal is
-    // built from).  Kept deliberately tight — the search is
-    // O(check-sat × subsets), so a small, goal-relevant basis is the point.
-    for decl in local.iter() {
-        if let DeclX::Const(id, typ) = &**decl {
-            if matches!(&**typ, TypX::Int) {
-                let v = ident_var(id);
-                let ge0 = Arc::new(ExprX::Binary(BinaryOp::Ge, v.clone(), mk_nat("0")));
-                let gt0 = Arc::new(ExprX::Binary(BinaryOp::Gt, v.clone(), mk_nat("0")));
-                context.smt_log.log_declare_abducible(&ge0);
-                context.smt_log.log_declare_abducible(&gt0);
-            }
-        }
+    for e in abducible_vocabulary(local).iter() {
+        context.smt_log.log_declare_abducible(e);
     }
     // Strip verus's `LabeledAssertion`/`LabeledAxiom` wrappers (which the
     // printer renders as `(location …)` / `(axiom_location …)`) — adsmt's
