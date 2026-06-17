@@ -40,6 +40,9 @@ pass=0; fail=0
 #   kind = verify   : must report ">=1 verified, 0 errors", no abductive verdict
 #   kind = abduct   : must report an "abductive verdict" containing <expected-substring>
 #   kind = noabduct : must error (0 verified) WITHOUT an "abductive verdict"
+#   kind = error    : must error (0 verified); abduct optional — a pure
+#                     soundness guard (e.g. the disequality-goal P0 fix:
+#                     `ensures x != 0` must NOT vacuously verify)
 check() {
     local name="$1" fixture="$2" kind="$3" want="${4:-}"
     local out; out="$(run "$fixture")"
@@ -56,6 +59,8 @@ check() {
             elif ! echo "$out" | grep -qF "$want"; then ok=0; why="abductive verdict present but missing expected '$want'"; fi ;;
         noabduct)
             { [ "${errors:-0}" -ge 1 ] && [ "$abduct" -eq 0 ]; } || { ok=0; why="want error w/o abduct; got errors=$errors abduct=$abduct"; } ;;
+        error)
+            { [ "${errors:-0}" -ge 1 ] && [ "${verified:-0}" -eq 0 ]; } || { ok=0; why="want error (no vacuous verify); got verified=$verified errors=$errors"; } ;;
     esac
     if [ "$ok" -eq 1 ]; then printf "  PASS  %-22s (%s%s)\n" "$name" "$kind" "${want:+ → $want}"; pass=$((pass+1));
     else printf "  FAIL  %-22s %s\n" "$name" "$why"; fail=$((fail+1));
@@ -68,7 +73,10 @@ check "abduct-sign"       abduct-sign.rs       abduct   "(>= x! 0)"
 check "abduct-negativity" abduct-negativity.rs abduct   "(<= x! 0)"
 check "abduct-relational" abduct-relational.rs abduct   "(> x! y!)"
 check "abduct-boolean"    abduct-boolean.rs    abduct   "b!"
+check "abduct-eq-vars"    abduct-eq-vars.rs    abduct   "(= x! y!)"
+check "abduct-eq-zero"    abduct-eq-zero.rs    abduct   "(<= x! 0)"
 check "noabduct-false"    noabduct-false.rs    noabduct
+check "error-disequality" error-disequality.rs error    # disequality-goal P0 regression
 
 echo
 echo "== result: $pass passed, $fail failed =="
