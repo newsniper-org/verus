@@ -768,14 +768,28 @@ fn abducible_vocabulary(local: &crate::ast::Decls) -> Vec<Expr> {
         .collect();
     let mut v: Vec<Expr> = Vec::new();
     let zero = mk_nat("0");
+    let neq = |a: Expr, b: Expr| Arc::new(ExprX::Unary(UnaryOp::Not, Arc::new(ExprX::Binary(BinaryOp::Eq, a, b))));
     for id in &int_vars {
         let var = ident_var(id);
+        // the four sign/bound facts v ≷ 0 …
         for op in [BinaryOp::Ge, BinaryOp::Gt, BinaryOp::Le, BinaryOp::Lt] {
             v.push(Arc::new(ExprX::Binary(op, var.clone(), zero.clone())));
         }
+        // … plus the constant-bound (dis)equalities v = 0 / v ≠ 0 (e.g. the
+        // nonzero precondition a division/modulo obligation wants).
+        v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, var.clone(), zero.clone())));
+        v.push(neq(var, zero.clone()));
     }
-    for a in &int_vars {
-        for b in &int_vars {
+    // Ordered relations a > b, a ≥ b (the </≤ orderings come from the
+    // reversed pair); symmetric (dis)equalities a = b / a ≠ b once per
+    // unordered pair.
+    for (i, a) in int_vars.iter().enumerate() {
+        for b in int_vars.iter().skip(i + 1) {
+            let (va, vb) = (ident_var(a), ident_var(b));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, va.clone(), vb.clone())));
+            v.push(neq(va, vb));
+        }
+        for b in int_vars.iter() {
             if a != b {
                 let (va, vb) = (ident_var(a), ident_var(b));
                 v.push(Arc::new(ExprX::Binary(BinaryOp::Gt, va.clone(), vb.clone())));
@@ -865,6 +879,7 @@ mod abducible_vocabulary_tests {
                     BinaryOp::Gt => ">",
                     BinaryOp::Le => "<=",
                     BinaryOp::Lt => "<",
+                    BinaryOp::Eq => "=",
                     _ => "?",
                 };
                 format!("({} {} {})", s, render(a), render(b))
@@ -877,22 +892,28 @@ mod abducible_vocabulary_tests {
     }
 
     #[test]
-    fn single_int_gives_four_signs() {
+    fn single_int_gives_signs_and_zero_eq() {
         let v = rendered(vec![int("x!")]);
-        assert_eq!(v.len(), 4);
-        for p in ["(>= x! 0)", "(> x! 0)", "(<= x! 0)", "(< x! 0)"] {
+        // 4 signs + (= 0) + (≠ 0)
+        assert_eq!(v.len(), 6);
+        for p in ["(>= x! 0)", "(> x! 0)", "(<= x! 0)", "(< x! 0)", "(= x! 0)", "(not (= x! 0))"] {
             assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
         }
     }
 
     #[test]
-    fn two_ints_add_ordered_pair_relations() {
+    fn two_ints_add_pair_relations_and_eq() {
         let v = rendered(vec![int("x!"), int("y!")]);
-        // 4 signs each (8) + 2 ordered pairs * (>,>=) (4) = 12
-        assert_eq!(v.len(), 12);
-        for p in ["(> x! y!)", "(>= x! y!)", "(> y! x!)", "(>= y! x!)"] {
+        // per var (4 signs + =0 + ≠0) = 6 * 2 = 12;
+        // pair {x,y}: (= , ≠) once (2) + ordered (>,>=) both ways (4) = 6 → 18
+        assert_eq!(v.len(), 18);
+        for p in
+            ["(> x! y!)", "(>= x! y!)", "(> y! x!)", "(>= y! x!)", "(= x! y!)", "(not (= x! y!))"]
+        {
             assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
         }
+        // the symmetric (dis)equality is emitted once, not per direction
+        assert!(!v.contains(&"(= y! x!)".to_string()), "duplicate symmetric eq in {:?}", v);
     }
 
     #[test]
@@ -906,15 +927,15 @@ mod abducible_vocabulary_tests {
         // `%%location_label%%0` (Bool) and `%%global_…%%` must not leak into
         // the abducible basis — they are verus's error-localization machinery.
         let v = rendered(vec![int("x!"), boolean("%%location_label%%0")]);
-        assert_eq!(v.len(), 4); // only x!'s four signs
+        assert_eq!(v.len(), 6); // only x!'s 4 signs + (=0) + (≠0)
         assert!(v.iter().all(|s| !s.contains("%%")), "label leaked into {:?}", v);
     }
 
     #[test]
     fn mixed_locals_compose() {
-        // 2 ints (12) + 1 bool (2) = 14
+        // 2 ints (18) + 1 bool (2) = 20
         let v = rendered(vec![int("x!"), int("y!"), boolean("b!")]);
-        assert_eq!(v.len(), 14);
+        assert_eq!(v.len(), 20);
     }
 }
 
