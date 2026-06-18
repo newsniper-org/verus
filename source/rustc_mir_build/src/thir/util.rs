@@ -1,4 +1,5 @@
 use std::assert_matches;
+
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_middle::bug;
