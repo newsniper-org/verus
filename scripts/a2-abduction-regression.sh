@@ -74,10 +74,10 @@ check "abduct-negativity" abduct-negativity.rs abduct   "(<= x! 0)"
 check "abduct-relational" abduct-relational.rs abduct   "(> x! y!)"
 check "abduct-boolean"    abduct-boolean.rs    abduct   "b!"
 check "abduct-eq-vars"    abduct-eq-vars.rs    abduct   "(= x! y!)"
-# Assert the genuinely-entailing abduct (= x! 0), which is present in both
-# the correct (batch) result and the current streaming result. (Streaming
-# also surfaces spurious non-entailing singletons (>= x! 0)/(> x! 0) — a
-# filed adsmt batch-vs-streaming abduce divergence; we don't assert on those.)
+# x == 0 abduces (= x! 0) [score 1.0] + (>= x! 0) ∧ (<= x! 0) [score 2.0],
+# both genuinely entailing. (The earlier streaming-fed non-entailing
+# singletons (>= x! 0)/(> x! 0) were an adsmt delegated-F bug, since fixed
+# by stripping prior interactive commands from the reconstructed F.)
 check "abduct-eq-zero"    abduct-eq-zero.rs    abduct   "(= x! 0)"
 check "noabduct-false"    noabduct-false.rs    noabduct
 check "error-disequality" error-disequality.rs error    # disequality-goal P0 regression
