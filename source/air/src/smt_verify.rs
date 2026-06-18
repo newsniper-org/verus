@@ -945,6 +945,13 @@ fn run_abduction(
     for e in abducible_vocabulary(local, &bare_goal).iter() {
         context.smt_log.log_declare_abducible(e);
     }
+    // A2b stage 2 (heavy cut): the verifier-supplied in-scope lemma `ens%…`
+    // abducibles ("call lemma L" suggestions).  Cloned out first to avoid
+    // borrowing `context` while also writing to its `smt_log`.
+    let extras = context.extra_abducibles.clone();
+    for e in extras.iter() {
+        context.smt_log.log_declare_abducible(e);
+    }
     context.smt_log.log_abduce(&bare_goal);
     // Reset the option so it doesn't leak into the next function's queries
     // (set-option is not push/pop-scoped).

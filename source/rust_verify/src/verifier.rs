@@ -1516,6 +1516,15 @@ impl Verifier {
         let bucket = self.get_bucket(bucket_id);
         let mut opgen = OpGenerator::new(ctx, krate, bucket.clone());
         while let Some(mut function_opgen) = opgen.next()? {
+            // A2b stage 2 (heavy cut): supply the in-scope proof-lemma `ens%…`
+            // abducibles for the function about to be checked, so a not-verified
+            // `(abduce …)` can suggest "call lemma L". Adsmt-only; gated on the
+            // flag, no-op for other backends.
+            if self.args.request_abductive_on_unknown {
+                air_context.set_extra_abducibles(
+                    vir::sst_to_air_func::lemma_ens_abducibles(function_opgen.ctx()),
+                );
+            }
             let diagnostics_to_report: std::cell::RefCell<
                 Option<PanicOnDropVec<(Message, MessageLevel)>>,
             > = std::cell::RefCell::new(Some(PanicOnDropVec::new(Vec::new())));

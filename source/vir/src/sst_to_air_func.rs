@@ -1021,3 +1021,73 @@ pub fn func_sst_to_air(
 
     Ok((Arc::new(commands), snap_map))
 }
+
+/// A2b stage 2 (heavy cut) — in-scope proof-lemma `ens%…` abducibles for the
+/// function currently in `ctx.fun`.  For each OTHER non-generic proof lemma
+/// that has an emitted `ens%` predicate and whose (all-scalar) parameters can
+/// be greedily filled from the current function's scalar parameters, build
+/// `(ens%L. <matched current params>)`.  Declaring that abducible suggests
+/// "calling lemma L on these arguments would discharge the goal" (the lemma's
+/// ens-defining axiom is already in `F`, so the application entails its
+/// postcondition).  Restricted to non-generic, scalar-param lemmas so the
+/// arguments are the current function's parameters verbatim — no type-argument
+/// or boxing reconstruction, the encoding is exactly what the query declared.
+pub fn lemma_ens_abducibles(ctx: &Ctx) -> Vec<Expr> {
+    use crate::ast::{Mode, TypX};
+    let is_scalar = |t: &crate::ast::Typ| matches!(&**t, TypX::Int(_) | TypX::Bool);
+    let current = match &ctx.fun {
+        Some(fctx) => fctx.current_fun.clone(),
+        None => return vec![],
+    };
+    let cur = match ctx.func_map.get(&current) {
+        Some(f) => f,
+        None => return vec![],
+    };
+    let cur_params: Vec<(air::ast::Ident, crate::ast::Typ)> = cur
+        .x
+        .params
+        .iter()
+        .filter(|p| is_scalar(&p.x.typ))
+        .map(|p| (p.x.name.lower(), p.x.typ.clone()))
+        .collect();
+    let mut out: Vec<Expr> = Vec::new();
+    for lemma in ctx.func_map.values() {
+        if out.len() >= 16 {
+            break;
+        }
+        if lemma.x.name == current
+            || lemma.x.mode != Mode::Proof
+            || !lemma.x.typ_params.is_empty()
+            || lemma.x.params.is_empty()
+            || ctx.funcs_with_ensure_predicate.get(&lemma.x.name) != Some(&true)
+            || !lemma.x.params.iter().all(|p| is_scalar(&p.x.typ))
+        {
+            continue;
+        }
+        // Greedily match each lemma parameter to an unused current scalar param
+        // of an equal type; skip the lemma unless every parameter is filled.
+        let mut used = vec![false; cur_params.len()];
+        let mut args: Vec<Expr> = Vec::new();
+        let mut ok = true;
+        for lp in lemma.x.params.iter() {
+            let mut matched = false;
+            for (i, (vn, vt)) in cur_params.iter().enumerate() {
+                if !used[i] && crate::ast_util::types_equal(vt, &lp.x.typ) {
+                    used[i] = true;
+                    args.push(ident_var(vn));
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            let f_ens = prefix_ensures(&fun_to_air_ident(&ctx.name_ctxt, &lemma.x.name));
+            out.push(Arc::new(ExprX::Apply(f_ens, Arc::new(args))));
+        }
+    }
+    out
+}

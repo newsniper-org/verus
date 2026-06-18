@@ -159,6 +159,10 @@ pub struct Context {
     /// A2a: when a `-V adsmt` query is not verified, emit an `(abduce …)`
     /// follow-up and surface the ranked abducts as the `Abductive` verdict.
     pub(crate) request_abductive_on_unknown: bool,
+    /// A2b stage 2 (heavy cut): extra `(declare-abducible …)` terms the
+    /// verifier computes from VIR for the current function (in-scope lemma
+    /// `ens%…` applications), declared alongside the goal-mined vocabulary.
+    pub(crate) extra_abducibles: Vec<crate::ast::Expr>,
 }
 
 impl Context {
@@ -228,6 +232,7 @@ impl Context {
             check_valid_used: false,
             solver,
             request_abductive_on_unknown: false,
+            extra_abducibles: Vec::new(),
         };
         context.axiom_infos.push_scope(false);
         context.array_map.push_scope(false);
@@ -290,6 +295,12 @@ impl Context {
 
     pub fn set_request_abductive_on_unknown(&mut self, b: bool) {
         self.request_abductive_on_unknown = b;
+    }
+
+    /// A2b stage 2: set the in-scope lemma `ens%…` abducibles for the
+    /// function about to be checked (verifier-computed from VIR).
+    pub fn set_extra_abducibles(&mut self, abducibles: Vec<crate::ast::Expr>) {
+        self.extra_abducibles = abducibles;
     }
 
     pub fn get_time(&self) -> (Duration, Duration) {
