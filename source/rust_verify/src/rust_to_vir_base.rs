@@ -2097,12 +2097,18 @@ fn check_generics_bounds_main<'tcx>(
                 accept_recs.insert(name.to_string(), attr);
 
                 if let Some(diagnostics) = &mut diagnostics {
-                    diagnostics.push(VirErrAs::Warning(crate::util::err_span_bare(
+                    crate::attributes::warning_maybe(
+                        tcx,
+                        def_id,
                         *span,
-                        format!(
-                            "use the attribute style `#[{attr_name:}({name:})]` at the item level"
-                        ),
-                    )));
+                        &vir::messages::WarningAllow::OldStyleAcceptRejectRecursiveTypes,
+                        || {
+                            format!(
+                                "use the attribute style `#[{attr_name:}({name:})]` at the item level",
+                            )
+                        },
+                        |msg| diagnostics.push(VirErrAs::Warning(msg)),
+                    );
                 }
             }
         }
@@ -2755,4 +2761,21 @@ pub(crate) fn opaque_def_to_vir<'tcx>(
         }
         _ => Ok(None),
     }
+}
+
+/// https://github.com/verus-lang/verus/issues/2541
+pub(crate) fn hack_fix_no_lifetime_opaque_ty_issue2541<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> rustc_middle::ty::Ty<'tcx> {
+    // replace unbound lifetime vars with 'static
+    // this is _kind of_ like ignoring lifetime constraints, though only works if lifetime
+    // params are used covariantly
+    rustc_middle::ty::fold_regions(tcx, ty, |region, _debruijn| {
+        if matches!(region.kind(), rustc_middle::ty::ReErased) {
+            rustc_middle::ty::Region::new_from_kind(tcx, rustc_middle::ty::ReStatic)
+        } else {
+            region
+        }
+    })
 }

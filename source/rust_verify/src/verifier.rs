@@ -338,6 +338,7 @@ pub struct Verifier {
     air_no_span: Option<vir::messages::Span>,
     current_crate_modules: Option<Vec<vir::ast::Module>>,
     crate_items: Option<Arc<crate::external::CrateItems>>,
+    warning_ctx: Option<Arc<vir::context::WarningCtx>>,
     buckets: HashMap<BucketId, Bucket>,
 
     // proof debugging purposes
@@ -541,6 +542,7 @@ impl Verifier {
             air_no_span: None,
             current_crate_modules: None,
             crate_items: None,
+            warning_ctx: None,
             buckets: HashMap::new(),
 
             expand_flag: false,
@@ -589,6 +591,7 @@ impl Verifier {
             air_no_span: self.air_no_span.clone(),
             current_crate_modules: self.current_crate_modules.clone(),
             crate_items: self.crate_items.clone(),
+            warning_ctx: self.warning_ctx.clone(),
             buckets: self.buckets.clone(),
 
             expand_flag: self.expand_flag,
@@ -1214,6 +1217,7 @@ impl Verifier {
         is_rerun: bool,
         prelude_config: vir::prelude::PreludeConfig,
         profile_file_name: Option<&std::path::PathBuf>,
+        prover_choice: vir::def::ProverChoice,
     ) -> Result<air::context::Context, VirErr> {
         let mut air_context =
             air::context::Context::new(message_interface.clone(), self.args.solver);
@@ -1283,22 +1287,27 @@ impl Verifier {
             air_context.set_smt_transcript_log(Box::new(file));
         }
 
-        // air_recommended_options causes AIR to apply a preset collection of Z3 options
-        air_context.set_z3_param("air_recommended_options", "true");
+        // A by(bit_vector) query is self-contained, so it runs prelude-free: it omits the
+        // recommended-options preset, the prelude, and the bucket background.
+        let bitvector = prover_choice == vir::def::ProverChoice::BitVector;
+        if !bitvector {
+            air_context.set_z3_param("air_recommended_options", "true");
+        }
         self.set_default_rlimit(&mut air_context);
         for (option, value) in self.args.smt_options.iter() {
             air_context.set_z3_param(&option, &value);
         }
-        if self.args.axiom_usage_info {
-            air_context.enable_usage_info();
+        if !bitvector {
+            if self.args.axiom_usage_info {
+                air_context.enable_usage_info();
+            }
+            self.run_command_batch(
+                bucket_id,
+                diagnostics,
+                &mut air_context,
+                &CommandBatch::new("Prelude", ctx.prelude(prelude_config)),
+            );
         }
-
-        self.run_command_batch(
-            bucket_id,
-            diagnostics,
-            &mut air_context,
-            &CommandBatch::new("Prelude", ctx.prelude(prelude_config)),
-        );
 
         air_context.blank_line();
         air_context.comment(&("MODULE '".to_string() + &bucket_id.friendly_name() + "'"));
@@ -1313,26 +1322,16 @@ impl Verifier {
         prover_choice: vir::def::ProverChoice,
     ) {
         match prover_choice {
-            vir::def::ProverChoice::BitVector => match self.args.solver {
-                // OxiZ speaks the z3 protocol, so it takes the same params.
-                air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
-                    air_context.set_z3_param("sat.euf", "true");
-                    air_context.set_z3_param("tactic.default_tactic", "sat");
-                    air_context.set_z3_param("smt.ematching", "false");
-                    air_context.set_z3_param("smt.case_split", "0");
-                }
-                // TODO: What options are best for cvc5 here?
-                air::context::SmtSolver::Cvc5 => {}
-                // adsmt has no z3-style BV tuning to apply: it already
-                // bit-blasts BV (bvand/bvor/bvxor/bvnot) to its SAT backend
-                // by default — exactly the mode these z3 options switch z3
-                // into — and exposes no `sat.*`/`tactic.*` keys (unknown
-                // set-options are silently ignored per SMT-LIB). BV
-                // arithmetic (bvadd/bvsub/bvmul) is outside the native
-                // bit-blaster and relies on OxiZ delegation, not a per-query
-                // option. So there is nothing to set here.
-                air::context::SmtSolver::Adsmt => {}
-            },
+            vir::def::ProverChoice::BitVector => {
+                // (upstream) A prelude-free by(bit_vector) query carries no
+                // per-query options: solver defaults work well.  This replaced
+                // the previous per-solver z3 tuning; OxiZ (z3 protocol) follows
+                // the same default, and adsmt already bit-blasts BV to its SAT
+                // backend with no `sat.*`/`tactic.*` keys to set — so nothing
+                // adsmt/oxiz-specific is lost by dropping the per-query options.
+                //
+                // TODO: tune Z3/CVC5 options for bit-vector queries
+            }
             vir::def::ProverChoice::Nonlinear => match self.args.solver {
                 air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
                     air_context.set_z3_param("smt.arith.solver", "6")
@@ -1364,6 +1363,7 @@ impl Verifier {
         span: &vir::messages::Span,
         profile_file_name: Option<&std::path::PathBuf>,
         spinoff_reason: &str,
+        prover_choice: vir::def::ProverChoice,
     ) -> Result<air::context::Context, VirErr> {
         let mut air_context = self.new_air_context_with_prelude(
             ctx,
@@ -1374,6 +1374,7 @@ impl Verifier {
             is_rerun,
             PreludeConfig { arch_word_bits: ctx.arch_word_bits, solver: self.args.solver },
             profile_file_name,
+            prover_choice,
         )?;
 
         // Write the span of spun-off query
@@ -1381,8 +1382,10 @@ impl Verifier {
         air_context.blank_line();
         air_context.comment(&format!("query spun off because: {}", spinoff_reason));
 
-        // set up bucket context
-        self.run_command_batches(bucket_id, diagnostics, &mut air_context, bucket_context);
+        // set up bucket context (skipped for a prelude-free bit_vector query)
+        if prover_choice != vir::def::ProverChoice::BitVector {
+            self.run_command_batches(bucket_id, diagnostics, &mut air_context, bucket_context);
+        }
 
         Ok(air_context)
     }
@@ -1428,6 +1431,7 @@ impl Verifier {
             false,
             PreludeConfig { arch_word_bits: ctx.arch_word_bits, solver: self.args.solver },
             profile_all_file_name.as_ref(),
+            vir::def::ProverChoice::DefaultProver,
         )?;
         if self.args.solver_version_check {
             air_context.set_expected_solver_version(match self.args.solver {
@@ -1668,10 +1672,11 @@ impl Verifier {
                                     &cmds.context.span,
                                     profile_file_name.as_ref(),
                                     spinoff_reason,
+                                    cmds.prover_choice,
                                 )?;
                                 // for bitvector, only one query, no push/pop
                                 if cmds.prover_choice == vir::def::ProverChoice::BitVector {
-                                    spinoff_z3_context.disable_incremental_solving();
+                                    spinoff_z3_context.set_single_check_query();
                                 }
                                 // Apply prover-specific SMT tuning.
                                 self.apply_per_query_smt_options(
@@ -2115,6 +2120,7 @@ impl Verifier {
             self.args.rlimit,
             Arc::new(std::sync::Mutex::new(None)),
             Arc::new(std::sync::Mutex::new(call_graph_log)),
+            self.warning_ctx.clone().expect("warning_ctx"),
             self.args.solver,
             false,
             self.args.check_api_safety,
@@ -2790,7 +2796,7 @@ impl Verifier {
         // Convert HIR -> VIR
         let time1 = Instant::now();
 
-        let (ctxt, vir_crate) =
+        let (ctxt, mut warning_ctx, vir_crate) =
             crate::rust_to_vir::crate_to_vir(ctxtx, &other_vir_crates, &crate_items)
                 .map_err(map_errs_diagnostics)?;
 
@@ -2877,11 +2883,15 @@ impl Verifier {
         }
         let path_to_well_known_item = crate::def::path_to_well_known_item(&ctxt);
 
-        let vir_crate =
-            vir::traits::demote_external_traits(diagnostics, &path_to_well_known_item, &vir_crate)
-                .map_err(map_err_diagnostics)?;
-        let vir_crate =
-            vir::traits::inherit_default_bodies(&vir_crate).map_err(|e| (vec![e], Vec::new()))?;
+        let vir_crate = vir::traits::demote_external_traits(
+            diagnostics,
+            &warning_ctx,
+            &path_to_well_known_item,
+            &vir_crate,
+        )
+        .map_err(map_err_diagnostics)?;
+        let vir_crate = vir::traits::inherit_default_bodies(&vir_crate, &mut warning_ctx)
+            .map_err(|e| (vec![e], Vec::new()))?;
         let vir_crate = vir::traits::fixup_ens_has_return_for_trait_method_impls(vir_crate)
             .map_err(|e| (vec![e], Vec::new()))?;
 
@@ -2894,6 +2904,7 @@ impl Verifier {
             &vir_crate,
             &unpruned_crate,
             &mut *ctxt.diagnostics.borrow_mut(),
+            &warning_ctx,
             self.args.no_verify,
             self.args.no_cheating,
         );
@@ -2965,6 +2976,7 @@ impl Verifier {
             vir::modes::check_crate(&vir_crate).map_err(|e| (vec![e], Vec::new()))?;
 
         self.vir_crate = Some(vir_crate.clone());
+        self.warning_ctx = Some(Arc::new(warning_ctx));
 
         let erasure_info = ctxt.erasure_info.borrow();
         let hir_vir_ids = erasure_info.hir_vir_ids.clone();
@@ -3214,6 +3226,15 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
 
                 providers.queries.mir_borrowck =
                     |tcx, _local_def_id| Ok(tcx.arena.alloc(Default::default()));
+
+                providers.queries.type_of_opaque = |tcx, def_id| {
+                    let ty = (rustc_interface::DEFAULT_QUERY_PROVIDERS.queries.type_of_opaque)(
+                        tcx, def_id,
+                    );
+                    ty.map_bound(|ty| {
+                        crate::rust_to_vir_base::hack_fix_no_lifetime_opaque_ty_issue2541(tcx, ty)
+                    })
+                };
             });
         } else {
             config.override_queries = Some(|_session, providers| {
