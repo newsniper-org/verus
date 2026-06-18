@@ -774,44 +774,81 @@ fn goal_int_magnitudes(goal: &Expr) -> Vec<String> {
     out
 }
 
+/// A2b — integer-valued spec-function applications appearing in an integer
+/// comparison position in `goal` (e.g. `(vstd!seq.Seq.len.? … s)` in
+/// `s.len() > 0`).  These are the "in-scope" quantities the obligation talks
+/// about beyond its plain integer variables; bounding them is what abduces
+/// `s.len() > 0` and the like.  Heuristic for "spec application, not the
+/// arithmetic encoding": the head is a path-qualified name (contains `!`),
+/// which `Add`/`Sub`/`Mul` are not.  Deduped (`ExprX` has no `Eq`, so by its
+/// `Debug` key).
+fn goal_spec_int_terms(goal: &Expr) -> Vec<Expr> {
+    let mut out: Vec<Expr> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    crate::visitor::map_expr_visitor(goal, &mut |e| {
+        if let ExprX::Binary(op, a, b) = &**e {
+            if matches!(
+                op,
+                BinaryOp::Ge | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Lt | BinaryOp::Eq
+            ) {
+                for t in [a, b] {
+                    if let ExprX::Apply(head, _) = &**t {
+                        if head.contains('!') {
+                            let k = format!("{:?}", t);
+                            if !keys.contains(&k) {
+                                keys.push(k);
+                                out.push(t.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        e.clone()
+    });
+    out
+}
+
 fn abducible_vocabulary(local: &crate::ast::Decls, goal: &Expr) -> Vec<Expr> {
     let is_user = |id: &Ident| !id.starts_with("%%");
-    let int_vars: Vec<Ident> = local
+    // Integer-valued ATOMS: declared `Int` locals (as `Var` terms) + the
+    // integer-position spec-function applications mined from the goal.
+    let mut int_terms: Vec<Expr> = local
         .iter()
         .filter_map(|d| match &**d {
-            DeclX::Const(id, typ) if matches!(&**typ, TypX::Int) && is_user(id) => Some(id.clone()),
+            DeclX::Const(id, typ) if matches!(&**typ, TypX::Int) && is_user(id) => Some(ident_var(id)),
             _ => None,
         })
         .collect();
+    for t in goal_spec_int_terms(goal) {
+        int_terms.push(t);
+    }
+    // Keep the O(check-sat × subsets) search tractable.
+    int_terms.truncate(8);
+
     let mut v: Vec<Expr> = Vec::new();
     let zero = mk_nat("0");
     let neq = |a: Expr, b: Expr| Arc::new(ExprX::Unary(UnaryOp::Not, Arc::new(ExprX::Binary(BinaryOp::Eq, a, b))));
-    for id in &int_vars {
-        let var = ident_var(id);
-        // the four sign/bound facts v ≷ 0 …
+    // Per term: the four sign facts t ≷ 0, plus t = 0 / t ≠ 0.
+    for t in &int_terms {
         for op in [BinaryOp::Ge, BinaryOp::Gt, BinaryOp::Le, BinaryOp::Lt] {
-            v.push(Arc::new(ExprX::Binary(op, var.clone(), zero.clone())));
+            v.push(Arc::new(ExprX::Binary(op, t.clone(), zero.clone())));
         }
-        // … plus the constant-bound (dis)equalities v = 0 / v ≠ 0 (e.g. the
-        // nonzero precondition a division/modulo obligation wants).
-        v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, var.clone(), zero.clone())));
-        v.push(neq(var, zero.clone()));
+        v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, t.clone(), zero.clone())));
+        v.push(neq(t.clone(), zero.clone()));
     }
-    // Ordered relations a > b, a ≥ b (the </≤ orderings come from the
-    // reversed pair); symmetric (dis)equalities a = b / a ≠ b once per
-    // unordered pair.
-    for (i, a) in int_vars.iter().enumerate() {
-        for b in int_vars.iter().skip(i + 1) {
-            let (va, vb) = (ident_var(a), ident_var(b));
-            v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, va.clone(), vb.clone())));
-            v.push(neq(va, vb));
-        }
-        for b in int_vars.iter() {
-            if a != b {
-                let (va, vb) = (ident_var(a), ident_var(b));
-                v.push(Arc::new(ExprX::Binary(BinaryOp::Gt, va.clone(), vb.clone())));
-                v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, va, vb)));
+    // Pairwise (by index): ordered a > b / a ≥ b (</≤ from the reversed
+    // pair); symmetric a = b / a ≠ b once per unordered pair.
+    for i in 0..int_terms.len() {
+        for j in 0..int_terms.len() {
+            if i != j {
+                v.push(Arc::new(ExprX::Binary(BinaryOp::Gt, int_terms[i].clone(), int_terms[j].clone())));
+                v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, int_terms[i].clone(), int_terms[j].clone())));
             }
+        }
+        for j in (i + 1)..int_terms.len() {
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Eq, int_terms[i].clone(), int_terms[j].clone())));
+            v.push(neq(int_terms[i].clone(), int_terms[j].clone()));
         }
     }
     for d in local.iter() {
@@ -823,21 +860,20 @@ fn abducible_vocabulary(local: &crate::ast::Decls, goal: &Expr) -> Vec<Expr> {
             }
         }
     }
-    // Constant-literal bounds: for each integer variable and each nonzero
+    // Constant-literal bounds: for each integer-valued term and each nonzero
     // literal magnitude `c` the goal mentions, both directions at ±c —
-    // `v ≤ c`, `v ≥ c`, `v ≤ -c`, `v ≥ -c` — so a missing bound like
+    // `t ≤ c`, `t ≥ c`, `t ≤ -c`, `t ≥ -c` — so a missing bound like
     // `x < 100` (from `ensures … x < 100 …`) is in reach without the search
     // having to guess the constant.
     let mags = goal_int_magnitudes(goal);
-    for id in &int_vars {
-        let var = ident_var(id);
+    for t in &int_terms {
         for m in &mags {
             let c = mk_nat(m);
             let neg_c = mk_neg(&mk_nat(m));
-            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, var.clone(), c.clone())));
-            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, var.clone(), c)));
-            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, var.clone(), neg_c.clone())));
-            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, var.clone(), neg_c)));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, t.clone(), c.clone())));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, t.clone(), c)));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Le, t.clone(), neg_c.clone())));
+            v.push(Arc::new(ExprX::Binary(BinaryOp::Ge, t.clone(), neg_c)));
         }
     }
     v
@@ -918,6 +954,15 @@ mod abducible_vocabulary_tests {
             ExprX::Const(Constant::Nat(n)) => (**n).clone(),
             ExprX::Unary(UnaryOp::Not, a) => format!("(not {})", render(a)),
             ExprX::Multi(MultiOp::Sub, es) if es.len() == 1 => format!("(- {})", render(&es[0])),
+            ExprX::Apply(head, args) => {
+                let mut s = format!("({}", &**head);
+                for a in args.iter() {
+                    s.push(' ');
+                    s.push_str(&render(a));
+                }
+                s.push(')');
+                s
+            }
             ExprX::Binary(op, a, b) => {
                 let s = match op {
                     BinaryOp::Ge => ">=",
@@ -1003,6 +1048,43 @@ mod abducible_vocabulary_tests {
 
     fn ident(name: &str) -> Expr {
         Arc::new(ExprX::Var(Arc::new(name.to_string())))
+    }
+    fn app(head: &str, args: Vec<Expr>) -> Expr {
+        Arc::new(ExprX::Apply(Arc::new(head.to_string()), Arc::new(args)))
+    }
+
+    #[test]
+    fn goal_spec_app_in_int_position_is_mined() {
+        // goal `(> (vstd!seq.Seq.len.? s!) 0)` — the path-qualified spec app
+        // in integer-comparison position becomes an int-valued term, so its
+        // sign facts (incl. the missing `s.len() > 0`) join the basis even
+        // though there is no integer *variable* in scope.
+        let len = app("vstd!seq.Seq.len.?", vec![ident("s!")]);
+        let goal = Arc::new(ExprX::Binary(BinaryOp::Gt, len.clone(), nat("0")));
+        let v = rendered_with_goal(vec![], &goal); // no Int locals
+        // one int term (the len app): 4 signs + (= 0) + (≠ 0) = 6
+        assert_eq!(v.len(), 6);
+        for p in [
+            "(> (vstd!seq.Seq.len.? s!) 0)",
+            "(>= (vstd!seq.Seq.len.? s!) 0)",
+            "(= (vstd!seq.Seq.len.? s!) 0)",
+            "(not (= (vstd!seq.Seq.len.? s!) 0))",
+        ] {
+            assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
+        }
+    }
+
+    #[test]
+    fn arithmetic_encoding_apps_are_not_mined() {
+        // `(Add x! y!)` (the axiomatized integer add, no `!` in the head) must
+        // NOT be mined as a spec term — only its declared int vars drive the
+        // basis (else the abduct degenerates to "assume the conclusion").
+        let add = app("Add", vec![ident("x!"), ident("y!")]);
+        let goal = Arc::new(ExprX::Binary(BinaryOp::Gt, add, nat("0")));
+        let v = rendered_with_goal(vec![int("x!"), int("y!")], &goal);
+        // exactly the two-int-var basis (18); no extra term from (Add …)
+        assert_eq!(v.len(), 18);
+        assert!(v.iter().all(|s| !s.contains("Add")), "Add leaked into {:?}", v);
     }
 
     #[test]
