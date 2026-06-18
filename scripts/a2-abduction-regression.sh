@@ -80,6 +80,7 @@ check "abduct-eq-vars"    abduct-eq-vars.rs    abduct   "(= x! y!)"
 # by stripping prior interactive commands from the reconstructed F.)
 check "abduct-eq-zero"    abduct-eq-zero.rs    abduct   "(= x! 0)"
 check "abduct-spec-len"    abduct-spec-len.rs   abduct   "Seq.len"   # A2b: spec-app mined from goal
+check "abduct-pred"       abduct-pred.rs       abduct   "!prop.?"   # A2b stage 2: boolean spec-pred from goal
 check "noabduct-false"    noabduct-false.rs    noabduct
 check "error-disequality" error-disequality.rs error    # disequality-goal P0 regression
 

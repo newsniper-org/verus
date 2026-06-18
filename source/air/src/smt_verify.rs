@@ -809,6 +809,48 @@ fn goal_spec_int_terms(goal: &Expr) -> Vec<Expr> {
     out
 }
 
+/// A2b stage 2 — boolean-valued spec-function applications appearing in a
+/// boolean position in `goal`: the goal root itself, or operands of the
+/// logical connectives (`and`/`or`/`xor`/`⇒`/`¬`).  These are exactly the
+/// "missing predicate" the obligation talks about — e.g. for
+/// `ensures f(x)` the goal IS `(…!f.? (I x))`, so `f(x)` (and `¬f(x)`) join
+/// the basis, abducing the `requires f(x)` (equivalently, the call to the
+/// lemma whose ensures is `f(x)`).  Same path-qualified-head (`!`) heuristic
+/// as the integer case; deduped by `Debug` key, capped by the caller.
+fn goal_spec_bool_terms(goal: &Expr) -> Vec<Expr> {
+    fn consider(t: &Expr, out: &mut Vec<Expr>, keys: &mut Vec<String>) {
+        if let ExprX::Apply(h, _) = &**t {
+            if h.contains('!') {
+                let k = format!("{:?}", t);
+                if !keys.contains(&k) {
+                    keys.push(k);
+                    out.push(t.clone());
+                }
+            }
+        }
+    }
+    let mut out: Vec<Expr> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    consider(goal, &mut out, &mut keys);
+    crate::visitor::map_expr_visitor(goal, &mut |e| {
+        match &**e {
+            ExprX::Multi(op, es) if matches!(op, MultiOp::And | MultiOp::Or | MultiOp::Xor) => {
+                for t in es.iter() {
+                    consider(t, &mut out, &mut keys);
+                }
+            }
+            ExprX::Binary(BinaryOp::Implies, a, b) => {
+                consider(a, &mut out, &mut keys);
+                consider(b, &mut out, &mut keys);
+            }
+            ExprX::Unary(UnaryOp::Not, a) => consider(a, &mut out, &mut keys),
+            _ => {}
+        }
+        e.clone()
+    });
+    out
+}
+
 fn abducible_vocabulary(local: &crate::ast::Decls, goal: &Expr) -> Vec<Expr> {
     let is_user = |id: &Ident| !id.starts_with("%%");
     // Integer-valued ATOMS: declared `Int` locals (as `Var` terms) + the
@@ -859,6 +901,12 @@ fn abducible_vocabulary(local: &crate::ast::Decls, goal: &Expr) -> Vec<Expr> {
                 v.push(Arc::new(ExprX::Unary(UnaryOp::Not, b)));
             }
         }
+    }
+    // Boolean spec-predicate applications from the goal (A2b stage 2): each
+    // such `p` and its negation `¬p` — the missing `requires p` / lemma call.
+    for b in goal_spec_bool_terms(goal).into_iter().take(6) {
+        v.push(Arc::new(ExprX::Unary(UnaryOp::Not, b.clone())));
+        v.push(b);
     }
     // Constant-literal bounds: for each integer-valued term and each nonzero
     // literal magnitude `c` the goal mentions, both directions at ±c —
@@ -1072,6 +1120,17 @@ mod abducible_vocabulary_tests {
         ] {
             assert!(v.contains(&p.to_string()), "missing {} in {:?}", p, v);
         }
+    }
+
+    #[test]
+    fn goal_bool_spec_app_is_mined_with_negation() {
+        // goal IS the boolean spec app `(lem!f.? (I x!))` (ensures f(x)) —
+        // mined as a predicate abducible together with its negation.
+        let goal = app("lem!f.?", vec![app("I", vec![ident("x!")])]);
+        let v = rendered_with_goal(vec![], &goal); // no int/bool locals
+        assert_eq!(v.len(), 2);
+        assert!(v.contains(&"(lem!f.? (I x!))".to_string()), "missing pred in {:?}", v);
+        assert!(v.contains(&"(not (lem!f.? (I x!)))".to_string()), "missing ¬pred in {:?}", v);
     }
 
     #[test]
