@@ -15,3 +15,4 @@
 # §3.5.H AOT prelude bank cache (baked artefacts, regenerable)
 /source/target-verus/*/aot/
 /target-verus/*/aot/
+.claude-research-library/
