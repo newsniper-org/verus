@@ -31,6 +31,7 @@ pub const INTERPRETER_FILE_SUFFIX: &str = ".interp";
 pub const AIR_INITIAL_FILE_SUFFIX: &str = ".air";
 pub const AIR_FINAL_FILE_SUFFIX: &str = "-final.air";
 pub const SMT_FILE_SUFFIX: &str = ".smt2";
+pub const LUKB_FILE_SUFFIX: &str = ".lukb";
 pub const SMT_TRANSCRIPT_FILE_SUFFIX: &str = ".smt_transcript";
 pub const PROFILE_FILE_SUFFIX: &str = ".profile";
 pub const SINGULAR_FILE_SUFFIX: &str = ".singular";
@@ -133,6 +134,11 @@ pub struct ArgsX {
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
     pub no_bv_simplify: bool,
+    // Phase 1c (any solver).  `-V emit-lukb` dual-emits each AIR obligation to a
+    // `.lukb` log in the standard log dir, alongside the canonical `.smt2`.  An
+    // inert structural log of the lu-kb-successor surface (`adsmt-ir-lukb`); the
+    // SMT-LIB path stays the verdict oracle.  See `air::lukb`.
+    pub emit_lukb: bool,
 }
 
 impl ArgsX {
@@ -184,6 +190,7 @@ impl ArgsX {
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
             no_bv_simplify: Default::default(),
+            emit_lukb: Default::default(),
         }
     }
 }
@@ -435,6 +442,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_EMIT_ISABELLE: &str = "emit-isabelle";
     const EXTENDED_EMIT_ROCQ: &str = "emit-rocq";
     const EXTENDED_JIT_TRACE_LOAD: &str = "jit-trace-load";
+    const EXTENDED_EMIT_LUKB: &str = "emit-lukb";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
         (EXTENDED_IGNORE_UNEXPECTED_SMT, "Ignore unexpected SMT output"),
         (EXTENDED_DEBUG, "Enable debugging of proof failures"),
@@ -486,6 +494,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_JIT_TRACE_LOAD,
             "Forward --jit-trace-load=<path> to the -V adsmt sub-process (alias for the VERUS_ADSMT_JIT_TRACE env var). Replay-evaluation gate for a lu-smt --jit-trace-emit trace; no functional effect until adsmt §3.5.F lands.",
+        ),
+        (
+            EXTENDED_EMIT_LUKB,
+            "Dual-emit each AIR obligation to a `.lukb` log (the lu-kb-successor surface) ALONGSIDE the `.smt2`. Maps AIR axiom→`axiom`, Assume→`assume`, Assert→`goal` (un-negated); Tier-2+ constructs fall back to `#` comments (never silently dropped). Inert structural log for the parse/elaborate differential (the SMT-LIB path stays the verdict oracle).",
         ),
     ];
 
@@ -893,6 +905,7 @@ pub fn parse_args_with_imports(
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
+        emit_lukb: extended.contains_key(EXTENDED_EMIT_LUKB),
     };
 
     if args.compile && args.no_erasure_check {

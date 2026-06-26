@@ -146,6 +146,10 @@ pub struct Context {
     pub(crate) air_final_log: Emitter,
     pub(crate) smt_log: Emitter,
     pub(crate) smt_transcript_log: Option<Box<dyn std::io::Write>>,
+    /// Phase 1c: the `-V emit-lukb` dual-emit sink for the lu-kb-successor
+    /// surface (rendered by [`crate::lukb`]), written alongside the canonical
+    /// `.smt2`. An inert structural log — never feeds a verdict.
+    pub(crate) lukb_log: Option<Box<dyn std::io::Write>>,
     pub(crate) time_smt_init: Duration,
     pub(crate) time_smt_run: Duration,
     pub(crate) rlimit_count: Option<(u64, u64)>,
@@ -217,6 +221,7 @@ impl Context {
             ),
             smt_log: Emitter::new(message_interface.clone(), true, true, None, solver.clone()),
             smt_transcript_log: None,
+            lukb_log: None,
             time_smt_init: Duration::new(0, 0),
             time_smt_run: Duration::new(0, 0),
             rlimit_count: match solver {
@@ -267,6 +272,18 @@ impl Context {
 
     pub fn set_smt_log(&mut self, writer: Box<dyn std::io::Write>) {
         self.smt_log.set_log(Some(writer));
+    }
+
+    pub fn set_lukb_log(&mut self, writer: Box<dyn std::io::Write>) {
+        self.lukb_log = Some(writer);
+    }
+
+    /// Append rendered lu-kb-successor text to the `-V emit-lukb` log, if open.
+    fn write_lukb(&mut self, s: &str) {
+        use std::io::Write;
+        if let Some(w) = &mut self.lukb_log {
+            let _ = w.write_all(s.as_bytes());
+        }
     }
 
     pub fn set_smt_transcript_log(&mut self, writer: Box<dyn std::io::Write>) {
@@ -516,6 +533,10 @@ impl Context {
         self.air_initial_log.log_decl(decl);
         self.air_middle_log.log_decl(decl);
         self.air_final_log.log_decl(decl);
+        if self.lukb_log.is_some() {
+            let s = crate::lukb::decl_to_lukb(&**decl);
+            self.write_lukb(&s);
+        }
         let (gen_decls, decl) = crate::typecheck::check_decl(self, decl)?;
         for gen_decl in gen_decls.iter() {
             crate::smt_verify::smt_add_decl(self, gen_decl);
@@ -543,6 +564,10 @@ impl Context {
         self.air_middle_log.log_query(&query);
         let query = crate::block_to_assert::lower_query(message_interface, &query);
         self.air_final_log.log_query(&query);
+        if self.lukb_log.is_some() {
+            let s = format!("\n# ── obligation ──\n{}", crate::lukb::query_to_lukb(&*query));
+            self.write_lukb(&s);
+        }
 
         let model = Model::new(snapshots, local_vars);
         let validity = crate::smt_verify::smt_check_query(

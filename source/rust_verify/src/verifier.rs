@@ -1272,6 +1272,21 @@ impl Verifier {
             )?;
             air_context.set_smt_log(Box::new(file));
         }
+        // Phase 1c: dual-emit the lu-kb-successor surface alongside the `.smt2`.
+        if self.args.emit_lukb {
+            let file = self.create_log_file(
+                Some(bucket_id),
+                Self::log_file_name_suffix(
+                    ctx,
+                    is_rerun,
+                    query_function_path_counter,
+                    self.expand_flag,
+                    crate::config::LUKB_FILE_SUFFIX,
+                )
+                .as_str(),
+            )?;
+            air_context.set_lukb_log(Box::new(file));
+        }
         if self.args.log_all || self.args.log_args.log_smt_transcript {
             let file = self.create_log_file(
                 Some(bucket_id),
