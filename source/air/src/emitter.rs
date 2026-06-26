@@ -150,6 +150,25 @@ impl Emitter {
         }
     }
 
+    /// Emit the negated-goal assertion tagged with the `:goal-negation`
+    /// attribute, so a structure-aware backend (adsmt's unsoundness/vacuity
+    /// linter) can isolate the goal from the assumption set `H` — the flattened
+    /// `(assert (not G))` is otherwise an unmarked assertion indistinguishable
+    /// from a hypothesis. The `(! <expr> :goal-negation)` annotation is
+    /// semantically inert (the wrapped term is `<expr>` itself), and this is
+    /// only ever emitted on the `SmtSolver::Adsmt` path, so Z3/cvc5/OxiZ never
+    /// see the custom attribute (no portability risk; the z3-differential path
+    /// is byte-identical).
+    pub fn log_assert_goal(&mut self, expr: &Expr) {
+        if !self.is_none() {
+            self.log_node(&nodes!(assert (
+                {Node::Atom("!".to_string())}
+                {self.printer.expr_to_node(expr)}
+                {Node::Atom(":goal-negation".to_string())}
+            )));
+        }
+    }
+
     pub fn log_word(&mut self, s: &str) {
         if !self.is_none() {
             self.log_node(&Node::List(vec![Node::Atom(s.to_string())]));

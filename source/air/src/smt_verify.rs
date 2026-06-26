@@ -701,7 +701,16 @@ pub(crate) fn smt_check_query<'ctx>(
     if do_abduce {
         context.smt_log.log_push();
     }
-    context.smt_log.log_assert(&None, &not_expr);
+    // Tag the negated goal with `:goal-negation` on the adsmt path so adsmt's
+    // unsoundness/vacuity linter can isolate the goal from the assumption set
+    // `H` (the flattened `(assert (not G))` is otherwise indistinguishable from
+    // a hypothesis). Inert annotation; emitted only for adsmt, so the z3/cvc5
+    // differential path is byte-identical.
+    if matches!(context.solver, SmtSolver::Adsmt) {
+        context.smt_log.log_assert_goal(&not_expr);
+    } else {
+        context.smt_log.log_assert(&None, &not_expr);
+    }
 
     let rlimit_count_2 = if context.solver.is_z3_compatible() {
         let rlimit_count = match smt_get_rlimit_count(context) {
