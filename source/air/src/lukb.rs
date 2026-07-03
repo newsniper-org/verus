@@ -25,9 +25,9 @@
 //! ## Fallback (never a silent drop)
 //!
 //! Tier-2+ constructs (bit-vectors, floats, arrays, higher-order
-//! lambda/choose/apply-fun, Z3 special relations, if-then-else *terms*) and the
-//! imperative statements that survive an unusual lowering (havoc/assign/
-//! snapshot/break) have no lu-kb-successor form. They are emitted as a `#`
+//! lambda/choose/apply-fun, Z3 special relations) and the imperative statements
+//! that survive an unusual lowering (havoc/assign/snapshot/break) have no
+//! lu-kb-successor form. They are emitted as a `#`
 //! comment carrying a short reason — the lukb lexer skips `#` lines, so the
 //! file still parses, and nothing is silently dropped (the comment records what
 //! the SMT-LIB path carries that the surface can't yet express).
@@ -52,8 +52,56 @@ pub(crate) fn decl_to_lukb(decl: &DeclX) -> String {
             let name = ax.named.as_ref().map(|s| s.as_str());
             render_item("axiom", name, &ax.expr)
         }
-        DeclX::Datatypes(_) => fallback("datatypes", "recursive/inductive datatypes (Tier 2)"),
+        DeclX::Datatypes(dts) => render_datatypes(dts),
     }
+}
+
+/// Render an AIR datatype group (`declare-datatypes`) to lu-kb-successor `data`
+/// items. Verus monomorphises before AIR, so every AIR datatype is arity-0
+/// (non-parametric) — exactly the fragment the lukb `data` surface (slice 7)
+/// accepts. Each datatype in the group is rendered independently; one whose
+/// field carries a type the surface can't express (a Tier-2 `BitVec`/`Array`/
+/// `Fun` field) drops to a `#` comment on its own line, so a mixed group still
+/// contributes every representable member (never a silent drop).
+fn render_datatypes(dts: &Datatypes) -> String {
+    let mut out = String::new();
+    for dt in dts.iter() {
+        match render_one_datatype(dt) {
+            Ok(line) => out.push_str(&line),
+            Err(r) => out.push_str(&fallback("datatypes", &r)),
+        }
+    }
+    out
+}
+
+/// `data N = C0(f: T, …) | C1 | …` — one datatype. A nullary constructor is a
+/// bare name (`nil`); a constructor with fields carries its named selectors
+/// (`cons(head: Int, tail: Lst)`) — AIR always names its fields, and the lukb
+/// surface round-trips selector names (they are sugar the solver lowering
+/// re-synthesises positionally).
+fn render_one_datatype(dt: &Datatype) -> Result<String, String> {
+    let name = checked_ident(&dt.name)?;
+    let mut ctors = Vec::with_capacity(dt.a.len());
+    for variant in dt.a.iter() {
+        let cname = checked_ident(&variant.name)?;
+        if variant.a.is_empty() {
+            ctors.push(cname);
+            continue;
+        }
+        let mut fields = Vec::with_capacity(variant.a.len());
+        for field in variant.a.iter() {
+            let fname = checked_ident(&field.name)?;
+            let fty = typ(&field.a)?;
+            fields.push(format!("{fname}: {fty}"));
+        }
+        ctors.push(format!("{cname}({})", fields.join(", ")));
+    }
+    // A datatype with no constructors has no lukb `data` form (an empty sum);
+    // it can't arise from a Verus type, but guard rather than emit `data N = `.
+    if ctors.is_empty() {
+        return Err(format!("datatype {} has no constructors", &*dt.name));
+    }
+    Ok(format!("data {name} = {}\n", ctors.join(" | ")))
 }
 
 /// Render a checked query — its local declarations followed by the assertion
@@ -174,7 +222,7 @@ fn expr(e: &Expr, ctx: u8) -> Result<String, String> {
         ExprX::Unary(op, a) => unary(*op, a, ctx),
         ExprX::Binary(op, a, b) => binary(op, a, b, ctx),
         ExprX::Multi(op, args) => multi(*op, args, ctx),
-        ExprX::IfElse(..) => Err("if-then-else term".to_string()),
+        ExprX::IfElse(c, a, b) => if_then_else(c, a, b, ctx),
         ExprX::Array(_) => Err("array literal".to_string()),
         ExprX::Bind(bind, body) => bind_expr(bind, body, ctx),
         ExprX::LabeledAxiom(_, _, inner) => expr(inner, ctx),
@@ -341,6 +389,22 @@ fn bind_expr(bind: &BindX, body: &Expr, ctx: u8) -> Result<String, String> {
     }
 }
 
+/// `if c then a else b` — the surface conditional (adsmt-ir-lukb slice ①,
+/// `4ae487d`: `S::If` → the `ite` prelude const, lowered by the Verus-verified
+/// term-`ite` atom-duplication). Emitted for AIR `ExprX::IfElse`, which is *also*
+/// how Verus's VIR lowers every Rust `match` (desugared to nested `IfElse` +
+/// `is-Variant`/selector applies before AIR — `ast_simplify`), so this one arm
+/// carries every Verus conditional. A loosest-precedence prefix form (like
+/// `let`/quantifiers), parenthesised when it sits in a tighter context; the
+/// condition is Prop and the two branch values reconcile to one sort on the
+/// adsmt side, so all three sub-terms render at the top (`0`) precedence.
+fn if_then_else(c: &Expr, a: &Expr, b: &Expr, ctx: u8) -> Result<String, String> {
+    let cond = expr(c, 0)?;
+    let then_branch = expr(a, 0)?;
+    let else_branch = expr(b, 0)?;
+    Ok(paren(ctx > 0, format!("if {cond} then {then_branch} else {else_branch}")))
+}
+
 /// A trigger clause `trigger p` / `trigger { p1, … }`, or `None` if any pattern
 /// is unrenderable (triggers only guide instantiation, so dropping is sound).
 fn render_trigger(trig: &[Expr]) -> Option<String> {
@@ -461,6 +525,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_if_then_else() {
+        // if x > 0 then x else 0 - x   (the shape Verus VIR desugars match into)
+        let c = Arc::new(ExprX::Binary(BinaryOp::Gt, var("x"), nat("0")));
+        let neg = Arc::new(ExprX::Multi(MultiOp::Sub, Arc::new(vec![nat("0"), var("x")])));
+        let ite = Arc::new(ExprX::IfElse(c, var("x"), neg));
+        // top level: no parens
+        assert_eq!(expr(&ite, 0).unwrap(), "if x > 0 then x else 0 - x");
+        // nested in a tighter context (as an operand): parenthesised, like let/quant
+        let eq = Arc::new(ExprX::Binary(BinaryOp::Eq, ite, var("x")));
+        assert_eq!(expr(&eq, 0).unwrap(), "(if x > 0 then x else 0 - x) = x");
+    }
+
+    #[test]
     fn renders_and_chain_and_distinct() {
         // (and (> x 0) (< x 10))
         let a = Arc::new(ExprX::Binary(BinaryOp::Gt, var("x"), nat("0")));
@@ -494,5 +571,39 @@ mod tests {
         // a bit-vector const falls back to a comment (still parseable lukb)
         let bv = DeclX::Const(Arc::new("b".to_string()), Arc::new(TypX::BitVec(8)));
         assert!(decl_to_lukb(&bv).starts_with("# fallback (const):"));
+    }
+
+    fn mk<A>(name: &str, a: A) -> Arc<BinderX<A>> {
+        Arc::new(BinderX { name: Arc::new(name.to_string()), a })
+    }
+
+    #[test]
+    fn renders_a_recursive_datatype() {
+        // data Lst = nil | cons(head: Int, tail: Lst)
+        let int: Typ = Arc::new(TypX::Int);
+        let lst: Typ = Arc::new(TypX::Named(Arc::new("Lst".to_string())));
+        let nil: Variant = mk("nil", Arc::new(vec![]));
+        let cons: Variant = mk("cons", Arc::new(vec![mk("head", int), mk("tail", lst)]));
+        let lst_dt: Datatype = mk("Lst", Arc::new(vec![nil, cons]));
+        let dts: Datatypes = Arc::new(vec![lst_dt]);
+        assert_eq!(
+            decl_to_lukb(&DeclX::Datatypes(dts)),
+            "data Lst = nil | cons(head: Int, tail: Lst)\n"
+        );
+    }
+
+    #[test]
+    fn datatype_group_falls_back_only_the_tier2_member() {
+        // A two-datatype group: a clean `Ok` one + one with a BitVec field.
+        // The clean member must still render; only the Tier-2 one comments out.
+        let ok: Datatype = mk("Ok", Arc::new(vec![mk("k", Arc::new(vec![] as Vec<Field>))]));
+        let bad: Datatype = mk(
+            "Bad",
+            Arc::new(vec![mk("b", Arc::new(vec![mk("w", Arc::new(TypX::BitVec(8)))]))]),
+        );
+        let dts: Datatypes = Arc::new(vec![ok, bad]);
+        let out = decl_to_lukb(&DeclX::Datatypes(dts));
+        assert!(out.contains("data Ok = k\n"), "clean member renders: {out}");
+        assert!(out.contains("# fallback (datatypes):"), "tier-2 member comments: {out}");
     }
 }
