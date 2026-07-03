@@ -924,5 +924,54 @@ pub fn parse_args_with_imports(
         }
     }
 
+    // verus.toml -> adsmt CAS manifest bridge (the Astro-style "one project
+    // config" ergonomic: define `[adsmt.cas]` inline in verus.toml instead of
+    // hand-placing an `adsmt.toml` in CWD).  When `-V adsmt` is selected and the
+    // user has NOT set ADSMT_CAS_MANIFEST explicitly, point the adsmt sub-process
+    // at the nearest project config: a hand-authored `adsmt.toml` anywhere in the
+    // CWD ancestry always wins (adsmt's own CWD walk-up finds it, so we stay out
+    // of the way); otherwise forward the nearest `verus.toml` so adsmt can read
+    // its inline `[adsmt.cas]`/`[cas]` table.  verus stays schema-agnostic — it
+    // forwards a PATH and NEVER parses or synthesizes the CAS attestation keys
+    // (e.g. `arith_builtins_reserved`), which stay user-authored by construction.
+    // Bridged through the env to keep air::smt_process::solver_argv the single
+    // source of truth.  Safe here: single-threaded, before any worker/sub-process.
+    if extended.contains_key(EXTENDED_ADSMT) && std::env::var_os("ADSMT_CAS_MANIFEST").is_none() {
+        if let Some(manifest) = find_adsmt_cas_manifest() {
+            unsafe { std::env::set_var("ADSMT_CAS_MANIFEST", manifest) };
+        }
+    }
+
     (Arc::new(args), unmatched)
+}
+
+/// Locate the project config file to forward to `-V adsmt` as its CAS manifest.
+///
+/// Walks up from the current working directory (mirroring adsmt's own
+/// `CasManifest::discover` walk-up, which starts from the inherited CWD).  If a
+/// hand-authored `adsmt.toml` is found in ANY ancestor, returns `None` — the
+/// native manifest always wins, and adsmt's discovery will pick it up on its own.
+/// Otherwise returns the path to the NEAREST `verus.toml`, if any.
+///
+/// This never opens or parses either file — it only resolves a path.  Keeping
+/// verus parse-free here is deliberate: it avoids a `toml` dependency and makes
+/// it structurally impossible for verus to fabricate the CAS attestation.
+fn find_adsmt_cas_manifest() -> Option<std::path::PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    let mut nearest_verus_toml: Option<std::path::PathBuf> = None;
+    loop {
+        if dir.join("adsmt.toml").is_file() {
+            return None; // native adsmt.toml wins; defer to adsmt's own walk-up
+        }
+        if nearest_verus_toml.is_none() {
+            let candidate = dir.join("verus.toml");
+            if candidate.is_file() {
+                nearest_verus_toml = Some(candidate);
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    nearest_verus_toml
 }
