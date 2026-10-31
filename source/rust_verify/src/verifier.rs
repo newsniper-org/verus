@@ -11,7 +11,7 @@ use crate::util::{HashMapAbsorbWith, error};
 use crate::verus_items::{VerusItem, VerusItems};
 use air::ast::AssertId;
 use air::ast::{Command, CommandX, Commands};
-use air::context::{QueryContext, SmtSolver, ValidityResult};
+use air::context::{AbductiveCandidate, QueryContext, SmtSolver, ValidityResult};
 use air::messages::{ArcDynMessage, Diagnostics as _};
 use air::profiler::Profiler;
 use rustc_errors::Diag;
@@ -367,11 +367,23 @@ pub struct Verifier {
 pub struct FuncDetails {
     pub obligation_proof_notes: HashSet<String>,
     pub failed_proof_notes: HashSet<String>,
+    /// Populated only when the adsmt backend returns the 4th
+    /// verdict (`abductive`) AND the user passed
+    /// `-V report-abductive-on-unknown`.  Each entry is one
+    /// ranked candidate (Y4 `smt-cross-validation-tracker.md`
+    /// §9 schema); `serde` emits the field as
+    /// `abductive_candidates` in the jsonl output.
+    #[serde(rename = "abductive_candidates", skip_serializing_if = "Vec::is_empty")]
+    pub abductive_candidates: Vec<AbductiveCandidate>,
 }
 
 impl Default for FuncDetails {
     fn default() -> Self {
-        Self { obligation_proof_notes: Default::default(), failed_proof_notes: Default::default() }
+        Self {
+            obligation_proof_notes: Default::default(),
+            failed_proof_notes: Default::default(),
+            abductive_candidates: Default::default(),
+        }
     }
 }
 
@@ -379,6 +391,7 @@ impl FuncDetails {
     fn absorb(&mut self, other: Self) {
         self.obligation_proof_notes.extend(other.obligation_proof_notes);
         self.failed_proof_notes.extend(other.failed_proof_notes);
+        self.abductive_candidates.extend(other.abductive_candidates);
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -1004,6 +1017,52 @@ impl Verifier {
                     util::PANIC_ON_DROP_VEC.store(false, std::sync::atomic::Ordering::SeqCst);
                     panic!("unexpected output from solver: {} {}", context.span.as_string, err);
                 }
+                ValidityResult::Abductive { candidates } => {
+                    // adsmt's 4th verdict.  The query is treated as
+                    // a verification failure (mirrors the Canceled
+                    // path: counts the function as failed, reports
+                    // an error) and, when the user passed
+                    // `-V report-abductive-on-unknown`, the ranked
+                    // candidates are routed into the jsonl reporter
+                    // through `FuncDetails.abductive_candidates`
+                    // so downstream tooling (Y4 cross-validation
+                    // sweeps) can pick them up structurally.  The
+                    // stderr render stays unconditional — even
+                    // without `--output-json`, the user still sees
+                    // every candidate inline with the failure.
+                    if is_first_check && level == Some(MessageLevel::Error) {
+                        self.count_errors += 1;
+                        self.func_fails.insert(context.fun.clone());
+                        invalidity = true;
+                    }
+                    if self.expand_flag {
+                        invalidity = true;
+                    }
+                    let mut msg = format!(
+                        "{}: adsmt returned an abductive verdict ({} ranked candidate{})",
+                        context.desc,
+                        candidates.len(),
+                        if candidates.len() == 1 { "" } else { "s" },
+                    );
+                    for c in &candidates {
+                        msg.push_str(&format!(
+                            "\n  rank {} (score {:.4}): {}",
+                            c.rank,
+                            c.score,
+                            c.hypotheses.join(" ∧ "),
+                        ));
+                    }
+                    if let Some(level) = level {
+                        reporter.report(&message(level, msg, &context.span).to_any());
+                    }
+                    if self.args.report_abductive_on_unknown {
+                        self.record_func_abductive_candidates(
+                            context.fun.clone(),
+                            candidates,
+                        );
+                    }
+                    break;
+                }
             }
         }
 
@@ -1143,7 +1202,10 @@ impl Verifier {
 
     fn set_rlimit(air_context: &mut air::context::Context, rlimit: f32) {
         let per_second = match air_context.get_solver() {
-            air::context::SmtSolver::Z3 => RLIMIT_PER_SECOND_Z3,
+            // OxiZ and adsmt (`lu-smt`) both take z3's resource unit.
+            air::context::SmtSolver::Z3
+            | air::context::SmtSolver::OxiZ
+            | air::context::SmtSolver::Adsmt => RLIMIT_PER_SECOND_Z3,
             air::context::SmtSolver::Cvc5 => RLIMIT_PER_SECOND_CVC5,
         };
         air_context.set_rlimit(if rlimit == f32::INFINITY {
@@ -1175,6 +1237,7 @@ impl Verifier {
             self.args.smt_encoding,
         );
         air_context.set_ignore_unexpected_smt(self.args.ignore_unexpected_smt);
+        air_context.set_request_abductive_on_unknown(self.args.request_abductive_on_unknown);
         if let Some(profile_file_name) = profile_file_name {
             air_context.set_profile_with_logfile_name(
                 profile_file_name.to_str().expect("invalid prover log path").to_owned(),
@@ -1222,6 +1285,21 @@ impl Verifier {
                 .as_str(),
             )?;
             air_context.set_smt_log(Box::new(file));
+        }
+        // Phase 1c: dual-emit the lu-kb-successor surface alongside the `.smt2`.
+        if self.args.emit_lukb {
+            let file = self.create_log_file(
+                Some(bucket_id),
+                Self::log_file_name_suffix(
+                    ctx,
+                    is_rerun,
+                    query_function_path_counter,
+                    self.expand_flag,
+                    crate::config::LUKB_FILE_SUFFIX,
+                )
+                .as_str(),
+            )?;
+            air_context.set_lukb_log(Box::new(file));
         }
         if self.args.log_all || self.args.log_args.log_smt_transcript {
             let file = self.create_log_file(
@@ -1274,17 +1352,29 @@ impl Verifier {
     ) {
         match prover_choice {
             vir::def::ProverChoice::BitVector => {
-                // A prelude-free by(bit_vector) query carries no per-query
-                // options: solver defaults work well.
+                // (upstream) A prelude-free by(bit_vector) query carries no
+                // per-query options: solver defaults work well.  This replaced
+                // the previous per-solver z3 tuning; OxiZ (z3 protocol) follows
+                // the same default, and adsmt already bit-blasts BV to its SAT
+                // backend with no `sat.*`/`tactic.*` keys to set — so nothing
+                // adsmt/oxiz-specific is lost by dropping the per-query options.
                 //
                 // TODO: tune Z3/CVC5 options for bit-vector queries
             }
             vir::def::ProverChoice::Nonlinear => match self.args.solver {
-                air::context::SmtSolver::Z3 => {
+                air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
                     air_context.set_solver_option("smt.arith.solver", "6")
                 }
                 // TODO: What cvc5 settings would help here?
                 air::context::SmtSolver::Cvc5 => {}
+                // No adsmt analog to z3's nlsat (`smt.arith.solver=6`):
+                // adsmt's arithmetic theory is linear, so a nonlinear
+                // (var×var) goal is native-`unknown`/`(incomplete …)` and is
+                // discharged via OxiZ delegation, not a per-query option. Its
+                // `:finite-field-*` keys are a GF(2) Gröbner-basis *boolean
+                // SAT* sibling — a different domain, not nonlinear int/real —
+                // so they don't apply here. Nothing to set.
+                air::context::SmtSolver::Adsmt => {}
             },
             vir::def::ProverChoice::DefaultProver | vir::def::ProverChoice::Singular => {}
         }
@@ -1395,14 +1485,19 @@ impl Verifier {
                 air::context::SmtSolver::Cvc5 => {
                     cargo_verus_toolchains::external_deps::CVC5_VERSION.to_string()
                 }
+                air::context::SmtSolver::OxiZ => crate::consts::EXPECTED_OXIZ_VERSION.to_string(),
+                air::context::SmtSolver::Adsmt => {
+                    crate::consts::EXPECTED_ADSMT_VERSION.to_string()
+                }
             });
         }
 
         let mut spunoff_time_smt_init = Duration::ZERO;
         let mut spunoff_time_smt_run = Duration::ZERO;
         let mut spunoff_rlimit_count: Option<(u64, u64)> = match self.args.solver {
-            SmtSolver::Z3 => Some((0, 0)),
+            SmtSolver::Z3 | SmtSolver::OxiZ => Some((0, 0)),
             SmtSolver::Cvc5 => None,
+            SmtSolver::Adsmt => None,
         };
 
         let module = &ctx.module_path();
@@ -1473,6 +1568,15 @@ impl Verifier {
         let bucket = self.get_bucket(bucket_id);
         let mut opgen = OpGenerator::new(ctx, krate, bucket.clone());
         while let Some(mut function_opgen) = opgen.next()? {
+            // A2b stage 2 (heavy cut): supply the in-scope proof-lemma `ens%…`
+            // abducibles for the function about to be checked, so a not-verified
+            // `(abduce …)` can suggest "call lemma L". Adsmt-only; gated on the
+            // flag, no-op for other backends.
+            if self.args.request_abductive_on_unknown {
+                air_context.set_extra_abducibles(
+                    vir::sst_to_air_func::lemma_ens_abducibles(function_opgen.ctx()),
+                );
+            }
             let diagnostics_to_report: std::cell::RefCell<
                 Option<PanicOnDropVec<(Message, MessageLevel)>>,
             > = std::cell::RefCell::new(Some(PanicOnDropVec::new(Vec::new())));
@@ -1546,8 +1650,11 @@ impl Verifier {
                         let mut func_curr_smt_time = Duration::ZERO;
 
                         let mut func_curr_smt_rlimit_count = match self.args.solver {
-                            air::context::SmtSolver::Z3 => Some(0),
+                            air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
+                                Some(0)
+                            }
                             air::context::SmtSolver::Cvc5 => None,
+                            air::context::SmtSolver::Adsmt => None,
                         };
                         for cmds in commands_with_context_list.iter() {
                             if is_recommend && cmds.skip_recommends {
@@ -1799,8 +1906,7 @@ impl Verifier {
                             let func_stats = func_time.entry(function.x.name.clone()).or_insert(
                                 FunctionSmtStats {
                                     smt_time: Duration::ZERO,
-                                    rlimit_count: matches!(self.args.solver, SmtSolver::Z3)
-                                        .then(|| 0),
+                                    rlimit_count: self.args.solver.is_z3_compatible().then(|| 0),
                                 },
                             );
                             func_stats.smt_time += func_curr_smt_time;
@@ -2935,6 +3041,33 @@ impl Verifier {
         }
         Ok(())
     }
+
+    /// Stores the ranked abductive candidates returned by the adsmt
+    /// backend's 4th verdict under the function that triggered the
+    /// query.  The verifier consults this map at jsonl-emit time
+    /// (`output_json`), so an entry only matters when the user also
+    /// passed `--output-json` — but the flag-gating is the caller's
+    /// responsibility (`run_command_queries` checks
+    /// `args.report_abductive_on_unknown` before invoking this).
+    fn record_func_abductive_candidates(
+        &mut self,
+        func: Fun,
+        candidates: Vec<AbductiveCandidate>,
+    ) {
+        use std::collections::hash_map::Entry;
+        let mut func_details = self.func_details.lock().unwrap();
+        match func_details.entry(func) {
+            Entry::Occupied(mut occupied_entry) => {
+                occupied_entry.get_mut().abductive_candidates.extend(candidates);
+            }
+            Entry::Vacant(vacant_entry) => {
+                let _ = vacant_entry.insert(FuncDetails {
+                    abductive_candidates: candidates,
+                    ..Default::default()
+                });
+            }
+        }
+    }
 }
 
 fn delete_dir_if_exists_and_is_dir(dir: &std::path::PathBuf) -> Result<(), VirErr> {
@@ -3399,6 +3532,19 @@ impl VerifierCallbacksEraseMacro {
                     ""
                 }
             );
+        }
+
+        // Y4 R7.11 cert-emit bridge: on a clean (-V adsmt, 0-error) run, turn
+        // the emitted certs into Isabelle/Rocq source.  Self-gates on the
+        // solver + `-V emit-*`; runs here, well after the per-bucket verify
+        // loop (and its `PanicOnDropVec` teardown), so it never interacts with
+        // that path.
+        if !self.verifier.args.no_verify
+            && !self.verifier.encountered_error
+            && !self.verifier.encountered_vir_error
+            && self.verifier.count_errors == 0
+        {
+            crate::adsmt_emit::run_cert_emit(&self.verifier.args);
         }
     }
 }
