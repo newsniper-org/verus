@@ -13,6 +13,29 @@ pub fn str_to_node(s: &str) -> Node {
     Node::Atom(s.to_string())
 }
 
+/// Arity cutoff above which a `(distinct …)` over an uninterpreted sort
+/// is rewritten for the Adsmt backend — the temporary guard for
+/// lu-smt's native finite-domain soundness bug (see `air/Cargo.toml`
+/// `[package.metadata.adsmt]`).  The rewrite itself lives in
+/// `vir::context::Ctx::fuel` (it must add a declaration + per-constant
+/// assertions, which the single-expression printer can't), so this is
+/// `pub` for vir to read.  The value is baked in from `Cargo.toml` by
+/// `build.rs`; the literal fallback matches `build.rs`'s
+/// `DEFAULT_DISTINCT_MAX_ARITY` for the (unreachable in a normal build)
+/// case where the env var is absent.
+///
+/// Note: a `(distinct …)`→pairwise `(and (not (= a b)) …)` rewrite does
+/// NOT help — pairwise is semantically identical, so lu-smt's wrong
+/// finite-sort cardinality makes it spuriously UNSAT just the same.
+/// The working escape is to carry distinctness through the *infinite*
+/// Int sort (an injection `ord : Sort → Int` with `ord(c_i) = i`),
+/// which is what `fuel` emits.
+pub fn adsmt_distinct_max_arity() -> usize {
+    option_env!("VERUS_ADSMT_DISTINCT_MAX_ARITY")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(48)
+}
+
 pub fn macro_push_node(nodes: &mut Vec<Node>, node: Node) {
     // turn a - b into a-b
     let len = nodes.len();
