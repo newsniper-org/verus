@@ -252,6 +252,27 @@ pub fn main() {
                 ValidityResult::UnexpectedOutput(err) => {
                     panic!("Unexpected output from solver: {}", err);
                 }
+                ValidityResult::Abductive { candidates } => {
+                    if is_first_check {
+                        count_errors += 1;
+                    }
+                    if json_status == "valid" {
+                        json_status = "abductive";
+                    }
+                    println!(
+                        "Abductive verdict from solver ({} ranked candidate{})",
+                        candidates.len(),
+                        if candidates.len() == 1 { "" } else { "s" },
+                    );
+                    for c in &candidates {
+                        println!(
+                            "  rank {} (score {:.4}): {}",
+                            c.rank,
+                            c.score,
+                            c.hypotheses.join(" ∧ "),
+                        );
+                    }
+                }
             }
             break;
         }
