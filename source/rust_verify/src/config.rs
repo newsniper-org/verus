@@ -31,6 +31,7 @@ pub const INTERPRETER_FILE_SUFFIX: &str = ".interp";
 pub const AIR_INITIAL_FILE_SUFFIX: &str = ".air";
 pub const AIR_FINAL_FILE_SUFFIX: &str = "-final.air";
 pub const SMT_FILE_SUFFIX: &str = ".smt2";
+pub const LUKB_FILE_SUFFIX: &str = ".lukb";
 pub const SMT_TRANSCRIPT_FILE_SUFFIX: &str = ".smt_transcript";
 pub const PROFILE_FILE_SUFFIX: &str = ".profile";
 pub const SINGULAR_FILE_SUFFIX: &str = ".singular";
@@ -117,6 +118,21 @@ pub struct ArgsX {
     pub use_crate_name: bool,
     pub solver: SmtSolver,
     pub smt_encoding: SmtEncoding,
+    pub report_abductive_on_unknown: bool,
+    // A2a (-V adsmt only).  When a query is NOT verified, actively emit an
+    // `(abduce <goal>)` follow-up (with `:abduct-theory true` + a focused
+    // `(declare-abducible …)` vocabulary over the goal's integer variables)
+    // and surface the ranked abducts as the `Abductive` verdict — the
+    // "verify-or-explain" path.  Distinct from `report-abductive-on-unknown`,
+    // which only forwards a verdict adsmt volunteers on its own.
+    pub request_abductive_on_unknown: bool,
+    // Y4 R7.11 cert-emit bridge (-V adsmt only).  `None` = not requested;
+    // `Some(None)` = requested, default out dir; `Some(Some(path))` = out dir
+    // override.  After a 0-error `-V adsmt` run, each `<seq>.cert.<ext>` in
+    // `$ADSMT_CERT_DIR` is fed to `adsmt-emit run <target>` to produce ITP
+    // source.  See `crate::adsmt_emit`.
+    pub emit_isabelle: Option<Option<String>>,
+    pub emit_rocq: Option<Option<String>>,
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
     pub alloc_check: bool,
@@ -125,6 +141,11 @@ pub struct ArgsX {
     pub fip_lint_fix: bool,
     pub no_bv_simplify: bool,
     pub observer: Option<String>,
+    // Phase 1c (any solver).  `-V emit-lukb` dual-emits each AIR obligation to a
+    // `.lukb` log in the standard log dir, alongside the canonical `.smt2`.  An
+    // inert structural log of the lu-kb-successor surface (`adsmt-ir-lukb`); the
+    // SMT-LIB path stays the verdict oracle.  See `air::lukb`.
+    pub emit_lukb: bool,
 }
 
 impl ArgsX {
@@ -171,6 +192,10 @@ impl ArgsX {
             use_crate_name: Default::default(),
             solver: Default::default(),
             smt_encoding: Default::default(),
+            report_abductive_on_unknown: Default::default(),
+            request_abductive_on_unknown: Default::default(),
+            emit_isabelle: Default::default(),
+            emit_rocq: Default::default(),
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
             alloc_check: Default::default(),
@@ -179,6 +204,7 @@ impl ArgsX {
             fip_lint_fix: Default::default(),
             no_bv_simplify: Default::default(),
             observer: None,
+            emit_lukb: Default::default(),
         }
     }
 }
@@ -420,6 +446,10 @@ pub fn parse_args_with_imports(
     const EXTENDED_CAPTURE_PROFILES: &str = "capture-profiles";
     const EXTENDED_CVC5: &str = "cvc5";
     const EXTENDED_CVC5_SMTLIB: &str = "cvc5-smtlib";
+    const EXTENDED_OXIZ: &str = "oxiz";
+    const EXTENDED_ADSMT: &str = "adsmt";
+    const EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN: &str = "report-abductive-on-unknown";
+    const EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN: &str = "request-abductive-on-unknown";
     const EXTENDED_ALLOW_INLINE_AIR: &str = "allow-inline-air";
     const EXTENDED_USE_CRATE_NAME: &str = "use-crate-name";
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
@@ -429,6 +459,10 @@ pub fn parse_args_with_imports(
     const EXTENDED_FIP_LINT: &str = "fip-lint";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
     const EXTENDED_OBSERVER: &str = "observer";
+    const EXTENDED_EMIT_ISABELLE: &str = "emit-isabelle";
+    const EXTENDED_EMIT_ROCQ: &str = "emit-rocq";
+    const EXTENDED_JIT_TRACE_LOAD: &str = "jit-trace-load";
+    const EXTENDED_EMIT_LUKB: &str = "emit-lukb";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
         (EXTENDED_IGNORE_UNEXPECTED_SMT, "Ignore unexpected SMT output"),
         (
@@ -442,6 +476,19 @@ pub fn parse_args_with_imports(
         ),
         (EXTENDED_CVC5, "Use the cvc5 SMT solver, rather than the default (Z3)"),
         (EXTENDED_CVC5_SMTLIB, "Use cvc5-compatible SMT-LIB with the default Z3 solver"),
+        (EXTENDED_OXIZ, "Use the OxiZ SMT solver (pure-Rust Z3 reimplementation, Z3 protocol parity)"),
+        (
+            EXTENDED_ADSMT,
+            "Use the adsmt abductive-deductive HOL+HKT solver (4th verdict 'Abductive' available)",
+        ),
+        (
+            EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN,
+            "When -V adsmt returns Unknown, emit ranked abductive candidate JSON to the jsonl reporter (no-op for z3/cvc5/oxiz)",
+        ),
+        (
+            EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN,
+            "When -V adsmt does NOT verify a query, actively abduce a missing hypothesis (verify-or-explain) and report it as the Abductive verdict (no-op for z3/cvc5/oxiz)",
+        ),
         (EXTENDED_ALLOW_INLINE_AIR, "Allow the POTENTIALLY UNSOUND use of inline_air_stmt"),
         (
             EXTENDED_USE_CRATE_NAME,
@@ -469,6 +516,22 @@ pub fn parse_args_with_imports(
             "internal option to disable simplification of bit-vector assertions before sending to the SMT solver",
         ),
         (EXTENDED_OBSERVER, "Observer to run during verification (e.g., test)"),
+        (
+            EXTENDED_EMIT_ISABELLE,
+            "After a 0-error -V adsmt run, emit Isabelle/HOL from each adsmt cert in $ADSMT_CERT_DIR via `adsmt-emit run isabelle`. Optional out dir: -V emit-isabelle=<dir> (default $ADSMT_CERT_DIR/emit-isabelle). Requires $ADSMT_CERT_DIR + an installed adsmt-emit toolchain.",
+        ),
+        (
+            EXTENDED_EMIT_ROCQ,
+            "After a 0-error -V adsmt run, emit Rocq (Coq) from each adsmt cert in $ADSMT_CERT_DIR via `adsmt-emit run rocq`. Optional out dir: -V emit-rocq=<dir> (default $ADSMT_CERT_DIR/emit-rocq).",
+        ),
+        (
+            EXTENDED_JIT_TRACE_LOAD,
+            "Forward --jit-trace-load=<path> to the -V adsmt sub-process (alias for the VERUS_ADSMT_JIT_TRACE env var). Replay-evaluation gate for a lu-smt --jit-trace-emit trace; no functional effect until adsmt §3.5.F lands.",
+        ),
+        (
+            EXTENDED_EMIT_LUKB,
+            "Dual-emit each AIR obligation to a `.lukb` log (the lu-kb-successor surface) ALONGSIDE the `.smt2`. Maps AIR axiom→`axiom`, Assume→`assume`, Assert→`goal` (un-negated); Tier-2+ constructs fall back to `#` comments (never silently dropped). Inert structural log for the parse/elaborate differential (the SMT-LIB path stays the verdict oracle).",
+        ),
     ];
 
     let default_num_threads: usize = std::thread::available_parallelism()
@@ -691,7 +754,16 @@ pub fn parse_args_with_imports(
     if extended.contains_key(EXTENDED_CVC5) && extended.contains_key(EXTENDED_CVC5_SMTLIB) {
         error("`-V cvc5` and `-V cvc5-smtlib` are mutually exclusive".to_string());
     }
-    let solver = if extended.contains_key(EXTENDED_CVC5) { SmtSolver::Cvc5 } else { SmtSolver::Z3 };
+    // Same precedence the branch always had when several are given: adsmt > oxiz > cvc5 > z3.
+    let solver = if extended.contains_key(EXTENDED_ADSMT) {
+        SmtSolver::Adsmt
+    } else if extended.contains_key(EXTENDED_OXIZ) {
+        SmtSolver::OxiZ
+    } else if extended.contains_key(EXTENDED_CVC5) {
+        SmtSolver::Cvc5
+    } else {
+        SmtSolver::Z3
+    };
     let smt_encoding = if extended.contains_key(EXTENDED_CVC5_SMTLIB) {
         SmtEncoding::Cvc5
     } else {
@@ -874,6 +946,11 @@ pub fn parse_args_with_imports(
         use_crate_name: extended.contains_key(EXTENDED_USE_CRATE_NAME),
         solver,
         smt_encoding,
+        report_abductive_on_unknown: extended.contains_key(EXTENDED_REPORT_ABDUCTIVE_ON_UNKNOWN),
+        request_abductive_on_unknown: extended.contains_key(EXTENDED_REQUEST_ABDUCTIVE_ON_UNKNOWN),
+        // `-V emit-isabelle` -> Some(None); `-V emit-isabelle=<dir>` -> Some(Some(dir)); absent -> None.
+        emit_isabelle: extended.get(EXTENDED_EMIT_ISABELLE).cloned(),
+        emit_rocq: extended.get(EXTENDED_EMIT_ROCQ).cloned(),
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
         alloc_check: extended.contains_key(EXTENDED_ALLOC_CHECK)
@@ -897,6 +974,7 @@ pub fn parse_args_with_imports(
                 EXTENDED_OBSERVER, EXTENDED_OBSERVER
             )),
         },
+        emit_lukb: extended.contains_key(EXTENDED_EMIT_LUKB),
     };
 
     if args.no_cheating {
@@ -961,5 +1039,66 @@ pub fn parse_args_with_imports(
         error("`--compile` and `--no-erasure-check` are mutually exclusive".to_string())
     }
 
+    // `-V jit-trace-load=<path>` is a config-flag alias for the
+    // VERUS_ADSMT_JIT_TRACE env var that `air::smt_process::solver_argv`
+    // threads into the `-V adsmt` sub-process as `--jit-trace-load`.  Bridging
+    // through the env keeps the §3.5.I argv plumbing as the single source of
+    // truth.  Safe here: arg parsing is single-threaded and runs before any
+    // verification worker (or solver sub-process) is spawned.
+    if let Some(Some(path)) = extended.get(EXTENDED_JIT_TRACE_LOAD) {
+        if !path.is_empty() {
+            unsafe { std::env::set_var("VERUS_ADSMT_JIT_TRACE", path) };
+        }
+    }
+
+    // verus.toml -> adsmt CAS manifest bridge (the Astro-style "one project
+    // config" ergonomic: define `[adsmt.cas]` inline in verus.toml instead of
+    // hand-placing an `adsmt.toml` in CWD).  When `-V adsmt` is selected and the
+    // user has NOT set ADSMT_CAS_MANIFEST explicitly, point the adsmt sub-process
+    // at the nearest project config: a hand-authored `adsmt.toml` anywhere in the
+    // CWD ancestry always wins (adsmt's own CWD walk-up finds it, so we stay out
+    // of the way); otherwise forward the nearest `verus.toml` so adsmt can read
+    // its inline `[adsmt.cas]`/`[cas]` table.  verus stays schema-agnostic — it
+    // forwards a PATH and NEVER parses or synthesizes the CAS attestation keys
+    // (e.g. `arith_builtins_reserved`), which stay user-authored by construction.
+    // Bridged through the env to keep air::smt_process::solver_argv the single
+    // source of truth.  Safe here: single-threaded, before any worker/sub-process.
+    if extended.contains_key(EXTENDED_ADSMT) && std::env::var_os("ADSMT_CAS_MANIFEST").is_none() {
+        if let Some(manifest) = find_adsmt_cas_manifest() {
+            unsafe { std::env::set_var("ADSMT_CAS_MANIFEST", manifest) };
+        }
+    }
+
     (Arc::new(args), unmatched)
+}
+
+/// Locate the project config file to forward to `-V adsmt` as its CAS manifest.
+///
+/// Walks up from the current working directory (mirroring adsmt's own
+/// `CasManifest::discover` walk-up, which starts from the inherited CWD).  If a
+/// hand-authored `adsmt.toml` is found in ANY ancestor, returns `None` — the
+/// native manifest always wins, and adsmt's discovery will pick it up on its own.
+/// Otherwise returns the path to the NEAREST `verus.toml`, if any.
+///
+/// This never opens or parses either file — it only resolves a path.  Keeping
+/// verus parse-free here is deliberate: it avoids a `toml` dependency and makes
+/// it structurally impossible for verus to fabricate the CAS attestation.
+fn find_adsmt_cas_manifest() -> Option<std::path::PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    let mut nearest_verus_toml: Option<std::path::PathBuf> = None;
+    loop {
+        if dir.join("adsmt.toml").is_file() {
+            return None; // native adsmt.toml wins; defer to adsmt's own walk-up
+        }
+        if nearest_verus_toml.is_none() {
+            let candidate = dir.join("verus.toml");
+            if candidate.is_file() {
+                nearest_verus_toml = Some(candidate);
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    nearest_verus_toml
 }
