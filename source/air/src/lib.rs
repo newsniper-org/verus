@@ -20,6 +20,7 @@ mod block_to_assert;
 pub use block_to_assert::lower_query;
 mod closure;
 mod def;
+mod lukb;
 mod smt_verify;
 mod tests;
 mod typecheck;
