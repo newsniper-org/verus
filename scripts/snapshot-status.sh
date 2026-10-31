@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+#
+# Emit a snapshot of verus-fork main-project live progress to a shared
+# read-only directory other Claude Code agents (and humans) can pull
+# from. Designed to run in two ways:
+#
+#   * `just status` — manual refresh from the current working tree.
+#   * git post-commit hook (opt-in) — install with
+#     `just install-status-hook`; refreshes automatically after each
+#     commit. Off by default because session-installed hooks survive
+#     beyond the session; the user opts in explicitly.
+#
+# The snapshot lives outside the project tree on purpose: other
+# agents may be operating in unrelated working directories and will
+# not have permission to read paths under `~/verus-fork`. Default location
+# is `~/verus-fork-status/`, overridable via `$VERUS_FORK_STATUS_DIR`.
+#
+# Files written:
+#   README.md       — protocol description (only on first run)
+#   snapshot.md     — human-readable status digest (always rewritten)
+#   head.txt        — current HEAD SHA + branch
+#   last-commit.txt — most recent commit subject + body
+#   tests.txt       — last known workspace test count (cached)
+#   task-list.txt   — current in-progress / pending task names
+#   updated-at.txt  — UTC timestamp of this snapshot
+#
+# The script is idempotent and safe to run concurrently — writes go
+# through temp files + atomic rename so partial reads from other
+# agents see either old or new content, never a mix.
+set -uo pipefail
+
+project_dir="${VERUS_FORK_PROJECT_DIR:-$HOME/verus-fork}"
+status_dir="${VERUS_FORK_STATUS_DIR:-$HOME/verus-fork-status}"
+
+mkdir -p "$status_dir" || exit 0
+
+# Resolve git context.
+branch="$(git -C "$project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+head_sha="$(git -C "$project_dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+head_short="$(git -C "$project_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+ahead_behind="$(git -C "$project_dir" rev-list --left-right --count "@{u}...HEAD" 2>/dev/null || echo "?  ?")"
+last_subject="$(git -C "$project_dir" log -1 --format=%s 2>/dev/null || echo unknown)"
+last_body="$(git -C "$project_dir" log -1 --format=%b 2>/dev/null || echo "")"
+last_commit_at="$(git -C "$project_dir" log -1 --format=%cI 2>/dev/null || echo unknown)"
+log_oneline="$(git -C "$project_dir" log --oneline -5 main 2>/dev/null || git -C "$project_dir" log --oneline -5 2>/dev/null || echo "")"
+
+dirty="$(git -C "$project_dir" status --porcelain 2>/dev/null | head -10)"
+dirty_count="$(git -C "$project_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+
+now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+atom_write() {
+    local target="$1"
+    local content="$2"
+    local tmp
+    tmp="$(mktemp "${target}.XXXXXX")" || return 1
+    printf '%s' "$content" > "$tmp"
+    mv -f "$tmp" "$target"
+}
+
+# README only on first run (other agents see the protocol).
+if [ ! -f "$status_dir/README.md" ]; then
+    atom_write "$status_dir/README.md" "$(cat <<EOF
+# verus-fork main-project live status
+
+This directory is a read-only window into the verus-fork main project at
+\`$project_dir\`. It is regenerated automatically on every commit
+(via a git post-commit hook) and can also be refreshed on demand
+with \`just status\` from the project root.
+
+## Files
+
+| File | Content |
+|---|---|
+| \`snapshot.md\` | Human-readable digest. Read this first. |
+| \`head.txt\` | One line: \`<branch> <full-SHA>\`. |
+| \`last-commit.txt\` | Most recent commit subject + body. |
+| \`tests.txt\` | Cached workspace test count (\`cargo test --workspace --all-features\`). |
+| \`task-list.txt\` | Active task names (best-effort, may lag in-conversation state). |
+| \`updated-at.txt\` | UTC timestamp of this snapshot generation. |
+
+## Protocol for other Claude Code agents
+
+- This directory is read-only from your perspective. Never write
+  to it; the verus-fork session manages it.
+- Snapshots are *eventually* consistent. After a commit it can
+  take up to a few seconds for the snapshot to refresh.
+- The HEAD SHA in \`head.txt\` is authoritative for "what state
+  of verus-fork is currently published". If you need newer state,
+  the snapshot has not landed yet; check again later.
+- If you need a deeper view than what's exposed here, ask the
+  user — do not attempt to read files under \`$project_dir\`
+  unless they have granted explicit access.
+EOF
+)"
+fi
+
+# snapshot.md — the human digest.
+snapshot_md="$(cat <<EOF
+# verus-fork status snapshot
+
+- **Branch**: \`$branch\`
+- **HEAD**: \`$head_short\` (\`$head_sha\`)
+- **Ahead/behind upstream**: $ahead_behind
+- **Last commit**: $last_commit_at
+- **Updated at**: $now (UTC)
+- **Working-tree changes**: $dirty_count file(s) modified or untracked
+
+## Last commit
+
+> $last_subject
+
+EOF
+)"
+
+if [ -n "$last_body" ]; then
+    snapshot_md="${snapshot_md}
+$last_body
+"
+fi
+
+snapshot_md="${snapshot_md}
+## Recent commits (oneline)
+
+\`\`\`
+$log_oneline
+\`\`\`
+"
+
+if [ "$dirty_count" -gt 0 ]; then
+    snapshot_md="${snapshot_md}
+## Working tree (top 10)
+
+\`\`\`
+$dirty
+\`\`\`
+"
+fi
+
+atom_write "$status_dir/snapshot.md" "$snapshot_md"
+atom_write "$status_dir/head.txt" "$branch $head_sha"$'\n'
+atom_write "$status_dir/last-commit.txt" "${last_subject}
+${last_body}"
+atom_write "$status_dir/updated-at.txt" "$now"$'\n'
+
+# Append a one-line history entry (v0.19 G.3 timeseries).
+# Bounded: keep only the last 200 entries so the file stays
+# small. Each line is `<UTC timestamp>\t<short SHA>\t<branch>\t<subject>`.
+history_path="$status_dir/history.tsv"
+history_line=$(printf '%s\t%s\t%s\t%s\n' "$now" "$head_short" "$branch" "$last_subject")
+{
+    [ -f "$history_path" ] && tail -n 199 "$history_path"
+    printf '%s' "$history_line"
+} > "$history_path.new" 2>/dev/null || true
+[ -s "$history_path.new" ] && mv -f "$history_path.new" "$history_path" || rm -f "$history_path.new"
+
+# tests.txt — best-effort cached test count from the most recent
+# successful build artifact. We do NOT run `cargo test` from this
+# script because it would block commits. The post-commit hook just
+# captures whatever was last written; manual refresh via `just
+# status-tests` runs the suite explicitly.
+if [ ! -f "$status_dir/tests.txt" ]; then
+    atom_write "$status_dir/tests.txt" "unknown — run \`just status-tests\` to populate"$'\n'
+fi
+
+# task-list.txt — git-derived "what's going on right now" view
+# that other Claude Code agents pull on request. v0.18 P:
+# automated from git state instead of the static placeholder.
+#
+# Contents:
+#   * Branch + ahead/behind counter.
+#   * Working-tree modified / new files (capped at 20 lines for
+#     readability).
+#   * Last 8 commit subjects, one per line.
+#   * Total commits ahead of the merge-base with `main` — gives
+#     an at-a-glance "current session scope" indicator.
+#
+# Anything richer (in-conversation TaskCreate state, etc.) is
+# session-local and isn't reachable from a bash script; agents
+# that want that detail should ask via the session interface
+# rather than poll the snapshot.
+recent_log="$(git -C "$project_dir" log --oneline -8 2>/dev/null || echo '')"
+modified_listing="$(git -C "$project_dir" status --porcelain 2>/dev/null | head -20 || echo '')"
+modified_count_total="$(git -C "$project_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+session_scope_count="$(git -C "$project_dir" rev-list --count main..HEAD 2>/dev/null || echo unknown)"
+
+task_list="# verus-fork working state snapshot
+
+## Branch
+$branch (ahead/behind upstream: $ahead_behind)
+session scope (commits ahead of merge-base with main): $session_scope_count
+
+## Working tree ($modified_count_total file(s) total; first 20 shown)
+"
+if [ -n "$modified_listing" ]; then
+    task_list="${task_list}\`\`\`
+$modified_listing
+\`\`\`
+"
+else
+    task_list="${task_list}(clean working tree)
+"
+fi
+task_list="${task_list}
+## Recent commits
+
+\`\`\`
+$recent_log
+\`\`\`
+"
+atom_write "$status_dir/task-list.txt" "$task_list"
+
+exit 0
