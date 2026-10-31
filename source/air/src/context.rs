@@ -49,6 +49,12 @@ pub enum ValidityResult {
     Canceled,
     TypeError(TypeError),
     UnexpectedOutput(String),
+    /// adsmt-only 4th verdict — the engine could not decide the
+    /// query but offers a ranked list of additional hypothesis
+    /// sets that, if accepted, would settle it.  The Verus
+    /// reporter (jsonl emit, P-vb.7) surfaces these to the user
+    /// via `-V report-abductive-on-unknown`.
+    Abductive { candidates: Vec<AbductiveCandidate> },
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +81,8 @@ impl<'a, 'b: 'a> Default for QueryContext<'a, 'b> {
 pub enum SmtSolver {
     Z3,
     Cvc5,
+    OxiZ,
+    Adsmt,
 }
 
 impl Default for SmtSolver {
@@ -89,14 +97,24 @@ impl SmtSolver {
         match self {
             SmtSolver::Z3 => "z3",
             SmtSolver::Cvc5 => "cvc5",
+            SmtSolver::OxiZ => "oxiz",
+            SmtSolver::Adsmt => "adsmt",
         }
     }
 
+    /// OxiZ speaks Z3's SMT-LIB dialect.  adsmt (`lu-smt`) speaks the
+    /// standard one: it does not parse Z3's `(_ partial-order N)` indexed
+    /// identifier or `:skolemid`, which is exactly what `SmtEncoding::Cvc5`
+    /// leaves out.
     pub fn default_encoding(&self) -> SmtEncoding {
         match self {
-            SmtSolver::Z3 => SmtEncoding::Z3,
-            SmtSolver::Cvc5 => SmtEncoding::Cvc5,
+            SmtSolver::Z3 | SmtSolver::OxiZ => SmtEncoding::Z3,
+            SmtSolver::Cvc5 | SmtSolver::Adsmt => SmtEncoding::Cvc5,
         }
+    }
+
+    pub fn is_z3_compatible(&self) -> bool {
+        matches!(self, SmtSolver::Z3 | SmtSolver::OxiZ)
     }
 }
 
@@ -110,6 +128,33 @@ impl Default for SmtEncoding {
     fn default() -> Self {
         SmtEncoding::Z3
     }
+}
+
+/// Mirrors `adsmt-abduce::rank::RankedCandidate` + `Candidate` flattened:
+/// `rank` and `score` come from the engine's ranking layer (the
+/// `score` is `adsmt-abduce/rank.rs`'s native value — smaller =
+/// stronger), and `hypotheses` / `explanations` / `sources` are the
+/// lock-step lists that describe each hypothesis the candidate
+/// proposes (per Y4 `smt-cross-validation-tracker.md` §9 schema).
+///
+/// The `Serialize` impl round-trips the same field shape lu-smt
+/// emits, so the rust_verify reporter can splice these straight
+/// into its jsonl output under `-V report-abductive-on-unknown`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AbductiveCandidate {
+    pub rank: u32,
+    pub score: f64,
+    pub hypotheses: Vec<String>,
+    pub explanations: Vec<Option<String>>,
+    pub sources: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SmtVerdict {
+    Sat,
+    Unsat,
+    Unknown { reason: String },
+    Abductive { candidates: Vec<AbductiveCandidate> },
 }
 
 pub struct Context {
@@ -139,6 +184,10 @@ pub struct Context {
     pub(crate) air_final_log: Emitter,
     pub(crate) smt_log: Emitter,
     pub(crate) smt_transcript_log: Option<Box<dyn std::io::Write>>,
+    /// Phase 1c: the `-V emit-lukb` dual-emit sink for the lu-kb-successor
+    /// surface (rendered by [`crate::lukb`]), written alongside the canonical
+    /// `.smt2`. An inert structural log — never feeds a verdict.
+    pub(crate) lukb_log: Option<Box<dyn std::io::Write>>,
     pub(crate) time_smt_init: Duration,
     pub(crate) time_smt_run: Duration,
     pub(crate) rlimit_count: Option<(u64, u64)>,
@@ -150,6 +199,13 @@ pub struct Context {
     pub(crate) check_valid_used: bool,
     pub(crate) solver: SmtSolver,
     pub(crate) smt_encoding: SmtEncoding,
+    /// A2a: when a `-V adsmt` query is not verified, emit an `(abduce …)`
+    /// follow-up and surface the ranked abducts as the `Abductive` verdict.
+    pub(crate) request_abductive_on_unknown: bool,
+    /// A2b stage 2 (heavy cut): extra `(declare-abducible …)` terms the
+    /// verifier computes from VIR for the current function (in-scope lemma
+    /// `ens%…` applications), declared alongside the goal-mined vocabulary.
+    pub(crate) extra_abducibles: Vec<crate::ast::Expr>,
 }
 
 impl Context {
@@ -214,11 +270,13 @@ impl Context {
             ),
             smt_log: Emitter::new(message_interface.clone(), true, true, None, smt_encoding),
             smt_transcript_log: None,
+            lukb_log: None,
             time_smt_init: Duration::new(0, 0),
             time_smt_run: Duration::new(0, 0),
             rlimit_count: match solver {
-                SmtSolver::Z3 => Some((0, 0)),
+                SmtSolver::Z3 | SmtSolver::OxiZ => Some((0, 0)),
                 SmtSolver::Cvc5 => None,
+                SmtSolver::Adsmt => None,
             },
             state: ContextState::NotStarted,
             expected_solver_version: None,
@@ -228,6 +286,8 @@ impl Context {
             check_valid_used: false,
             solver,
             smt_encoding,
+            request_abductive_on_unknown: false,
+            extra_abducibles: Vec::new(),
         };
         context.axiom_infos.push_scope(false);
         context.array_map.push_scope(false);
@@ -277,6 +337,18 @@ impl Context {
         self.smt_log.set_log(Some(writer));
     }
 
+    pub fn set_lukb_log(&mut self, writer: Box<dyn std::io::Write>) {
+        self.lukb_log = Some(writer);
+    }
+
+    /// Append rendered lu-kb-successor text to the `-V emit-lukb` log, if open.
+    fn write_lukb(&mut self, s: &str) {
+        use std::io::Write;
+        if let Some(w) = &mut self.lukb_log {
+            let _ = w.write_all(s.as_bytes());
+        }
+    }
+
     pub fn set_smt_transcript_log(&mut self, writer: Box<dyn std::io::Write>) {
         if let Some(smt_process) = &mut self.smt_process {
             smt_process.set_transcript_log(writer);
@@ -299,6 +371,16 @@ impl Context {
 
     pub fn set_ignore_unexpected_smt(&mut self, ignore_unexpected_smt: bool) {
         self.ignore_unexpected_smt = ignore_unexpected_smt;
+    }
+
+    pub fn set_request_abductive_on_unknown(&mut self, b: bool) {
+        self.request_abductive_on_unknown = b;
+    }
+
+    /// A2b stage 2: set the in-scope lemma `ens%…` abducibles for the
+    /// function about to be checked (verifier-computed from VIR).
+    pub fn set_extra_abducibles(&mut self, abducibles: Vec<crate::ast::Expr>) {
+        self.extra_abducibles = abducibles;
     }
 
     pub fn get_time(&self) -> (Duration, Duration) {
@@ -336,7 +418,8 @@ impl Context {
     /// Can the rlimit be adjusted for each check-sat query?
     pub fn rlimit_is_mutable(&self) -> bool {
         match self.solver {
-            SmtSolver::Z3 => true,
+            // adsmt takes `(set-option :rlimit N)` before every query, like z3.
+            SmtSolver::Z3 | SmtSolver::OxiZ | SmtSolver::Adsmt => true,
             SmtSolver::Cvc5 => matches!(self.state, ContextState::NotStarted),
         }
     }
@@ -384,11 +467,15 @@ impl Context {
         write_to_logs: bool,
     ) {
         if option == "air_recommended_options" && value {
-            if matches!(self.smt_encoding, SmtEncoding::Cvc5) {
+            // adsmt has never been sent `(set-logic ALL)`; keep it that way
+            // while it shares the cvc5 encoding.
+            if matches!(self.smt_encoding, SmtEncoding::Cvc5)
+                && !matches!(self.solver, SmtSolver::Adsmt)
+            {
                 self.smt_log.log_node(&node!((set-logic {str_to_node("ALL")})));
             }
             match self.solver {
-                SmtSolver::Z3 => {
+                SmtSolver::Z3 | SmtSolver::OxiZ => {
                     self.set_solver_option_bool("auto_config", false, true);
                     self.set_solver_option_bool("smt.mbqi", false, true);
                     self.set_solver_option_u32("smt.case_split", 3, true);
@@ -401,6 +488,9 @@ impl Context {
                 }
                 SmtSolver::Cvc5 => {
                     self.set_solver_option_bool("incremental", true, true);
+                }
+                SmtSolver::Adsmt => {
+                    // adsmt does not accept z3-style parameters; no-op
                 }
             }
         } else if option == "single_check_query" && value {
@@ -416,7 +506,7 @@ impl Context {
     }
 
     pub(crate) fn set_solver_option_u32(&mut self, option: &str, value: u32, write_to_logs: bool) {
-        if option == "rlimit" && write_to_logs && matches!(self.solver, SmtSolver::Z3) {
+        if option == "rlimit" && write_to_logs && self.solver.is_z3_compatible() {
             self.set_rlimit(value);
         } else {
             if write_to_logs {
@@ -526,6 +616,10 @@ impl Context {
         self.air_initial_log.log_decl(decl);
         self.air_middle_log.log_decl(decl);
         self.air_final_log.log_decl(decl);
+        if self.lukb_log.is_some() {
+            let s = crate::lukb::decl_to_lukb(&**decl);
+            self.write_lukb(&s);
+        }
         let (gen_decls, decl) = crate::typecheck::check_decl(self, decl)?;
         for gen_decl in gen_decls.iter() {
             crate::smt_verify::smt_add_decl(self, gen_decl);
@@ -566,6 +660,10 @@ impl Context {
         self.air_middle_log.log_query(&query);
         let query = crate::block_to_assert::lower_query(message_interface, &query);
         self.air_final_log.log_query(&query);
+        if self.lukb_log.is_some() {
+            let s = format!("\n# ── obligation ──\n{}", crate::lukb::query_to_lukb(&*query));
+            self.write_lukb(&s);
+        }
 
         let model = Model::new(snapshots, local_vars);
         let validity = crate::smt_verify::smt_check_query(
