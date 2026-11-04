@@ -130,7 +130,10 @@ fn adjust_version(mut project_path: PathBuf) {
 fn cargo_new_verifies() {
     // Run cargo verus new in temp_dir
     let temp_dir = tempdir().expect("Failed to create temporary directory");
-    let args = vec!["new", "--bin", "test_project"];
+    // The version of an arbitrary commit (a release candidate, a branch under development) is in
+    // no toolchain manifest, so `new` could not pick a `vstd` dependency for it. A `.dirty`
+    // version makes it use the in-tree `vstd`, which is what `adjust_version` points to anyway.
+    let args = vec!["new", "--bin", "test_project", "--override-verus-version", "0.0.0.dirty"];
     let temp_dir_path = temp_dir.path().to_owned();
     // replace above line by this to debug this test:
     // let temp_dir_path = temp_dir.keep();
@@ -148,7 +151,10 @@ fn cargo_new_verifies() {
 fn cargo_new_builds() {
     // Run cargo verus new in temp_dir
     let temp_dir = tempdir().expect("Failed to create temporary directory");
-    let args = vec!["new", "--bin", "test_project"];
+    // The version of an arbitrary commit (a release candidate, a branch under development) is in
+    // no toolchain manifest, so `new` could not pick a `vstd` dependency for it. A `.dirty`
+    // version makes it use the in-tree `vstd`, which is what `adjust_version` points to anyway.
+    let args = vec!["new", "--bin", "test_project", "--override-verus-version", "0.0.0.dirty"];
     let run = run_cargo_verus(&args, temp_dir.path());
     adjust_version(temp_dir.path().join("test_project"));
     assert!(run.status.success());
