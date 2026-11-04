@@ -128,6 +128,9 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
 ) -> (ret: bool) where Idx: PartialOrd<U>, U: ?Sized + PartialOrd<Idx>
     ensures
         <Range::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret == r.contains_spec(i),
+    // rustc 1.99.1 `RangeBounds::contains`: `start <= item && item < end`
+    allocates call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i))
+        + call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r.end))
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contains ](
@@ -137,6 +140,9 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
     ensures
         <RangeInclusive::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret
             == r.contains_spec(i),
+    // `start <= item && item <= end`
+    allocates call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i))
+        + call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty ](
@@ -145,6 +151,8 @@ pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty 
     ensures
         <Idx as PartialOrdSpec<Idx>>::obeys_partial_cmp_spec() ==> res
             == spec_range_inclusive_is_empty(r),
+    // `self.exhausted || !(self.start <= self.end)`
+    allocates call_allocates(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end))
 ;
 
 pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx) -> (ret:
@@ -242,6 +250,8 @@ pub assume_specification<A: core::iter::Step>[ <Range<A> as Iterator>::next ](
 ) -> (r: Option<A>)
     ensures
         obeys_range_step_spec::<A>() ==> (*final(range), r) == spec_range_next(*old(range)),
+    // (`Step` is implemented only by std for the primitive integers and `char`)
+    allocates 0
 ;
 
 #[verifier::external_type_specification]

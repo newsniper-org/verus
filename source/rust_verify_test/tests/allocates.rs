@@ -1339,3 +1339,108 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 1)
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_for_loop_adapters ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn zipped(v: &Vec<u8>, w: &Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in iter: v.iter().zip(w.iter())
+                invariant allocated() == 0,
+            {
+                s = *x.0;
+            }
+            s
+        }
+
+        fn nested(v: &Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in iter: v.iter().skip(1).take(2).rev()
+                invariant allocated() == 0,
+            {
+                s = *x;
+            }
+            s
+        }
+
+        fn mapped(v: &Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in iter: v.iter().map(|x: &u8| -> (r: u8) allocates 0 { *x })
+                invariant allocated() == 0,
+            {
+                s = x;
+            }
+            s
+        }
+
+        fn filtered(v: &Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in iter: v.iter().filter(|x: &&u8| -> (r: bool) allocates 0 { **x > 0 })
+                invariant allocated() == 0,
+            {
+                s = *x;
+            }
+            s
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a bound that mentions a captured variable is not the same for every value of the closure
+    // type, so a `Map` over such a closure is not known to be allocation-free
+    #[test] alloc_check_closure_capturing_bound ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn capturing(v: &Vec<u8>, n: usize) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in iter: v.iter().map(|x: &u8| -> (r: u8) allocates n { *x }) // FAILS
+                invariant allocated() == 0, // FAILS
+            {
+                s = x;
+            }
+            s
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_misc_bounds ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::collections::VecDeque;
+
+        fn contains(r: &core::ops::Range<usize>, x: usize) -> bool
+            allocates 0
+        {
+            r.contains(&x)
+        }
+
+        fn deque(d: &VecDeque<u8>) -> VecDeque<u8>
+            allocates 1
+        {
+            d.clone()
+        }
+
+        fn opts(a: Option<u8>, b: Option<u8>) -> bool
+            allocates 0
+        {
+            a == b
+        }
+
+        fn conv(x: u32) -> Result<u8, core::num::TryFromIntError>
+            allocates 0
+        {
+            u8::try_from(x)
+        }
+    } => Ok(())
+}

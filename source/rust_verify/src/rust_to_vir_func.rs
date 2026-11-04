@@ -303,6 +303,7 @@ fn handle_autospec<'tcx>(
                     exec_assume_termination: false,
                     exec_allows_no_decreases_clause: false,
                     alloc_check_skip_drops: false,
+                    alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
                     tracked_swap: false,
                     tracked_take_option: false,
                     is_async: false,
@@ -1573,6 +1574,7 @@ fn make_attributes<'tcx>(
             vattrs.exec_allows_no_decreases_clause
         },
         alloc_check_skip_drops: vattrs.alloc_check_skip_drops,
+        alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
         tracked_swap: vattrs.tracked_swap,
         tracked_take_option: vattrs.tracked_take_option,
         is_async: is_async,

@@ -225,6 +225,7 @@ pub trait ExIterator {
             !self.obeys_prophetic_iter_laws() ==> forall |x: &Self::Item| #[trigger] predicate.requires((x, )),
         ensures
             self.obeys_prophetic_iter_laws() ==> filter_post(self, predicate, r),
+        allocates 0
     ;
 
     fn find<P>(&mut self, predicate: P) -> (r: Option<Self::Item>)
@@ -310,6 +311,7 @@ pub trait ExIterator {
             !self.obeys_prophetic_iter_laws() ==> forall |x: Self::Item| #[trigger] f.requires((x, )),
         ensures
             self.obeys_prophetic_iter_laws() ==> map_post(self, f, r),
+        allocates 0
     ;
 
     fn position<P>(&mut self, predicate: P) -> (r: Option<usize>)
@@ -355,6 +357,7 @@ pub trait ExIterator {
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> rev_post(self, r),
+        allocates 0
     ;
 
     fn size_hint(&self) -> ((lower, upper): (usize, Option<usize>))
@@ -369,12 +372,14 @@ pub trait ExIterator {
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> skip_post(self, n, s),
+        allocates 0
     ;
 
     fn take(self, n: usize) -> (t: Take<Self>)
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> take_post(self, n, t),
+        allocates 0
     ;
 
     #[verifier::impls_cannot_extend_spec]
@@ -384,6 +389,7 @@ pub trait ExIterator {
             U: IntoIterator,
         ensures
             self.obeys_prophetic_iter_laws() ==> zip_post(self, other, r),
+        allocates call_allocates(<U as IntoIterator>::into_iter, (other,))
     ;
 }
 
@@ -1094,9 +1100,107 @@ pub trait ExIterStep: Clone + PartialOrd + Sized {
  * Collect our broadcast definitions
  ********************************************************************************/
 
+/// Every `next` of an iterator of type `I`, in any state, allocates nothing
+pub open spec fn iter_alloc_free<I: ?Sized>() -> bool {
+    forall|i: &I| #[trigger] iter_next_cost(i) == 0
+}
+
+/// Every `next_back` of an iterator of type `I`, in any state, allocates nothing
+pub open spec fn iter_back_alloc_free<I: ?Sized>() -> bool {
+    forall|i: &I| #[trigger] iter_next_back_cost(i) == 0
+}
+
+// The adapters' `next` calls the inner iterator's `next` (a bounded number of times per call,
+// or in a loop for `Filter`/`Skip`), and the closure for `Map`/`Filter`. When none of these
+// can allocate, neither can the adapter.
+
+pub broadcast axiom fn axiom_rev_next_cost<I>(r: &Rev<I>)
+    requires
+        iter_back_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_cost(r) == 0,
+;
+
+pub broadcast axiom fn axiom_rev_next_back_cost<I>(r: &Rev<I>)
+    requires
+        iter_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_back_cost(r) == 0,
+;
+
+pub broadcast axiom fn axiom_skip_next_cost<I>(s: &Skip<I>)
+    requires
+        iter_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_cost(s) == 0,
+;
+
+pub broadcast axiom fn axiom_take_next_cost<I>(t: &Take<I>)
+    requires
+        iter_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_cost(t) == 0,
+;
+
+pub broadcast axiom fn axiom_zip_next_cost<A, B>(z: &Zip<A, B>)
+    requires
+        iter_alloc_free::<A>(),
+        iter_alloc_free::<B>(),
+    ensures
+        #[trigger] iter_next_cost(z) == 0,
+;
+
+pub broadcast axiom fn axiom_skip_next_back_cost<I>(s: &Skip<I>)
+    requires
+        iter_back_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_back_cost(s) == 0,
+;
+
+pub broadcast axiom fn axiom_take_next_back_cost<I>(t: &Take<I>)
+    requires
+        iter_back_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_next_back_cost(t) == 0,
+;
+
+// The adapter's `next` calls the inner iterator's `next` and, for `Map`/`Filter`, the closure.
+// When none of them can allocate, neither can the adapter. The closure premise is provable for
+// every state of the iterator: a Verus closure whose `allocates` bound mentions only its
+// parameters has that bound for every value of its type.
+
+pub broadcast axiom fn axiom_map_next_cost<I: Iterator, F: FnOnce<(I::Item,)>>(
+    m: &core::iter::Map<I, F>,
+)
+    requires
+        iter_alloc_free::<I>(),
+        forall|x: I::Item| call_allocates(map_fun(*m), (x,)) == 0,
+    ensures
+        #[trigger] iter_next_cost(m) == 0,
+;
+
+pub broadcast axiom fn axiom_filter_next_cost<I: Iterator, P: for<'a> FnOnce<(&'a I::Item,)>>(
+    f: &core::iter::Filter<I, P>,
+)
+    requires
+        iter_alloc_free::<I>(),
+        forall|x: &I::Item| call_allocates(filter_fun(*f), (x,)) == 0,
+    ensures
+        #[trigger] iter_next_cost(f) == 0,
+;
+
 pub broadcast group group_iter_axioms {
     axiom_iter_next_cost_nonneg,
     axiom_iter_next_back_cost_nonneg,
+    axiom_rev_next_cost,
+    axiom_rev_next_back_cost,
+    axiom_skip_next_cost,
+    axiom_take_next_cost,
+    axiom_map_next_cost,
+    axiom_filter_next_cost,
+    axiom_skip_next_back_cost,
+    axiom_take_next_back_cost,
+    axiom_zip_next_cost,
     rev_postcondition,
     zip_postcondition,
     filter_postcondition,

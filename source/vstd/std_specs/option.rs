@@ -371,6 +371,11 @@ pub assume_specification<T: PartialOrd>[ <Option<T> as PartialOrd>::partial_cmp 
     x: &Option<T>,
     y: &Option<T>,
 ) -> Option<core::cmp::Ordering>
+    allocates if x.is_some() && y.is_some() {
+        call_allocates(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
+    } else {
+        0
+    }
 ;
 
 impl<T: super::cmp::OrdSpec> super::cmp::OrdSpecImpl for Option<T> {
@@ -392,6 +397,11 @@ pub assume_specification<T: Ord>[ <Option<T> as Ord>::cmp ](
     x: &Option<T>,
     y: &Option<T>,
 ) -> core::cmp::Ordering
+    allocates if x.is_some() && y.is_some() {
+        call_allocates(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
+    } else {
+        0
+    }
 ;
 
 // ok_or

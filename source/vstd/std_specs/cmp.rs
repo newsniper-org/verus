@@ -276,6 +276,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::min_by ](
             &&& #[trigger] compare.ensures((&v1, &v2), o)
             &&& r == (if o == Ordering::Greater { v2 } else { v1 })
         },
+    allocates call_allocates(compare, (&v1, &v2))
 ;
 
 pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
@@ -290,6 +291,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
             &&& #[trigger] compare.ensures((&v1, &v2), o)
             &&& r == (if o == Ordering::Greater { v1 } else { v2 })
         },
+    allocates call_allocates(compare, (&v1, &v2))
 ;
 
 // `min_by_key` and `max_by_key` compute the keys `f(&v1)` and `f(&v2)` and

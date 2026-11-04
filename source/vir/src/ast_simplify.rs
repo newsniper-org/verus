@@ -1185,8 +1185,48 @@ fn exec_closure_spec_allocates(
 
     let bool_typ = Arc::new(TypX::Bool);
     let forall = Quant { quant: air::ast::Quant::Forall };
-    let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
-    Ok(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, quant_body)))
+    let binders =
+        Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident.clone(), a: tuple_typ.clone() })]);
+    let value_level =
+        SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders, quant_body));
+
+    // When the bound mentions only the parameters, it is the same for every value of the closure
+    // type (all of them come from this closure expression, and a closure's captures do not
+    // change what it allocates), so also state it for all values `c` of the type. This lets
+    // code that only knows a value's type (a `Map` whose closure is some later state) use it.
+    let mut free = crate::ast_util::referenced_vars_expr(bound);
+    for p in params.iter() {
+        free.remove(&p.name);
+    }
+    if !free.is_empty() {
+        return Ok(value_level);
+    }
+    let (c_ident, c_var) = {
+        let ident = state.next_temp();
+        (ident.clone(), SpannedTyped::new(span, &closure_var.typ, ExprX::Var(ident)))
+    };
+    let alloc_call_c = wrap_in_trigger(&SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Call {
+            target: CallTarget::BuiltinSpecFun(
+                BuiltinSpecFun::ClosureAlloc,
+                closure_trait_call_typ_args(state, &c_var, params),
+                Arc::new(vec![]),
+            ),
+            args: Arc::new(vec![c_var.clone(), tuple_var.clone()]),
+            post_args: None,
+            body: None,
+        },
+    ));
+    let type_level_body = mk_eq(span, &alloc_call_c, &bound_body);
+    let type_binders = Arc::new(vec![
+        Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ }),
+        Arc::new(VarBinderX { name: c_ident, a: closure_var.typ.clone() }),
+    ]);
+    let type_level =
+        SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, type_binders, type_level_body));
+    Ok(conjoin(span, &vec![value_level, type_level]))
 }
 
 fn exec_closure_spec(

@@ -734,7 +734,11 @@ pub fn inherit_default_bodies(
                     unwind_spec: None,
                     allocates,
                     item_kind: default_function.x.item_kind,
-                    attrs: Arc::new(crate::ast::FunctionAttrsX::default()),
+                    attrs: Arc::new(crate::ast::FunctionAttrsX {
+                        // the copy's `allocates` bound comes from the default method
+                        alloc_checked_crate: default_function.x.attrs.alloc_checked_crate,
+                        ..crate::ast::FunctionAttrsX::default()
+                    }),
                     body: None,
                     return_opaque_type_eqs: Arc::new(vec![]),
                     extra_dependencies: vec![],

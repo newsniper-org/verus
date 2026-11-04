@@ -101,6 +101,7 @@ pub assume_specification<T>[ <VecDeque<T> as core::default::Default>::default ](
 >)
     ensures
         v@ == Seq::<T>::empty(),
+    allocates 0
 ;
 
 pub assume_specification<T>[ VecDeque::<T>::with_capacity ](capacity: usize) -> (v: VecDeque<T>)
@@ -242,6 +243,8 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <VecDeque<T, A> as Clo
         forall|i| #![all_triggers] 0 <= i < v.len() ==> cloned::<T>(v[i], res[i]),
         vec_dequeue_clone_trigger(*v, res),
         v@ =~= res@ ==> v@ == res@,
+    // `with_capacity(len)` (one buffer) and one `T::clone` per element
+    allocates (if v.len() == 0 { 0int } else { 1int }) + super::clone::seq_clone_allocates(v@, v@.len())
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::truncate ](
@@ -267,6 +270,12 @@ pub assume_specification<T: Clone, A: Allocator>[ VecDeque::<T, A>::resize ](
                 #![all_triggers]
                 old(v).len() <= i < len ==> cloned::<T>(value, final(v)@[i])
         },
+    // `extend` of the new elements: at most one growth, at most one `T::clone` per new element
+    allocates if len <= old(v).len() {
+        0int
+    } else {
+        1int + (len - old(v).len()) * call_allocates(T::clone, (&value,))
+    }
 ;
 
 pub broadcast proof fn axiom_vec_dequeue_index_decreases<A>(v: VecDeque<A>, i: int)

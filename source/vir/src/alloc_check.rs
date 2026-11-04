@@ -331,6 +331,31 @@ pub(crate) fn check_alloc_free_drop_impls(
     Ok(())
 }
 
+/// A function whose `allocates` bound is justified by its body (or, for a trait method
+/// declaration, by its impls) must come from a crate that was
+/// verified with -V alloc-check; otherwise the bound was never checked and cannot be trusted.
+/// (Bounds on `external_body` functions and `assume_specification`s have no body and are trusted
+/// by definition.)
+pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), VirErr> {
+    for f in krate.functions.iter() {
+        // (an imported function has no body any more, so look at how it was declared)
+        if f.x.allocates.is_some()
+            && !f.x.attrs.is_external_body
+            && f.x.proxy.is_none()
+            && !f.x.attrs.alloc_checked_crate
+        {
+            return Err(error(
+                &f.span,
+                format!(
+                    "`{}` has an `allocates` bound, but its crate was not verified with -V alloc-check, so the bound was not checked",
+                    crate::ast_util::fun_as_friendly_rust_name(&f.x.name)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 const FMT_TRAITS: [&str; 9] = [
     "core::fmt::Binary",
     "core::fmt::Debug",

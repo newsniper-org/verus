@@ -1628,6 +1628,9 @@ pub struct FunctionAttrsX {
     pub exec_allows_no_decreases_clause: bool,
     /// `-V alloc-check`: skip the drop rule for this function (vstd only)
     pub alloc_check_skip_drops: bool,
+    /// The crate defining this function was verified with -V alloc-check, so its `allocates`
+    /// bound (if any, and if the function has a body) was checked
+    pub alloc_checked_crate: bool,
     /// Is this function `tracked_swap`, which requires special handling
     pub tracked_swap: bool,
     /// Is this function `Option::tracked_take`, which requires special handling

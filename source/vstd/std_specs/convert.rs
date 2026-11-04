@@ -123,6 +123,7 @@ pub assume_specification<T, U: TryFrom<T>>[ <T as TryInto<U>>::try_into ](a: T) 
 >)
     ensures
         call_ensures(U::try_from, (a,), ret),
+    allocates call_allocates(U::try_from, (a,))
 ;
 
 pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> (ret: Result<
@@ -132,6 +133,7 @@ pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> 
     ensures
         ret.is_ok(),
         call_ensures(U::into, (a,), ret.unwrap()),
+    allocates call_allocates(U::into, (a,))
 ;
 
 } // verus!
