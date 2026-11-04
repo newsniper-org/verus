@@ -631,12 +631,14 @@ pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
 > as core::default::Default>::default ]() -> (m: HashMap<K, V, S>)
     ensures
         m@ == Map::<K, V>::empty(),
+    allocates call_allocates(S::default, ())
 ;
 
 pub assume_specification<Key, Value>[ HashMap::<Key, Value>::with_capacity ](capacity: usize) -> (m:
     HashMap<Key, Value, RandomState>)
     ensures
         m@ == Map::<Key, Value>::empty(),
+    allocates 1
 ;
 
 pub assume_specification<Key, Value, S>[ HashMap::<Key, Value, S>::with_hasher ](
@@ -654,6 +656,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
 >::reserve ](m: &mut HashMap<Key, Value, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
+    allocates 1 + hash_ops_cost(&*m)
 ;
 
 pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ HashMap::<
@@ -670,6 +673,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
                 None => !old(m)@.contains_key(k),
             }
         },
+    allocates 1 + hash_ops_cost(&*m)
 ;
 
 // The specification for `contains_key` has a parameter `key: &Q`
@@ -722,6 +726,7 @@ pub assume_specification<
             m@,
             k,
         ),
+    allocates hash_ops_cost(m)
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -779,6 +784,7 @@ pub assume_specification<
             Some(v) => maps_borrowed_key_to_value(m@, k, *v),
             None => !contains_borrowed_key(m@, k),
         },
+    allocates hash_ops_cost(m)
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -843,6 +849,7 @@ pub assume_specification<
                 None => !contains_borrowed_key(old(m)@, k),
             }
         },
+    allocates hash_ops_cost(&*m)
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::clear ](
@@ -977,6 +984,7 @@ pub assume_specification<T, S: core::default::Default>[ <HashSet<
 > as core::default::Default>::default ]() -> (m: HashSet<T, S>)
     ensures
         m@ == Set::<T>::empty(),
+    allocates call_allocates(S::default, ())
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) -> (m: HashSet<
@@ -985,6 +993,7 @@ pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) 
 >)
     ensures
         m@ == Set::<Key>::empty(),
+    allocates 1
 ;
 
 pub assume_specification<Key, S>[ HashSet::<Key, S>::with_hasher ](hash_builder: S) -> (m: HashSet<
@@ -1001,6 +1010,7 @@ pub assume_specification<Key, S>[ HashSet::<Key, S>::with_capacity_and_hasher ](
 ) -> (m: HashSet<Key, S>)
     ensures
         m@ == Set::<Key>::empty(),
+    allocates 1
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1010,6 +1020,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
 >::reserve ](m: &mut HashSet<Key, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
+    allocates 1 + hash_ops_cost(&*m)
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1022,6 +1033,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
             &&& final(m)@ == old(m)@.insert(k)
             &&& result == !old(m)@.contains(k)
         },
+    allocates 1 + hash_ops_cost(&*m)
 ;
 
 // The specification for `contains` has a parameter `key: &Q`
@@ -1063,6 +1075,7 @@ pub assume_specification<
     ensures
         obeys_key_model::<Key>() && builds_valid_hashers::<S>() ==> result
             == set_contains_borrowed_key(m@, k),
+    allocates hash_ops_cost(m)
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -1111,6 +1124,7 @@ pub assume_specification<
             Some(v) => sets_borrowed_key_to_key(m@, k, v),
             None => !set_contains_borrowed_key(m@, k),
         },
+    allocates hash_ops_cost(m)
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -1161,6 +1175,7 @@ pub assume_specification<
             &&& sets_differ_by_borrowed_key(old(m)@, final(m)@, k)
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
+    allocates hash_ops_cost(&*m)
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
@@ -1323,6 +1338,7 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
             Some(value) => old(m)@.insert(key, value),
             None => old(m)@.remove(key),
         })),
+    allocates 1 + hash_ops_cost(&*m)
 ;
 
 //// Entry
@@ -1344,6 +1360,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
             None => default,
         }),
         entry.final_value() == Some(*final(value)),
+    allocates 0
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
@@ -1354,6 +1371,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
+    allocates 0
 ;
 
 //// OccupiedEntry
@@ -1454,6 +1472,7 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
     ensures
         *value_ref == value,
         entry.final_value() == Some(*final(value_ref)),
+    allocates 0
 ;
 
 pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_entry ](
@@ -1464,9 +1483,85 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
+    allocates 0
 ;
 
+/// -V alloc-check: the allocations of the user callbacks that one operation on `m` runs: `Hash::hash`
+/// and `Eq::eq` on the keys (a lookup hashes the key; growing the table hashes every key), and
+/// the `BuildHasher`/`Hasher` methods. It is the actual worst case over the operations on `m`, so
+/// it is finite for every `m` but not bounded by a constant.
+pub uninterp spec fn hash_ops_cost<M: ?Sized>(m: &M) -> int;
+
+pub broadcast axiom fn axiom_hash_ops_cost_nonneg<M: ?Sized>(m: &M)
+    ensures
+        #[trigger] hash_ops_cost(m) >= 0,
+;
+
+/// Hashing a `K` with an `S` builder, and comparing `K`s, allocates nothing
+pub uninterp spec fn hash_alloc_free<K: ?Sized, S: ?Sized>() -> bool;
+
+pub broadcast axiom fn axiom_hash_ops_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_ops_cost(m) == 0,
+;
+
+pub broadcast axiom fn axiom_hash_ops_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_ops_cost(m) == 0,
+;
+
+// `RandomState` is SipHash-1-3, which keeps its state on the stack, and the primitive types hash
+// by writing their bytes into it.
+macro_rules! def_hash_free {
+    ($ty:ty, $name:ident) => {
+        $crate::vstd::prelude::verus! {
+            pub broadcast axiom fn $name()
+                ensures
+                    #[trigger] hash_alloc_free::<$ty, RandomState>(),
+            ;
+        }
+    };
+}
+
+def_hash_free!(u8, axiom_hash_free_u8);
+def_hash_free!(u16, axiom_hash_free_u16);
+def_hash_free!(u32, axiom_hash_free_u32);
+def_hash_free!(u64, axiom_hash_free_u64);
+def_hash_free!(u128, axiom_hash_free_u128);
+def_hash_free!(usize, axiom_hash_free_usize);
+def_hash_free!(i8, axiom_hash_free_i8);
+def_hash_free!(i16, axiom_hash_free_i16);
+def_hash_free!(i32, axiom_hash_free_i32);
+def_hash_free!(i64, axiom_hash_free_i64);
+def_hash_free!(i128, axiom_hash_free_i128);
+def_hash_free!(isize, axiom_hash_free_isize);
+def_hash_free!(bool, axiom_hash_free_bool);
+def_hash_free!(char, axiom_hash_free_char);
+def_hash_free!(alloc::string::String, axiom_hash_free_string);
+
 pub broadcast group group_hash_axioms {
+    axiom_hash_ops_cost_nonneg,
+    axiom_hash_ops_cost_map,
+    axiom_hash_ops_cost_set,
+    axiom_hash_free_u8,
+    axiom_hash_free_u16,
+    axiom_hash_free_u32,
+    axiom_hash_free_u64,
+    axiom_hash_free_u128,
+    axiom_hash_free_usize,
+    axiom_hash_free_i8,
+    axiom_hash_free_i16,
+    axiom_hash_free_i32,
+    axiom_hash_free_i64,
+    axiom_hash_free_i128,
+    axiom_hash_free_isize,
+    axiom_hash_free_bool,
+    axiom_hash_free_char,
+    axiom_hash_free_string,
     axiom_next_cost_hash_set_iter,
     axiom_next_cost_hash_map_iter,
     axiom_next_cost_hash_values,

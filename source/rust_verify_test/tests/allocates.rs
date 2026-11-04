@@ -1467,3 +1467,31 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_hashmap ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::collections::{HashMap, HashSet};
+
+        fn lookups(m: &mut HashMap<u8, u8>, s: &mut HashSet<u32>) -> bool
+            allocates 2
+        {
+            let _ = m.insert(1, 2);
+            let _ = s.insert(3);
+            m.contains_key(&1) && s.contains(&3)
+        }
+
+        fn gets(m: &HashMap<u32, u8>) -> bool
+            allocates 0
+        {
+            m.get(&1).is_some()
+        }
+
+        fn too_many(m: &mut HashMap<u8, u8>)
+            allocates 1 // FAILS
+        {
+            let _ = m.insert(1, 2);
+            let _ = m.insert(2, 3);
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
