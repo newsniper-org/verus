@@ -45,19 +45,25 @@ verus! {
 
 pub assume_specification<T>[ <Option<T> as core::default::Default>::default ]() -> (r: Option<T>)
     ensures
-        r == Option::<T>::None,  allocates 0
+        r == Option::<T>::None,
+    allocates
+        0,
 ;
 
 pub assume_specification<'a>[ <&'a str as core::default::Default>::default ]() -> (r: &'a str)
     ensures
-        r == "",  allocates 0
+        r == "",
+    allocates
+        0,
 ;
 
 pub assume_specification<T: PointeeSized>[ <core::marker::PhantomData<
     T,
 > as core::default::Default>::default ]() -> (r: core::marker::PhantomData<T>)
     ensures
-        r == core::marker::PhantomData::<T>,  allocates 0
+        r == core::marker::PhantomData::<T>,
+    allocates
+        0,
 ;
 
 pub assume_specification<U: core::default::Default, T: core::default::Default>[ <(
@@ -67,7 +73,8 @@ pub assume_specification<U: core::default::Default, T: core::default::Default>[ 
     ensures
         call_ensures(U::default, (), r.0),
         call_ensures(T::default, (), r.1),
-    allocates call_allocates(U::default, ()) + call_allocates(T::default, ())
+    allocates
+        call_allocates(U::default, ()) + call_allocates(T::default, ()),
 ;
 
 pub assume_specification<
@@ -79,8 +86,11 @@ pub assume_specification<
         call_ensures(V::default, (), r.0),
         call_ensures(U::default, (), r.1),
         call_ensures(T::default, (), r.2),
-    allocates call_allocates(V::default, ()) + call_allocates(U::default, ())
-        + call_allocates(T::default, ())
+    allocates
+        call_allocates(V::default, ()) + call_allocates(U::default, ()) + call_allocates(
+            T::default,
+            (),
+        ),
 ;
 
 } // verus!

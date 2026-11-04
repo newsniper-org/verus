@@ -200,7 +200,9 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*mut T as PartialEq<*m
     y: &*mut T,
 ) -> (res: bool)
     ensures
-        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata), allocates 0
+        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
+    allocates
+        0,
 ;
 
 #[cfg(verus_keep_ghost)]
@@ -223,7 +225,9 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*const T as PartialEq<
     y: &*const T,
 ) -> (res: bool)
     ensures
-        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata), allocates 0
+        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
+    allocates
+        0,
 ;
 
 impl<T> View for PointsTo<T> {
@@ -404,7 +408,9 @@ pub assume_specification<
     ensures
         res == ptr_null::<T>(),
     opens_invariants none
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 /// Constructs a mutable null pointer.
@@ -425,7 +431,9 @@ pub assume_specification<
     ensures
         res == ptr_null_mut::<T>(),
     opens_invariants none
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 //////////////////////////////////////

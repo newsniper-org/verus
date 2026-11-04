@@ -84,7 +84,9 @@ pub assume_specification<T>[ <[T]>::len ](slice: &[T]) -> (len: usize)
     returns
         spec_slice_len(slice),
     opens_invariants none
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 pub open spec fn spec_slice_is_empty<T>(slice: &[T]) -> bool {
@@ -96,7 +98,9 @@ pub assume_specification<T>[ <[T]>::is_empty ](slice: &[T]) -> (b: bool)
     ensures
         b <==> slice@.len() == 0,
     opens_invariants none
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 #[cfg(feature = "alloc")]

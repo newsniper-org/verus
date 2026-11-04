@@ -129,7 +129,8 @@ fn exec_nonstatic_call<Args: core::marker::Tuple, Output, F>(f: F, args: Args) -
         call_requires(f, args),
     ensures
         call_ensures(f, args, output),
-    allocates call_allocates(f, args)
+    allocates
+        call_allocates(f, args),
 {
     unimplemented!();
 }

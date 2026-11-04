@@ -60,13 +60,15 @@ impl<T, U: From<T>> IntoSpecImpl<U> for T {
 pub assume_specification<T>[ <T as From<T>>::from ](t: T) -> (ret: T)
     ensures
         ret == t,
-    allocates 0
+    allocates
+        0,
 ;
 
 pub assume_specification<T, U: From<T>>[ <T as Into<U>>::into ](a: T) -> (ret: U)
     ensures
         call_ensures(U::from, (a,), ret),
-    allocates call_allocates(U::from, (a,))
+    allocates
+        call_allocates(U::from, (a,)),
 ;
 
 #[verifier::external_type_specification]
@@ -123,7 +125,8 @@ pub assume_specification<T, U: TryFrom<T>>[ <T as TryInto<U>>::try_into ](a: T) 
 >)
     ensures
         call_ensures(U::try_from, (a,), ret),
-    allocates call_allocates(U::try_from, (a,))
+    allocates
+        call_allocates(U::try_from, (a,)),
 ;
 
 pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> (ret: Result<
@@ -133,7 +136,8 @@ pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> 
     ensures
         ret.is_ok(),
         call_ensures(U::into, (a,), ret.unwrap()),
-    allocates call_allocates(U::into, (a,))
+    allocates
+        call_allocates(U::into, (a,)),
 ;
 
 } // verus!

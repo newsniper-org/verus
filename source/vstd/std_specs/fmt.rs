@@ -121,7 +121,10 @@ pub uninterp spec fn fmt_arg_allocates(arg: rt::Argument<'_>) -> nat;
 pub uninterp spec fn fmt_witness_formatter<'f>() -> &'f mut Formatter<'f>;
 
 #[doc(hidden)]
-pub open spec fn fmt_arg_allocates_at<'a, const M: usize>(args: &[rt::Argument<'a>; M], i: int) -> nat {
+pub open spec fn fmt_arg_allocates_at<'a, const M: usize>(
+    args: &[rt::Argument<'a>; M],
+    i: int,
+) -> nat {
     fmt_arg_allocates(args[i])
 }
 
@@ -179,30 +182,39 @@ pub assume_specification<'a, 'b, T: core::fmt::Debug>[ rt::Argument::<'a>::new_d
     requires
         forall|f: &Formatter<'a>| x.fmt_req(f),
     ensures
-        fmt_arg_allocates(arg) == call_allocates(<T as core::fmt::Debug>::fmt, (x, fmt_witness_formatter())),
-    allocates 0
+        fmt_arg_allocates(arg) == call_allocates(
+            <T as core::fmt::Debug>::fmt,
+            (x, fmt_witness_formatter()),
+        ),
+    allocates
+        0,
 ;
 
 #[doc(hidden)]
 // Only read as a width or precision (`as_u16`), never formatted.
-pub assume_specification<'a, 'b>[ rt::Argument::<'a>::from_usize ](x: &'b usize) -> (arg: rt::Argument<'b>)
+pub assume_specification<'a, 'b>[ rt::Argument::<'a>::from_usize ](x: &'b usize) -> (arg:
+    rt::Argument<'b>)
     requires
         *x <= u16::MAX,
     ensures
         fmt_arg_allocates(arg) == 0,
-    allocates 0
+    allocates
+        0,
 ;
 
 pub assume_specification<'a>[ Arguments::<'a>::from_str ](s: &'static str) -> (args: Arguments<'a>)
     ensures
         fmt_allocates(args) == 0,
-    allocates 0
+    allocates
+        0,
 ;
 
-pub assume_specification<'a>[ Arguments::<'a>::from_str_nonconst ](s: &'static str) -> (args: Arguments<'a>)
+pub assume_specification<'a>[ Arguments::<'a>::from_str_nonconst ](s: &'static str) -> (args:
+    Arguments<'a>)
     ensures
         fmt_allocates(args) == 0,
-    allocates 0
+    allocates
+        0,
 ;
 
 // Specially handled stand-in for Arguments::new (because it uses the private Argument type)
@@ -222,10 +234,13 @@ pub assume_specification<'a, const N: usize, const M: usize>[ arguments_new ](
     args: &'a [rt::Argument<'a>; M],
 ) -> Arguments<'a>
     ensures
-        // (Restates the definition; keeps `fmt_arg_allocates_at` available to the assumption
-        // -V alloc-check adds after this call.)
-        forall|i: int| 0 <= i < M ==> #[trigger] fmt_arg_allocates_at(args, i) == fmt_arg_allocates(args[i]),
-    allocates 0
+// (Restates the definition; keeps `fmt_arg_allocates_at` available to the assumption
+// -V alloc-check adds after this call.)
+
+        forall|i: int|
+            0 <= i < M ==> #[trigger] fmt_arg_allocates_at(args, i) == fmt_arg_allocates(args[i]),
+    allocates
+        0,
 ;
 
 // The sink's own allocations are charged to whoever owns the sink.
@@ -233,17 +248,26 @@ pub assume_specification<'a>[ Formatter::<'a>::write_fmt ](
     f: &mut Formatter<'a>,
     args: Arguments<'_>,
 ) -> Result<(), Error>
-    allocates fmt_allocates(args)
+    allocates
+        fmt_allocates(args),
 ;
 
-pub assume_specification<'a>[ Formatter::<'a>::write_str ](f: &mut Formatter<'a>, data: &str) -> Result<(), Error>
-    allocates 0
+pub assume_specification<'a>[ Formatter::<'a>::write_str ](
+    f: &mut Formatter<'a>,
+    data: &str,
+) -> Result<(), Error>
+    allocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
-pub assume_specification[ alloc::fmt::format ](args: Arguments<'_>) -> alloc::string::String
-    // the `fmt` callbacks, and the growth of the new `String`
-    allocates fmt_allocates(args) + format_growth(args)
+pub assume_specification[ alloc::fmt::format ](
+    args: Arguments<'_>,
+) -> alloc::string::String
+// the `fmt` callbacks, and the growth of the new `String`
+
+    allocates
+        fmt_allocates(args) + format_growth(args),
 ;
 
 pub uninterp spec fn fmt_req_all<A: ?Sized>() -> bool;
@@ -365,7 +389,6 @@ def_fmt_alloc_axiom!(core::fmt::Pointer, axiom_fmt_allocates_pointer);
 def_fmt_alloc_axiom!(core::fmt::UpperExp, axiom_fmt_allocates_upper_exp);
 
 def_fmt_alloc_axiom!(core::fmt::UpperHex, axiom_fmt_allocates_upper_hex);
-
 
 // -V alloc-check: formatting a primitive into a `Formatter` allocates nothing itself (the output
 // sink's growth is charged to the sink's owner).

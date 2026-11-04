@@ -37,8 +37,7 @@ pub open spec fn seq_clone_allocates<T: Clone>(s: Seq<T>, n: nat) -> int
 /// Cloning elements that each allocate nothing allocates nothing in total
 pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: nat)
     ensures
-        (forall|i: int|
-            0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
+        (forall|i: int| 0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
             ==> #[trigger] seq_clone_allocates(s, n) == 0,
     decreases n,
 {
@@ -49,12 +48,16 @@ pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: na
 
 pub assume_specification[ <bool as Clone>::clone ](b: &bool) -> (res: bool)
     returns
-        b,  allocates 0
+        b,
+    allocates
+        0,
 ;
 
 pub assume_specification[ <char as Clone>::clone ](c: &char) -> (res: char)
     returns
-        c,  allocates 0
+        c,
+    allocates
+        0,
 ;
 
 #[allow(suspicious_double_ref_op)]
@@ -62,14 +65,18 @@ pub assume_specification<'b, T: core::marker::PointeeSized, 'a>[ <&'b T as Clone
     b: &'a &'b T,
 ) -> (res: &'b T)
     ensures
-        res == b,  allocates 0
+        res == b,
+    allocates
+        0,
 ;
 
 pub assume_specification<T: Clone, const N: usize>[ <[T; N] as Clone>::clone ](a: &[T; N]) -> (res:
     [T; N])
     ensures
         forall|i| #![all_triggers] 0 <= i < N ==> cloned::<T>(a@[i], res@[i]),
-        a@ =~= res@ ==> a@ == res@,    allocates seq_clone_allocates(a@, N as nat)
+        a@ =~= res@ ==> a@ == res@,
+    allocates
+        seq_clone_allocates(a@, N as nat),
 ;
 
 /*
@@ -86,12 +93,16 @@ pub assume_specification<T: Copy>[ <Tracked<T> as Clone>::clone ](b: &Tracked<T>
     T,
 >)
     ensures
-        res == b,  allocates 0
+        res == b,
+    allocates
+        0,
 ;
 
 pub assume_specification<T>[ <Ghost<T> as Clone>::clone ](b: &Ghost<T>) -> (res: Ghost<T>)
     ensures
-        res == b,  allocates 0
+        res == b,
+    allocates
+        0,
 ;
 
 } // verus!

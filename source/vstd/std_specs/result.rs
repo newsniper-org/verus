@@ -135,7 +135,9 @@ pub open spec fn is_ok<T, E>(result: &Result<T, E>) -> bool {
 pub assume_specification<T, E>[ Result::<T, E>::is_ok ](r: &Result<T, E>) -> (b: bool)
     ensures
         b == is_ok(r),
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 // is_err
@@ -148,7 +150,9 @@ pub open spec fn is_err<T, E>(result: &Result<T, E>) -> bool {
 pub assume_specification<T, E>[ Result::<T, E>::is_err ](r: &Result<T, E>) -> (b: bool)
     ensures
         b == is_err(r),
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 // as_ref
@@ -161,7 +165,9 @@ pub assume_specification<T, E>[ Result::<T, E>::as_ref ](result: &Result<T, E>) 
         r is Ok ==> result->Ok_0 == r->Ok_0,
         r is Err <==> result is Err,
         r is Err ==> result->Err_0 == r->Err_0,
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 // unwrap
@@ -180,7 +186,9 @@ pub assume_specification<T, E: core::fmt::Debug>[ Result::<T, E>::unwrap ](
     requires
         result is Ok,
     ensures
-        t == result->Ok_0,  allocates 0
+        t == result->Ok_0,
+    allocates
+        0,
 ;
 
 // unwrap_err
@@ -199,7 +207,9 @@ pub assume_specification<T: core::fmt::Debug, E>[ Result::<T, E>::unwrap_err ](
     requires
         result is Err,
     ensures
-        e == result->Err_0,  allocates 0
+        e == result->Err_0,
+    allocates
+        0,
 ;
 
 // expect
@@ -219,7 +229,9 @@ pub assume_specification<T, E: core::fmt::Debug>[ Result::<T, E>::expect ](
     requires
         result is Ok,
     ensures
-        t == result->Ok_0,  allocates 0
+        t == result->Ok_0,
+    allocates
+        0,
 ;
 
 // map
@@ -235,11 +247,12 @@ pub assume_specification<T, E, U, F: FnOnce(T) -> U>[ Result::<T, E>::map ](
             mapped_result->Ok_0,
         ),
         result.is_err() ==> mapped_result == Result::<U, E>::Err(result->Err_0),
-    allocates if result.is_ok() {
-        call_allocates(op, (result->Ok_0,))
-    } else {
-        0
-    }
+    allocates
+        if result.is_ok() {
+            call_allocates(op, (result->Ok_0,))
+        } else {
+            0
+        },
 ;
 
 // map_err
@@ -272,7 +285,9 @@ pub open spec fn ok<T, E>(result: Result<T, E>) -> Option<T> {
 pub assume_specification<T, E>[ Result::<T, E>::ok ](result: Result<T, E>) -> (opt: Option<T>)
     ensures
         opt == ok(result),
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 // err
@@ -288,7 +303,9 @@ pub open spec fn err<T, E>(result: Result<T, E>) -> Option<E> {
 pub assume_specification<T, E>[ Result::<T, E>::err ](result: Result<T, E>) -> (opt: Option<E>)
     ensures
         opt == err(result),
-    no_unwind  allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 } // verus!

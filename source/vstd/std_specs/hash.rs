@@ -38,7 +38,7 @@ use std::collections::hash_map::{
 use std::collections::hash_set;
 use std::collections::{HashMap, HashSet};
 
-use super::iter::{iter_next_cost, iter_next_back_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost};
 verus! {
 
 /// Specifications for the behavior of
@@ -72,19 +72,25 @@ impl DefaultHasherAdditionalSpecFns for DefaultHasher {
 // This is the specification of behavior for `DefaultHasher::new()`.
 pub assume_specification[ DefaultHasher::new ]() -> (result: DefaultHasher)
     ensures
-        result@ == Seq::<Seq<u8>>::empty(),  allocates 0
+        result@ == Seq::<Seq<u8>>::empty(),
+    allocates
+        0,
 ;
 
 // This is the specification of behavior for `DefaultHasher::write(&[u8])`.
 pub assume_specification[ DefaultHasher::write ](state: &mut DefaultHasher, bytes: &[u8])
     ensures
-        final(state)@ == old(state)@.push(bytes@),  allocates 0
+        final(state)@ == old(state)@.push(bytes@),
+    allocates
+        0,
 ;
 
 // This is the specification of behavior for `DefaultHasher::finish()`.
 pub assume_specification[ DefaultHasher::finish ](state: &DefaultHasher) -> (result: u64)
     ensures
-        result == DefaultHasher::spec_finish(state@),  allocates 0
+        result == DefaultHasher::spec_finish(state@),
+    allocates
+        0,
 ;
 
 /// Specifies whether a type `Key` conforms to our requirements to be
@@ -409,7 +415,9 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& iter.remaining().no_duplicates()
             &&& into_iter(iter) == IteratorSpec::remaining(&iter).unref()
             &&& IteratorSpec::decrease(&iter) is Some
-        },  allocates 0
+        },
+    allocates
+        0,
 ;
 
 /// Specifications for the behavior of [`std::collections::HashMap`](https://doc.rust-lang.org/std/collections/struct.HashMap.html).
@@ -585,21 +593,27 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
     m: &HashMap<Key, Value, S, A>,
 ) -> (len: usize)
     ensures
-        len == spec_hash_map_len(m),  allocates 0
+        len == spec_hash_map_len(m),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::capacity ](
     m: &HashMap<Key, Value, S, A>,
 ) -> (cap: usize)
     ensures
-        cap >= spec_hash_map_len(m),  allocates 0
+        cap >= spec_hash_map_len(m),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::is_empty ](
     m: &HashMap<Key, Value, S, A>,
 ) -> (res: bool)
     ensures
-        res == m@.is_empty(),  allocates 0
+        res == m@.is_empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<K: Clone, V: Clone, S: Clone, A: Allocator + Clone>[ <HashMap::<
@@ -621,7 +635,9 @@ pub assume_specification<Key, Value>[ HashMap::<Key, Value>::new ]() -> (m: Hash
     RandomState,
 >)
     ensures
-        m@ == Map::<Key, Value>::empty(),  allocates 0
+        m@ == Map::<Key, Value>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
@@ -631,21 +647,25 @@ pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
 > as core::default::Default>::default ]() -> (m: HashMap<K, V, S>)
     ensures
         m@ == Map::<K, V>::empty(),
-    allocates call_allocates(S::default, ())
+    allocates
+        call_allocates(S::default, ()),
 ;
 
 pub assume_specification<Key, Value>[ HashMap::<Key, Value>::with_capacity ](capacity: usize) -> (m:
     HashMap<Key, Value, RandomState>)
     ensures
         m@ == Map::<Key, Value>::empty(),
-    allocates 1
+    allocates
+        1,
 ;
 
 pub assume_specification<Key, Value, S>[ HashMap::<Key, Value, S>::with_hasher ](
     hash_builder: S,
 ) -> (m: HashMap<Key, Value, S>)
     ensures
-        m@ == Map::<Key, Value>::empty(),  allocates 0
+        m@ == Map::<Key, Value>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ HashMap::<
@@ -656,7 +676,8 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
 >::reserve ](m: &mut HashMap<Key, Value, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
-    allocates 1 + hash_ops_cost(&*m)
+    allocates
+        1 + hash_ops_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ HashMap::<
@@ -673,7 +694,8 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
                 None => !old(m)@.contains_key(k),
             }
         },
-    allocates 1 + hash_ops_cost(&*m)
+    allocates
+        1 + hash_ops_cost(&*m),
 ;
 
 // The specification for `contains_key` has a parameter `key: &Q`
@@ -726,7 +748,8 @@ pub assume_specification<
             m@,
             k,
         ),
-    allocates hash_ops_cost(m)
+    allocates
+        hash_ops_cost(m),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -784,7 +807,8 @@ pub assume_specification<
             Some(v) => maps_borrowed_key_to_value(m@, k, *v),
             None => !contains_borrowed_key(m@, k),
         },
-    allocates hash_ops_cost(m)
+    allocates
+        hash_ops_cost(m),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -849,14 +873,17 @@ pub assume_specification<
                 None => !contains_borrowed_key(old(m)@, k),
             }
         },
-    allocates hash_ops_cost(&*m)
+    allocates
+        hash_ops_cost(&*m),
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::clear ](
     m: &mut HashMap<Key, Value, S, A>,
 )
     ensures
-        final(m)@ == Map::<Key, Value>::empty(),  allocates 0
+        final(m)@ == Map::<Key, Value>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::keys ](
@@ -869,7 +896,9 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& IteratorSpec::remaining(&keys).len() == m@.dom().len()
             &&& into_iter_keys(keys) == IteratorSpec::remaining(&keys).unref()
             &&& IteratorSpec::decrease(&keys) is Some
-        },  allocates 0
+        },
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::values ](
@@ -881,7 +910,9 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& IteratorSpec::remaining(&values).len() == m@.dom().len()
             &&& into_iter_values(values) == IteratorSpec::remaining(&values).unref()
             &&& IteratorSpec::decrease(&values) is Some
-        },  allocates 0
+        },
+    allocates
+        0,
 ;
 
 pub broadcast proof fn axiom_hashmap_decreases<Key, Value, S>(m: HashMap<Key, Value, S>)
@@ -963,19 +994,25 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::len ](
     m: &HashSet<Key, S, A>,
 ) -> (len: usize)
     ensures
-        len == spec_hash_set_len(m),  allocates 0
+        len == spec_hash_set_len(m),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::is_empty ](
     m: &HashSet<Key, S, A>,
 ) -> (res: bool)
     ensures
-        res == m@.is_empty(),  allocates 0
+        res == m@.is_empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::new ]() -> (m: HashSet<Key, RandomState>)
     ensures
-        m@ == Set::<Key>::empty(),  allocates 0
+        m@ == Set::<Key>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<T, S: core::default::Default>[ <HashSet<
@@ -984,7 +1021,8 @@ pub assume_specification<T, S: core::default::Default>[ <HashSet<
 > as core::default::Default>::default ]() -> (m: HashSet<T, S>)
     ensures
         m@ == Set::<T>::empty(),
-    allocates call_allocates(S::default, ())
+    allocates
+        call_allocates(S::default, ()),
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) -> (m: HashSet<
@@ -993,7 +1031,8 @@ pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) 
 >)
     ensures
         m@ == Set::<Key>::empty(),
-    allocates 1
+    allocates
+        1,
 ;
 
 pub assume_specification<Key, S>[ HashSet::<Key, S>::with_hasher ](hash_builder: S) -> (m: HashSet<
@@ -1001,7 +1040,9 @@ pub assume_specification<Key, S>[ HashSet::<Key, S>::with_hasher ](hash_builder:
     S,
 >)
     ensures
-        m@ == Set::<Key>::empty(),  allocates 0
+        m@ == Set::<Key>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<Key, S>[ HashSet::<Key, S>::with_capacity_and_hasher ](
@@ -1010,7 +1051,8 @@ pub assume_specification<Key, S>[ HashSet::<Key, S>::with_capacity_and_hasher ](
 ) -> (m: HashSet<Key, S>)
     ensures
         m@ == Set::<Key>::empty(),
-    allocates 1
+    allocates
+        1,
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1020,7 +1062,8 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
 >::reserve ](m: &mut HashSet<Key, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
-    allocates 1 + hash_ops_cost(&*m)
+    allocates
+        1 + hash_ops_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1033,7 +1076,8 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
             &&& final(m)@ == old(m)@.insert(k)
             &&& result == !old(m)@.contains(k)
         },
-    allocates 1 + hash_ops_cost(&*m)
+    allocates
+        1 + hash_ops_cost(&*m),
 ;
 
 // The specification for `contains` has a parameter `key: &Q`
@@ -1075,7 +1119,8 @@ pub assume_specification<
     ensures
         obeys_key_model::<Key>() && builds_valid_hashers::<S>() ==> result
             == set_contains_borrowed_key(m@, k),
-    allocates hash_ops_cost(m)
+    allocates
+        hash_ops_cost(m),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -1124,7 +1169,8 @@ pub assume_specification<
             Some(v) => sets_borrowed_key_to_key(m@, k, v),
             None => !set_contains_borrowed_key(m@, k),
         },
-    allocates hash_ops_cost(m)
+    allocates
+        hash_ops_cost(m),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -1175,14 +1221,17 @@ pub assume_specification<
             &&& sets_differ_by_borrowed_key(old(m)@, final(m)@, k)
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
-    allocates hash_ops_cost(&*m)
+    allocates
+        hash_ops_cost(&*m),
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
     m: &mut HashSet<Key, S, A>,
 )
     ensures
-        final(m)@ == Set::<Key>::empty(),  allocates 0
+        final(m)@ == Set::<Key>::empty(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, Key, S, A: Allocator>[ HashSet::<Key, S, A>::iter ](
@@ -1195,7 +1244,9 @@ pub assume_specification<'a, Key, S, A: Allocator>[ HashSet::<Key, S, A>::iter ]
             &&& IteratorSpec::remaining(&hash_keys).len() == m@.len()
             &&& into_iter_hash_keys(hash_keys) == IteratorSpec::remaining(&hash_keys).unref()
             &&& IteratorSpec::decrease(&hash_keys) is Some
-        },  allocates 0
+        },
+    allocates
+        0,
 ;
 
 pub broadcast proof fn axiom_hashset_decreases<Key, S, A: Allocator>(m: HashSet<Key, S, A>)
@@ -1338,7 +1389,8 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
             Some(value) => old(m)@.insert(key, value),
             None => old(m)@.remove(key),
         })),
-    allocates 1 + hash_ops_cost(&*m)
+    allocates
+        1 + hash_ops_cost(&*m),
 ;
 
 //// Entry
@@ -1347,7 +1399,9 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ Entry::key ](
     entry: &'b Entry::<'a, K, V, A>,
 ) -> (key: &'b K)
     returns
-        &entry.spec_key(),  allocates 0
+        &entry.spec_key(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
@@ -1360,7 +1414,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
             None => default,
         }),
         entry.final_value() == Some(*final(value)),
-    allocates 0
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
@@ -1371,7 +1426,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
-    allocates 0
+    allocates
+        0,
 ;
 
 //// OccupiedEntry
@@ -1384,7 +1440,9 @@ mod m_occ {
         entry: &'b OccupiedEntry::<'a, K, V, A>,
     ) -> (key: &'b K)
         returns
-            &entry.spec_key(),  allocates 0
+            &entry.spec_key(),
+        allocates
+            0,
     ;
 
 }
@@ -1395,14 +1453,18 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove_entry ](
     ensures
         entry.final_value() == None,
     returns
-        (*entry.key(), entry.value()),  allocates 0
+        (*entry.key(), entry.value()),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get ](
     entry: &'b OccupiedEntry::<'a, K, V, A>,
 ) -> (value: &'b V)
     ensures
-        *value == entry.value(),  allocates 0
+        *value == entry.value(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get_mut ](
@@ -1412,7 +1474,9 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get_mut ](
         *value == old(entry).value(),
         final(entry).key() == old(entry).key(),
         final(entry).value() == *final(value),
-        final(entry).final_value() == old(entry).final_value(),  allocates 0
+        final(entry).final_value() == old(entry).final_value(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::into_mut ](
@@ -1420,7 +1484,9 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::into_mut ](
 ) -> (value: &mut V)
     ensures
         *value == entry.value(),
-        entry.final_value() == Some(*final(value)),  allocates 0
+        entry.final_value() == Some(*final(value)),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::insert ](
@@ -1431,7 +1497,9 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::insert ](
         old_value == old(entry).value(),
         final(entry).key() == old(entry).key(),
         final(entry).value() == value,
-        final(entry).final_value() == old(entry).final_value(),  allocates 0
+        final(entry).final_value() == old(entry).final_value(),
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove ](
@@ -1439,7 +1507,9 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove ](
 ) -> (value: V)
     ensures
         value == entry.value(),
-        entry.final_value() == None,  allocates 0
+        entry.final_value() == None,
+    allocates
+        0,
 ;
 
 //// VacantEntry
@@ -1452,7 +1522,9 @@ mod m_vac {
         entry: &'b VacantEntry::<'a, K, V, A>,
     ) -> (key: &'b K)
         returns
-            &entry.spec_key(),  allocates 0
+            &entry.spec_key(),
+        allocates
+            0,
     ;
 
 }
@@ -1462,7 +1534,9 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::into_key 
 ) -> (key: K)
     ensures
         key == entry.key(),
-        entry.final_value() == None,  allocates 0
+        entry.final_value() == None,
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
@@ -1472,7 +1546,8 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
     ensures
         *value_ref == value,
         entry.final_value() == Some(*final(value_ref)),
-    allocates 0
+    allocates
+        0,
 ;
 
 pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_entry ](
@@ -1483,7 +1558,8 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
-    allocates 0
+    allocates
+        0,
 ;
 
 /// -V alloc-check: the allocations of the user callbacks that one operation on `m` runs: `Hash::hash`
@@ -1528,19 +1604,33 @@ macro_rules! def_hash_free {
 }
 
 def_hash_free!(u8, axiom_hash_free_u8);
+
 def_hash_free!(u16, axiom_hash_free_u16);
+
 def_hash_free!(u32, axiom_hash_free_u32);
+
 def_hash_free!(u64, axiom_hash_free_u64);
+
 def_hash_free!(u128, axiom_hash_free_u128);
+
 def_hash_free!(usize, axiom_hash_free_usize);
+
 def_hash_free!(i8, axiom_hash_free_i8);
+
 def_hash_free!(i16, axiom_hash_free_i16);
+
 def_hash_free!(i32, axiom_hash_free_i32);
+
 def_hash_free!(i64, axiom_hash_free_i64);
+
 def_hash_free!(i128, axiom_hash_free_i128);
+
 def_hash_free!(isize, axiom_hash_free_isize);
+
 def_hash_free!(bool, axiom_hash_free_bool);
+
 def_hash_free!(char, axiom_hash_free_char);
+
 def_hash_free!(alloc::string::String, axiom_hash_free_string);
 
 pub broadcast group group_hash_axioms {

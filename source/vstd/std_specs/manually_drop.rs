@@ -29,12 +29,16 @@ impl<T> View for ManuallyDrop<T> {
 
 pub assume_specification<T>[ ManuallyDrop::<T>::new ](value: T) -> (res: ManuallyDrop<T>)
     ensures
-        res@ == value,  allocates 0
+        res@ == value,
+    allocates
+        0,
 ;
 
 pub assume_specification<T>[ ManuallyDrop::<T>::into_inner ](m: ManuallyDrop<T>) -> T
     returns
-        m@,  allocates 0
+        m@,
+    allocates
+        0,
 ;
 
 pub assume_specification<T: Clone + ?Sized>[ <ManuallyDrop<T> as Clone>::clone ](
@@ -48,7 +52,9 @@ pub assume_specification<T: ?Sized>[ <ManuallyDrop<T> as Deref>::deref ](
     m: &ManuallyDrop<T>,
 ) -> (res: &T)
     returns
-        m.view_ref(),  allocates 0
+        m.view_ref(),
+    allocates
+        0,
 ;
 
 pub broadcast axiom fn axiom_manually_drop_has_resolved<T: ?Sized>(m: &ManuallyDrop<T>)

@@ -7,7 +7,7 @@ use core::ops::{
     Bound, Range, RangeBounds, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
-use super::iter::{iter_next_cost, iter_next_back_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost};
 verus! {
 
 #[verifier::external_type_specification]
@@ -127,10 +127,16 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
     i: &U,
 ) -> (ret: bool) where Idx: PartialOrd<U>, U: ?Sized + PartialOrd<Idx>
     ensures
-        <Range::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret == r.contains_spec(i),
-    // rustc 1.99.1 `RangeBounds::contains`: `start <= item && item < end`
-    allocates call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i))
-        + call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r.end))
+        <Range::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret == r.contains_spec(
+            i,
+        ),
+// rustc 1.99.1 `RangeBounds::contains`: `start <= item && item < end`
+
+    allocates
+        call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocates(
+            <U as PartialOrd<Idx>>::lt,
+            (i, &r.end),
+        ),
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contains ](
@@ -140,9 +146,13 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
     ensures
         <RangeInclusive::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret
             == r.contains_spec(i),
-    // `start <= item && item <= end`
-    allocates call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i))
-        + call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+// `start <= item && item <= end`
+
+    allocates
+        call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + call_allocates(
+            <U as PartialOrd<Idx>>::le,
+            (i, &r@.end),
+        ),
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty ](
@@ -150,15 +160,21 @@ pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty 
 ) -> (res: bool) where Idx: PartialOrd<Idx>
     ensures
         <Idx as PartialOrdSpec<Idx>>::obeys_partial_cmp_spec() ==> res
-            == spec_range_inclusive_is_empty(r),
-    // `self.exhausted || !(self.start <= self.end)`
-    allocates call_allocates(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end))
+            == spec_range_inclusive_is_empty(
+            r,
+        ),
+// `self.exhausted || !(self.start <= self.end)`
+
+    allocates
+        call_allocates(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end)),
 ;
 
 pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx) -> (ret:
     core::ops::RangeInclusive<Idx>)
     ensures
-        ret@ == (RangeInclusiveView { start, end, exhausted: false }),  allocates 0
+        ret@ == (RangeInclusiveView { start, end, exhausted: false }),
+    allocates
+        0,
 ;
 
 pub broadcast axiom fn axiom_next_cost_range<A: core::iter::Step>(i: &Range<A>)
@@ -249,9 +265,13 @@ pub assume_specification<A: core::iter::Step>[ <Range<A> as Iterator>::next ](
     range: &mut Range<A>,
 ) -> (r: Option<A>)
     ensures
-        obeys_range_step_spec::<A>() ==> (*final(range), r) == spec_range_next(*old(range)),
-    // (`Step` is implemented only by std for the primitive integers and `char`)
-    allocates 0
+        obeys_range_step_spec::<A>() ==> (*final(range), r) == spec_range_next(
+            *old(range),
+        ),
+// (`Step` is implemented only by std for the primitive integers and `char`)
+
+    allocates
+        0,
 ;
 
 #[verifier::external_type_specification]
@@ -287,56 +307,72 @@ pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::start_bound ](
     range: &'s Range<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.start),  allocates 0
+        result == Bound::Included(&range.start),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::end_bound ](
     range: &'s Range<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Excluded(&range.end),  allocates 0
+        result == Bound::Excluded(&range.end),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::start_bound ](
     range: &'s RangeFull,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,  allocates 0
+        result == Bound::Unbounded,
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::end_bound ](
     range: &'s RangeFull,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,  allocates 0
+        result == Bound::Unbounded,
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeFrom<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.start),  allocates 0
+        result == Bound::Included(&range.start),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeFrom<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,  allocates 0
+        result == Bound::Unbounded,
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeTo<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,  allocates 0
+        result == Bound::Unbounded,
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeTo<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Excluded(&range.end),  allocates 0
+        result == Bound::Excluded(&range.end),
+    allocates
+        0,
 ;
 
 // Shared by `start_bound()`/`end_bound()` and their `RangeBoundsSpec` models.
@@ -360,42 +396,54 @@ pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::start_bo
     range: &'s RangeInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == spec_range_inclusive_start_bound(range),  allocates 0
+        result == spec_range_inclusive_start_bound(range),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == spec_range_inclusive_end_bound(range),  allocates 0
+        result == spec_range_inclusive_end_bound(range),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeToInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,  allocates 0
+        result == Bound::Unbounded,
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeToInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.end),  allocates 0
+        result == Bound::Included(&range.end),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::start_bound ](
     range: &'s (Bound<T>, Bound<T>),
 ) -> (result: Bound<&'s T>)
     ensures
-        result == bound_as_ref(&range.0),  allocates 0
+        result == bound_as_ref(&range.0),
+    allocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::end_bound ](
     range: &'s (Bound<T>, Bound<T>),
 ) -> (result: Bound<&'s T>)
     ensures
-        result == bound_as_ref(&range.1),  allocates 0
+        result == bound_as_ref(&range.1),
+    allocates
+        0,
 ;
 
 /// Specification for [`core::ops::RangeBounds`], exposing spec-mode models

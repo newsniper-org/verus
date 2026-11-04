@@ -24,7 +24,9 @@ pub assume_specification<T, E>[ Result::<T, E>::branch ](result: Result<T, E>) -
             Ok(v) => ControlFlow::Continue(v),
             Err(e) => ControlFlow::Break(Err(e)),
         },
-    no_unwind    allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 pub assume_specification<T>[ Option::<T>::branch ](option: Option<T>) -> (cf: ControlFlow<
@@ -36,7 +38,9 @@ pub assume_specification<T>[ Option::<T>::branch ](option: Option<T>) -> (cf: Co
             Some(v) => ControlFlow::Continue(v),
             None => ControlFlow::Break(None),
         },
-    no_unwind    allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 pub assume_specification<T>[ Option::<T>::from_residual ](option: Option<Infallible>) -> (option2:
@@ -44,7 +48,9 @@ pub assume_specification<T>[ Option::<T>::from_residual ](option: Option<Infalli
     ensures
         option.is_none(),
         option2.is_none(),
-    no_unwind    allocates 0
+    no_unwind
+    allocates
+        0,
 ;
 
 pub uninterp spec fn spec_from<S, T>(value: T, ret: S) -> bool;
@@ -64,11 +70,13 @@ pub assume_specification<T, E, F: From<E>>[ Result::<T, F>::from_residual ](
             (Err(e), Err(e2)) => spec_from::<F, E>(e, e2) && call_ensures(F::from, (e,), e2),
             _ => false,
         },
-    // rustc 1.99.1: `Err(From::from(e))`
-    allocates match result {
-        Err(e) => call_allocates(F::from, (e,)),
-        _ => 0,
-    },
+// rustc 1.99.1: `Err(From::from(e))`
+
+    allocates
+        match result {
+            Err(e) => call_allocates(F::from, (e,)),
+            _ => 0,
+        },
 ;
 
 pub broadcast group group_control_flow_axioms {

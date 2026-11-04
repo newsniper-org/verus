@@ -8,7 +8,9 @@ verus! {
 #[verifier::allow_in_spec]
 pub assume_specification[ char::len_utf8 ](c: char) -> usize
     returns
-        encode_scalar(c as u32).len() as usize, allocates 0
+        encode_scalar(c as u32).len() as usize,
+    allocates
+        0,
 ;
 
 /// Unicode's `White_Space` property:
@@ -25,7 +27,9 @@ pub open spec fn is_white_space(c: char) -> bool {
 #[verifier::allow_in_spec]
 pub assume_specification[ char::is_whitespace ](c: char) -> (res: bool)
     returns
-        is_white_space(c), allocates 0
+        is_white_space(c),
+    allocates
+        0,
 ;
 
 } // verus!

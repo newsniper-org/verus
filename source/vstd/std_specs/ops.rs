@@ -753,52 +753,72 @@ pub uninterp spec fn div_ensures<A>(x: A, y: A, o: A) -> bool;
 
 pub assume_specification[ <f32 as core::ops::Neg>::neg ](x: f32) -> (o: f32)
     ensures
-        neg_ensures::<f32>(x, o),  allocates 0
+        neg_ensures::<f32>(x, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f32 as core::ops::Add>::add ](x: f32, y: f32) -> (o: f32)
     ensures
-        add_ensures::<f32>(x, y, o),  allocates 0
+        add_ensures::<f32>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f32 as core::ops::Sub>::sub ](x: f32, y: f32) -> (o: f32)
     ensures
-        sub_ensures::<f32>(x, y, o),  allocates 0
+        sub_ensures::<f32>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f32 as core::ops::Mul>::mul ](x: f32, y: f32) -> (o: f32)
     ensures
-        mul_ensures::<f32>(x, y, o),  allocates 0
+        mul_ensures::<f32>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f32 as core::ops::Div>::div ](x: f32, y: f32) -> (o: f32)
     ensures
-        div_ensures::<f32>(x, y, o),  allocates 0
+        div_ensures::<f32>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f64 as core::ops::Neg>::neg ](x: f64) -> (o: f64)
     ensures
-        neg_ensures::<f64>(x, o),  allocates 0
+        neg_ensures::<f64>(x, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f64 as core::ops::Add>::add ](x: f64, y: f64) -> (o: f64)
     ensures
-        add_ensures::<f64>(x, y, o),  allocates 0
+        add_ensures::<f64>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f64 as core::ops::Sub>::sub ](x: f64, y: f64) -> (o: f64)
     ensures
-        sub_ensures::<f64>(x, y, o),  allocates 0
+        sub_ensures::<f64>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f64 as core::ops::Mul>::mul ](x: f64, y: f64) -> (o: f64)
     ensures
-        mul_ensures::<f64>(x, y, o),  allocates 0
+        mul_ensures::<f64>(x, y, o),
+    allocates
+        0,
 ;
 
 pub assume_specification[ <f64 as core::ops::Div>::div ](x: f64, y: f64) -> (o: f64)
     ensures
-        div_ensures::<f64>(x, y, o),  allocates 0
+        div_ensures::<f64>(x, y, o),
+    allocates
+        0,
 ;
 
 } // verus!
