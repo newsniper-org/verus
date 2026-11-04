@@ -717,6 +717,7 @@ pub fn inherit_default_bodies(
                     atomic_update: None,
                     mask_spec: None,
                     unwind_spec: None,
+                    allocates: None,
                     item_kind: default_function.x.item_kind,
                     attrs: Arc::new(crate::ast::FunctionAttrsX::default()),
                     body: None,
@@ -1707,6 +1708,7 @@ fn check_dyn_spec(f: &Function) -> Result<(), ()> {
         mask_spec,
         atomic_update,
         unwind_spec,
+        allocates,
         item_kind: _,
         attrs: _,
         body: _,
@@ -1730,6 +1732,7 @@ fn check_dyn_spec(f: &Function) -> Result<(), ()> {
     if let Some(unwind_spec) = unwind_spec {
         visitor.visit_unwind_spec(unwind_spec)?;
     }
+    visitor.visit_opt_expr(allocates)?;
     Ok(())
 }
 

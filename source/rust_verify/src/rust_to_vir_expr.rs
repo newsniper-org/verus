@@ -386,6 +386,7 @@ pub(crate) fn add_param_decls<'tcx>(
         invariant_mask,
         atomic_update,
         unwind_spec,
+        allocates,
         invariant_except_break: _,
         invariant: _,
         atomic_call_loop: _,
@@ -412,6 +413,7 @@ pub(crate) fn add_param_decls<'tcx>(
     *returns = returns.as_ref().map(wrap);
     *decrease = wrap_all(decrease);
     *decrease_when = decrease_when.as_ref().map(wrap);
+    *allocates = allocates.as_ref().map(wrap);
     *invariant_mask = invariant_mask.as_ref().map(|mask| match mask {
         MaskSpec::InvariantOpens(span, es) => MaskSpec::InvariantOpens(span.clone(), wrap_all(es)),
         MaskSpec::InvariantOpensExcept(span, es) => {

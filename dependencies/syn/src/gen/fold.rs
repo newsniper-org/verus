@@ -1062,6 +1062,12 @@ pub trait Fold {
     fn fold_signature(&mut self, i: crate::Signature) -> crate::Signature {
         fold_signature(self, i)
     }
+    fn fold_signature_allocates(
+        &mut self,
+        i: crate::SignatureAllocates,
+    ) -> crate::SignatureAllocates {
+        fold_signature_allocates(self, i)
+    }
     fn fold_signature_decreases(
         &mut self,
         i: crate::SignatureDecreases,
@@ -1479,6 +1485,7 @@ where
         returns: (node.returns).map(|it| f.fold_returns(it)),
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
+        allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
         semi: node.semi,
     }
 }
@@ -4571,6 +4578,18 @@ where
         spec: f.fold_signature_spec(node.spec),
     }
 }
+pub fn fold_signature_allocates<F>(
+    f: &mut F,
+    node: crate::SignatureAllocates,
+) -> crate::SignatureAllocates
+where
+    F: Fold + ?Sized,
+{
+    crate::SignatureAllocates {
+        token: node.token,
+        exprs: f.fold_specification(node.exprs),
+    }
+}
 pub fn fold_signature_decreases<F>(
     f: &mut F,
     node: crate::SignatureDecreases,
@@ -4615,6 +4634,7 @@ where
         decreases: (node.decreases).map(|it| f.fold_signature_decreases(it)),
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
+        allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
         with: (node.with).map(|it| f.fold_with_spec_on_fn(it)),
     }
 }

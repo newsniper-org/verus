@@ -327,6 +327,20 @@ impl Debug for Lite<syn::AssumeSpecification> {
             }
             formatter.field("unwind", Print::ref_cast(val));
         }
+        if let Some(val) = &self.value.allocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureAllocates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("allocates", Print::ref_cast(val));
+        }
         formatter.finish()
     }
 }
@@ -6146,6 +6160,13 @@ impl Debug for Lite<syn::Signature> {
         formatter.finish()
     }
 }
+impl Debug for Lite<syn::SignatureAllocates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let mut formatter = formatter.debug_struct("SignatureAllocates");
+        formatter.field("exprs", Lite(&self.value.exprs));
+        formatter.finish()
+    }
+}
 impl Debug for Lite<syn::SignatureDecreases> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         let mut formatter = formatter.debug_struct("SignatureDecreases");
@@ -6333,6 +6354,20 @@ impl Debug for Lite<syn::SignatureSpec> {
                 }
             }
             formatter.field("unwind", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.allocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureAllocates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("allocates", Print::ref_cast(val));
         }
         if let Some(val) = &self.value.with {
             #[derive(RefCast)]
@@ -7582,6 +7617,11 @@ impl Debug for Lite<syn::WithSpecOnFn> {
 impl Debug for Lite<syn::token::Abstract> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("Token![abstract]")
+    }
+}
+impl Debug for Lite<syn::token::Allocates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Token![allocates]")
     }
 }
 impl Debug for Lite<syn::token::And> {

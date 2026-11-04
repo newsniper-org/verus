@@ -230,6 +230,14 @@ ast_struct! {
     }
 }
 
+ast_struct! {
+    /// `allocates e`: an upper bound on the number of allocations an exec function performs.
+    pub struct SignatureAllocates {
+        pub token: Token![allocates],
+        pub exprs: Specification,
+    }
+}
+
 ast_enum_of_structs! {
     pub enum InvariantNameSet {
         Any(InvariantNameSetAny),
@@ -305,6 +313,7 @@ ast_struct! {
         pub decreases: Option<SignatureDecreases>,
         pub invariants: Option<SignatureInvariants>,
         pub unwind: Option<SignatureUnwind>,
+        pub allocates: Option<SignatureAllocates>,
         pub with: Option<WithSpecOnFn>,
     }
 }
@@ -321,6 +330,7 @@ impl SignatureSpec {
         self.decreases = None;
         self.invariants = None;
         self.unwind = None;
+        self.allocates = None;
     }
 }
 
@@ -421,6 +431,7 @@ ast_struct! {
         pub returns: Option<Returns>,
         pub invariants: Option<SignatureInvariants>,
         pub unwind: Option<SignatureUnwind>,
+        pub allocates: Option<SignatureAllocates>,
         pub semi: Token![;],
     }
 }
@@ -917,6 +928,7 @@ pub mod parsing {
                 || input.peek(Token![via])
                 || input.peek(Token![when])
                 || input.peek(Token![no_unwind])
+                || input.peek(Token![allocates])
                 || input.peek(Token![opens_invariants])
                 || input.peek(Token![outer_mask])
                 || input.peek(Token![inner_mask])
@@ -933,6 +945,7 @@ pub mod parsing {
                 || input.peek2(Token![via])
                 || input.peek2(Token![when])
                 || input.peek2(Token![no_unwind])
+                || input.peek2(Token![allocates])
                 || input.peek2(Token![opens_invariants])
                 || input.peek2(Token![outer_mask])
                 || input.peek2(Token![inner_mask])
@@ -1343,6 +1356,28 @@ pub mod parsing {
     }
 
     #[cfg_attr(doc_cfg, doc(cfg(feature = "parsing")))]
+    impl Parse for SignatureAllocates {
+        fn parse(input: ParseStream) -> Result<Self> {
+            let token = input.parse()?;
+            Ok(SignatureAllocates {
+                token,
+                exprs: Specification::parse_in(Context::Item, input)?,
+            })
+        }
+    }
+
+    #[cfg_attr(doc_cfg, doc(cfg(feature = "parsing")))]
+    impl Parse for Option<SignatureAllocates> {
+        fn parse(input: ParseStream) -> Result<Self> {
+            if input.peek(Token![allocates]) {
+                input.parse().map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[cfg_attr(doc_cfg, doc(cfg(feature = "parsing")))]
     impl Parse for Option<Returns> {
         fn parse(input: ParseStream) -> Result<Self> {
             if input.peek(Token![returns]) {
@@ -1422,6 +1457,7 @@ pub mod parsing {
             let decreases: Option<SignatureDecreases> = input.parse()?;
             let invariants: Option<SignatureInvariants> = input.parse()?;
             let unwind: Option<SignatureUnwind> = input.parse()?;
+            let allocates: Option<SignatureAllocates> = input.parse()?;
 
             Ok(SignatureSpec {
                 prover,
@@ -1434,6 +1470,7 @@ pub mod parsing {
                 decreases,
                 invariants,
                 unwind,
+                allocates,
                 with,
             })
         }
@@ -1728,6 +1765,7 @@ pub mod parsing {
             let returns: Option<Returns> = input.parse()?;
             let invariants: Option<SignatureInvariants> = input.parse()?;
             let unwind: Option<SignatureUnwind> = input.parse()?;
+            let allocates: Option<SignatureAllocates> = input.parse()?;
 
             let semi = input.parse()?;
 
@@ -1747,6 +1785,7 @@ pub mod parsing {
                 returns,
                 invariants,
                 unwind,
+                allocates,
                 semi,
             })
         }
@@ -2276,6 +2315,14 @@ mod printing {
     }
 
     #[cfg_attr(doc_cfg, doc(cfg(feature = "printing")))]
+    impl ToTokens for SignatureAllocates {
+        fn to_tokens(&self, tokens: &mut TokenStream) {
+            self.token.to_tokens(tokens);
+            self.exprs.to_tokens(tokens);
+        }
+    }
+
+    #[cfg_attr(doc_cfg, doc(cfg(feature = "printing")))]
     impl ToTokens for InvariantExceptBreak {
         fn to_tokens(&self, tokens: &mut TokenStream) {
             self.token.to_tokens(tokens);
@@ -2395,6 +2442,7 @@ mod printing {
             self.decreases.to_tokens(tokens);
             self.invariants.to_tokens(tokens);
             self.unwind.to_tokens(tokens);
+            self.allocates.to_tokens(tokens);
         }
     }
 
@@ -2752,6 +2800,7 @@ mod printing {
             self.returns.to_tokens(tokens);
             self.invariants.to_tokens(tokens);
             self.unwind.to_tokens(tokens);
+            self.allocates.to_tokens(tokens);
             self.semi.to_tokens(tokens);
         }
     }
@@ -3181,6 +3230,7 @@ impl parse::Parse for WithSpecOnFn {
                 || input.peek(Token![via])
                 || input.peek(Token![when])
                 || input.peek(Token![no_unwind])
+                || input.peek(Token![allocates])
                 || input.peek(Token![opens_invariants])
         };
 

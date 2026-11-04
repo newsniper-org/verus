@@ -98,7 +98,7 @@ impl PartialEq for crate::AssumeSpecification {
             && self.ensures == other.ensures
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.invariants == other.invariants
-            && self.unwind == other.unwind
+            && self.unwind == other.unwind && self.allocates == other.allocates
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
@@ -2537,6 +2537,14 @@ impl PartialEq for crate::Signature {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl Eq for crate::SignatureAllocates {}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl PartialEq for crate::SignatureAllocates {
+    fn eq(&self, other: &Self) -> bool {
+        self.exprs == other.exprs
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl Eq for crate::SignatureDecreases {}
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl PartialEq for crate::SignatureDecreases {
@@ -2564,7 +2572,7 @@ impl PartialEq for crate::SignatureSpec {
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.decreases == other.decreases
             && self.invariants == other.invariants && self.unwind == other.unwind
-            && self.with == other.with
+            && self.allocates == other.allocates && self.with == other.with
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]

@@ -70,6 +70,7 @@ pub(crate) fn fn_call_to_vir<'tcx>(
                         | SpecItem::OpensInvariantMask
                         | SpecItem::NoUnwind
                         | SpecItem::NoUnwindWhen
+                        | SpecItem::Allocates
                         | SpecItem::Decreases
                 ) | VerusItem::Directive(DirectiveItem::ExtraDependency)
             )
@@ -645,7 +646,8 @@ fn verus_item_to_vir<'tcx, 'a>(
                     | SpecItem::InvMaskListCompl
                     | SpecItem::InvMaskSet
                     | SpecItem::NoUnwind
-                    | SpecItem::NoUnwindWhen => (true, false),
+                    | SpecItem::NoUnwindWhen
+                    | SpecItem::Allocates => (true, false),
 
                     SpecItem::Ensures | SpecItem::Returns => (true, true),
 
@@ -902,6 +904,13 @@ fn verus_item_to_vir<'tcx, 'a>(
                     let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
                     let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
                     let header = Arc::new(HeaderExprX::NoUnwindWhen(arg));
+                    mk_expr(ExprX::Header(header))
+                }
+                SpecItem::Allocates => {
+                    record_spec_fn_pure_args_only(bctx, expr);
+                    let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
+                    let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
+                    let header = Arc::new(HeaderExprX::Allocates(arg));
                     mk_expr(ExprX::Header(header))
                 }
                 SpecItem::Admit => {

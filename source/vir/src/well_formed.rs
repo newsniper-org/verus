@@ -1292,6 +1292,12 @@ fn check_function_inner(
     if function.x.mask_spec.is_some() && function.x.mode == Mode::Spec {
         return Err(error(&function.span, "invariants cannot be opened in spec functions"));
     }
+    if function.x.allocates.is_some() && function.x.mode != Mode::Exec {
+        return Err(error(
+            &function.span,
+            "an `allocates` specification can only be given on exec functions",
+        ));
+    }
     if function.x.unwind_spec.is_some() && function.x.mode != Mode::Exec {
         return Err(error(
             &function.span,

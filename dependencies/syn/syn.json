@@ -1,5 +1,5 @@
 {
-  "version": "0.0.0-2026-09-06-0133",
+  "version": "0.0.0-2026-11-01-0251",
   "types": [
     {
       "ident": "Abi",
@@ -361,6 +361,11 @@
         "unwind": {
           "option": {
             "syn": "SignatureUnwind"
+          }
+        },
+        "allocates": {
+          "option": {
+            "syn": "SignatureAllocates"
           }
         },
         "semi": {
@@ -6546,6 +6551,20 @@
       }
     },
     {
+      "ident": "SignatureAllocates",
+      "features": {
+        "any": []
+      },
+      "fields": {
+        "token": {
+          "token": "Allocates"
+        },
+        "exprs": {
+          "syn": "Specification"
+        }
+      }
+    },
+    {
       "ident": "SignatureDecreases",
       "features": {
         "any": []
@@ -6653,6 +6672,11 @@
         "unwind": {
           "option": {
             "syn": "SignatureUnwind"
+          }
+        },
+        "allocates": {
+          "option": {
+            "syn": "SignatureAllocates"
           }
         },
         "with": {
@@ -8043,6 +8067,7 @@
   ],
   "tokens": {
     "Abstract": "abstract",
+    "Allocates": "allocates",
     "And": "&",
     "AndAnd": "&&",
     "AndEq": "&=",

@@ -84,6 +84,7 @@ pub struct Header {
     pub atomic_update: Option<Expr>,
     pub atomic_call_loop: bool,
     pub unwind_spec: Option<UnwindSpec>,
+    pub allocates: Option<Expr>,
     pub extra_dependencies: Vec<Fun>,
     pub open_visibility_qualifier: Option<Visibility>,
 }
@@ -105,6 +106,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
     let mut atomic_update: Option<Expr> = None;
     let mut atomic_call_loop = false;
     let mut unwind_spec: Option<UnwindSpec> = None;
+    let mut allocates: Option<Expr> = None;
     let mut open_visibility_qualifier: Option<Visibility> = None;
     let mut n = 0;
     let mut unwrap_parameter_allowed = true;
@@ -255,6 +257,12 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                             _ => unreachable!(),
                         };
                     }
+                    HeaderExprX::Allocates(expr) => {
+                        if allocates.is_some() {
+                            return Err(error(&stmt.span, "only one `allocates` spec allowed"));
+                        }
+                        allocates = Some(expr.clone());
+                    }
                     HeaderExprX::OpenVisibilityQualifier(v) => {
                         match open_visibility_qualifier {
                             None => {}
@@ -308,6 +316,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
         atomic_update,
         atomic_call_loop,
         unwind_spec,
+        allocates,
         extra_dependencies,
         open_visibility_qualifier,
     })

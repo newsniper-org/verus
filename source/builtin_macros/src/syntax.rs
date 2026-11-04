@@ -39,9 +39,10 @@ use verus_syn::{
     ItemConst, ItemEnum, ItemFn, ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemUnion,
     Lit, Local, MatchesOpExpr, MatchesOpToken, Meta, MetaList, ModeSpec, ModeSpecChecked, Pat,
     PatIdent, PatType, Path, PathArguments, Publish, Receiver, Recommends, Requires, ReturnType,
-    Returns, Signature, SignatureDecreases, SignatureInvariants, SignatureSpec, SignatureSpecAttr,
-    SignatureUnwind, Stmt, Token, TraitItem, TraitItemFn, Type, TypeFnProof, TypeFnSpec, TypePath,
-    TypeReference, UnOp, Visibility, braced, bracketed, parenthesized, parse_macro_input,
+    Returns, Signature, SignatureAllocates, SignatureDecreases, SignatureInvariants, SignatureSpec,
+    SignatureSpecAttr, SignatureUnwind, Stmt, Token, TraitItem, TraitItemFn, Type, TypeFnProof,
+    TypeFnSpec, TypePath, TypeReference, UnOp, Visibility, braced, bracketed, parenthesized,
+    parse_macro_input,
 };
 
 pub(crate) const VERUS_SPEC: &str = "VERUS_SPEC__";
@@ -990,6 +991,7 @@ impl Visitor {
         let decreases = self.take_ghost(&mut spec.decreases);
         let opens_invariants = self.take_ghost(&mut spec.invariants);
         let unwind = self.take_ghost(&mut spec.unwind);
+        let allocates = self.take_ghost(&mut spec.allocates);
         debug_assert!(spec.atomic_spec.is_none());
 
         let (self_token_op, args) = inputs;
@@ -1275,6 +1277,29 @@ impl Visitor {
                 spec_stmts.push(Stmt::Expr(
                     Expr::Verbatim(
                         quote_spanned_builtin!(verus_builtin, token.span() => #verus_builtin::no_unwind()),
+                    ),
+                    Some(Semi { spans: [token.span] }),
+                ));
+            }
+        }
+
+        if let Some(SignatureAllocates { token, mut exprs }) = allocates {
+            if exprs.exprs.len() != 1 {
+                let err = "allocates takes exactly one expression, e.g. `allocates n`";
+                let expr =
+                    Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err)));
+                spec_stmts.push(Stmt::Expr(expr, Some(Semi { spans: [token.span] })));
+            } else {
+                let expr = &mut exprs.exprs[0];
+                // Unsuffixed integer literals get type int (as inside arithmetic), so that
+                // `allocates 1` type-checks; other integer expressions keep their own type.
+                let inside_arith = self.inside_arith;
+                self.inside_arith = InsideArith::Int;
+                self.visit_expr_mut(expr);
+                self.inside_arith = inside_arith;
+                spec_stmts.push(Stmt::Expr(
+                    Expr::Verbatim(
+                        quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::allocates(#expr)),
                     ),
                     Some(Semi { spans: [token.span] }),
                 ));
@@ -2209,6 +2234,7 @@ impl Visitor {
             returns,
             invariants,
             unwind,
+            allocates,
             semi,
         } = assume_specification.clone();
         let ex_ident = get_ex_ident_mangle_path(&qself, &path);
@@ -2244,6 +2270,7 @@ impl Visitor {
                 decreases: None,
                 invariants: invariants,
                 unwind: unwind,
+                allocates: allocates,
                 with: None,
             },
         };

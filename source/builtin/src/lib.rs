@@ -162,6 +162,14 @@ pub fn no_unwind_when(_b: bool) {
     unimplemented!();
 }
 
+// Can only appear at beginning of exec function body: an upper bound on the number of allocations
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::allocates"]
+#[verifier::proof]
+pub fn allocates<A: Integer>(_a: A) {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::reveal_hide"]
 #[verifier::proof]

@@ -952,6 +952,9 @@ pub trait Visit<'ast> {
     fn visit_signature(&mut self, i: &'ast crate::Signature) {
         visit_signature(self, i);
     }
+    fn visit_signature_allocates(&mut self, i: &'ast crate::SignatureAllocates) {
+        visit_signature_allocates(self, i);
+    }
     fn visit_signature_decreases(&mut self, i: &'ast crate::SignatureDecreases) {
         visit_signature_decreases(self, i);
     }
@@ -1362,6 +1365,9 @@ where
     }
     if let Some(it) = &node.unwind {
         v.visit_signature_unwind(it);
+    }
+    if let Some(it) = &node.allocates {
+        v.visit_signature_allocates(it);
     }
     skip!(node.semi);
 }
@@ -4608,6 +4614,16 @@ where
     v.visit_return_type(&node.output);
     v.visit_signature_spec(&node.spec);
 }
+pub fn visit_signature_allocates<'ast, V>(
+    v: &mut V,
+    node: &'ast crate::SignatureAllocates,
+)
+where
+    V: Visit<'ast> + ?Sized,
+{
+    skip!(node.token);
+    v.visit_specification(&node.exprs);
+}
 pub fn visit_signature_decreases<'ast, V>(
     v: &mut V,
     node: &'ast crate::SignatureDecreases,
@@ -4669,6 +4685,9 @@ where
     }
     if let Some(it) = &node.unwind {
         v.visit_signature_unwind(it);
+    }
+    if let Some(it) = &node.allocates {
+        v.visit_signature_allocates(it);
     }
     if let Some(it) = &node.with {
         v.visit_with_spec_on_fn(it);

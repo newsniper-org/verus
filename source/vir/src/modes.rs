@@ -3929,6 +3929,19 @@ fn check_function_inner(
             )?;
         }
     }
+    if let Some(expr) = &function.x.allocates {
+        let mut alloc_typing = fun_typing.push_block_ghostness(Ghost::Ghost);
+        let mut alloc_typing = alloc_typing.push_in_pure(true);
+        check_expr_has_mode(
+            ctxt,
+            record,
+            &mut alloc_typing,
+            Mode::Spec,
+            expr,
+            Mode::Spec,
+            &Proph::No,
+        )?;
+    }
     match &function.x.unwind_spec {
         None | Some(UnwindSpec::MayUnwind | UnwindSpec::NoUnwind) => {}
         Some(UnwindSpec::NoUnwindWhen(expr)) => {

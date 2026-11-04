@@ -857,6 +857,8 @@ pub enum HeaderExprX {
     NoUnwind,
     /// This function will not unwind if the given condition holds (function of arguments)
     NoUnwindWhen(Expr),
+    /// `allocates e`: upper bound on the number of allocations (exec functions)
+    Allocates(Expr),
     /// The visibility used in, e.g., `open(crate)`
     OpenVisibilityQualifier(Visibility),
 }
@@ -1772,6 +1774,9 @@ pub struct FunctionX {
     pub atomic_update: Option<Expr>,
     /// UnwindSpec that specifies if the function is allowed to unwind
     pub unwind_spec: Option<UnwindSpec>,
+    /// `allocates e`: upper bound on the number of allocation-source calls performed by an exec
+    /// function on a normal return (checked only when allocation checking is enabled)
+    pub allocates: Option<Expr>,
     /// Allows the item to be a const declaration or static
     pub item_kind: ItemKind,
     /// Various attributes

@@ -1,4 +1,5 @@
 a.struct[title="struct syn::token::Abstract"],
+a.struct[title="struct syn::token::Allocates"],
 a.struct[title="struct syn::token::And"],
 a.struct[title="struct syn::token::AndAnd"],
 a.struct[title="struct syn::token::AndEq"],
@@ -167,6 +168,7 @@ a.struct[title="struct syn::token::Yield"] {
 }
 
 a.struct[title="struct syn::token::Abstract"]::before,
+a.struct[title="struct syn::token::Allocates"]::before,
 a.struct[title="struct syn::token::And"]::before,
 a.struct[title="struct syn::token::AndAnd"]::before,
 a.struct[title="struct syn::token::AndEq"]::before,
@@ -336,6 +338,10 @@ a.struct[title="struct syn::token::Yield"]::before {
 
 a.struct[title="struct syn::token::Abstract"]::before {
 	content: "Token![abstract]";
+}
+
+a.struct[title="struct syn::token::Allocates"]::before {
+	content: "Token![allocates]";
 }
 
 a.struct[title="struct syn::token::And"]::before {
@@ -1081,6 +1087,7 @@ a.struct[title="struct syn::token::Shr"]::after {
 }
 
 a.struct[title="struct syn::token::Abstract"]::after,
+a.struct[title="struct syn::token::Allocates"]::after,
 a.struct[title="struct syn::token::As"]::after,
 a.struct[title="struct syn::token::Assert"]::after,
 a.struct[title="struct syn::token::Assume"]::after,

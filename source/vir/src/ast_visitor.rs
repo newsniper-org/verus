@@ -1202,6 +1202,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
             mask_spec,
             atomic_update,
             unwind_spec,
+            allocates,
             item_kind,
             attrs,
             body,
@@ -1239,6 +1240,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
         let mask_spec = R::map_opt(mask_spec, &mut |ms| self.visit_mask_spec(ms))?;
         let atomic_update = R::map_opt(atomic_update, &mut |exp| self.visit_expr(exp))?;
         let unwind_spec = R::map_opt(unwind_spec, &mut |us| self.visit_unwind_spec(us))?;
+        let allocates = self.visit_opt_expr(allocates)?;
         let body = self.visit_opt_expr(body)?;
         let return_opaque_type_eqs =
             R::map_vec(return_opaque_type_eqs, &mut |(opaque, hidden)| {
@@ -1274,6 +1276,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 mask_spec: R::get_opt(mask_spec),
                 atomic_update: R::get_opt(atomic_update),
                 unwind_spec: R::get_opt(unwind_spec),
+                allocates: R::get_opt(allocates),
                 item_kind: item_kind.clone(),
                 attrs: attrs.clone(),
                 body: R::get_opt(body),
