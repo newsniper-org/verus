@@ -725,3 +725,87 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 2)
 }
+
+// A trait method's own `allocates` bound bounds every impl (and an impl's own bound must be
+// within it), so calls through `dyn` or an unresolved type parameter get the trait's bound.
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_trait_declaration_bound ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_body]
+        fn mk() -> Box<u8>
+            allocates 1
+        {
+            Box::new(1)
+        }
+
+        pub trait Tr {
+            fn m(&self) -> u8
+                allocates 1; // FAILS
+        }
+
+        pub struct A;
+
+        impl Tr for A {
+            fn m(&self) -> u8
+                allocates 0
+            {
+                1
+            }
+        }
+
+        pub struct B;
+
+        impl Tr for B {
+            fn m(&self) -> u8 {
+                let _b = mk();
+                2
+            }
+        }
+
+        pub struct C;
+
+        impl Tr for C {
+            fn m(&self) -> u8
+                allocates 2
+            {
+                let _b = mk();
+                3
+            }
+        }
+
+        pub struct D;
+
+        impl Tr for D {
+            fn m(&self) -> u8 {
+                let _a = mk();
+                let _b = mk();
+                4
+            }
+        }
+
+        fn call_dyn(t: &dyn Tr) -> u8
+            allocates 1
+        {
+            t.m()
+        }
+
+        fn call_gen<T: Tr>(t: &T) -> u8
+            allocates 1
+        {
+            t.m()
+        }
+
+        fn call_a(a: &A) -> u8
+            allocates 0
+        {
+            a.m()
+        }
+
+        fn call_dyn_wrong(t: &dyn Tr) -> u8
+            allocates 0 // FAILS
+        {
+            t.m() // FAILS
+        }
+    } => Err(err) => assert_fails(err, 3)
+}

@@ -960,38 +960,66 @@ pub fn func_def_to_sst(
 
     // `-V alloc-check`: count allocation-source calls in a ghost local, starting at 0, and check
     // `count <= allocates-bound` (bound evaluated in the pre-state) at every normal return.
+    // A trait method impl must also stay within the trait method's own bound, if it has one,
+    // and its own bound (if any) must be within the trait's: the FnDef axioms state
+    // `call_allocates == impl bound` per impl and `call_allocates <= trait bound` for the trait.
     let mut alloc_init: Option<crate::sst::Stm> = None;
-    if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
-        if let Some(alloc_expr) = &function.x.allocates {
-            crate::alloc_check::check_drop_glue(ctx, function)?;
-            let span = &alloc_expr.span;
-            let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
-            let counter = state.declare_var_stm(
-                &crate::ast_util::air_unique_var(crate::def::ALLOC_COUNT),
-                &int_typ,
-                PreLocalDeclKind::StmtLet,
-                false,
-            );
-            let zero = SpannedTyped::new(
-                span,
-                &int_typ,
-                crate::sst::ExpX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
-            );
-            alloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
-            state.alloc_counter = Some(counter.clone());
-            let bound = lo_current.lower_pure(ctx, &mut state, alloc_expr, &mut req_stms)?;
-            if !ctx.checking_spec_preconditions() {
-                let current = SpannedTyped::new(span, &int_typ, crate::sst::ExpX::Var(counter));
-                let within = SpannedTyped::new(
-                    span,
-                    &Arc::new(TypX::Bool),
-                    crate::sst::ExpX::Binary(
-                        crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
-                        current,
-                        bound,
-                    ),
-                );
-                enss.push(exp_pre(&within));
+    let own_bound = function.x.allocates.clone();
+    let inherited_bound = match &lo_inheritance {
+        Some(lo) => lo.function.x.allocates.clone(),
+        None => None,
+    };
+    if ctx.global.alloc_check
+        && function.x.mode == Mode::Exec
+        && !check_api_safety
+        && (own_bound.is_some() || inherited_bound.is_some())
+    {
+        crate::alloc_check::check_drop_glue(ctx, function)?;
+        let span = &own_bound.as_ref().or(inherited_bound.as_ref()).unwrap().span;
+        let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+        let bool_typ = Arc::new(TypX::Bool);
+        let counter = state.declare_var_stm(
+            &crate::ast_util::air_unique_var(crate::def::ALLOC_COUNT),
+            &int_typ,
+            PreLocalDeclKind::StmtLet,
+            false,
+        );
+        let zero = SpannedTyped::new(
+            span,
+            &int_typ,
+            crate::sst::ExpX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        alloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
+        state.alloc_counter = Some(counter.clone());
+        let le = |a: Exp, b: Exp| {
+            SpannedTyped::new(
+                &b.span.clone(),
+                &bool_typ,
+                crate::sst::ExpX::Binary(
+                    crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                    a,
+                    b,
+                ),
+            )
+        };
+        let current = SpannedTyped::new(span, &int_typ, crate::sst::ExpX::Var(counter));
+        let own = match &own_bound {
+            Some(e) => Some(lo_current.lower_pure(ctx, &mut state, e, &mut req_stms)?),
+            None => None,
+        };
+        let inherited = match (&inherited_bound, &lo_inheritance) {
+            (Some(e), Some(lo)) => Some(lo.lower_pure(ctx, &mut state, e, &mut req_stms)?),
+            _ => None,
+        };
+        if !ctx.checking_spec_preconditions() {
+            if let Some(own) = &own {
+                enss.push(exp_pre(&le(current.clone(), own.clone())));
+            }
+            if let Some(inherited) = &inherited {
+                enss.push(exp_pre(&le(current.clone(), inherited.clone())));
+                if let Some(own) = &own {
+                    enss.push(exp_pre(&le(own.clone(), inherited.clone())));
+                }
             }
         }
     }

@@ -1353,11 +1353,22 @@ fn add_fndef_axioms_to_function(
                 body: None,
             },
         );
-        let eq = crate::ast_util::mk_eq(span, &wrap_in_trigger(&alloc_call), &clamped);
+        // For a trait method declaration, its bound is an upper bound for every impl (each impl is
+        // checked against it); for anything else, `call_allocates` is exactly its own bound.
+        let rel = if let FunctionKind::TraitMethodDecl { .. } = &function.x.kind {
+            crate::ast_util::mk_ineq(
+                span,
+                &wrap_in_trigger(&alloc_call),
+                &clamped,
+                crate::ast::InequalityOp::Le,
+            )
+        } else {
+            crate::ast_util::mk_eq(span, &wrap_in_trigger(&alloc_call), &clamped)
+        };
         let forall = Quant { quant: air::ast::Quant::Forall };
         let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
         let bool_typ = Arc::new(TypX::Bool);
-        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, eq)));
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
     }
 
     let mut functionx = function.x.clone();
