@@ -104,7 +104,7 @@ pub assume_specification<
 >)
     ensures
         IteratorSpec::remaining(&iter) == s@.as_ref(),
-        IteratorSpec::decrease(&iter) is Some,
+        IteratorSpec::decrease(&iter) is Some,  allocates 0
 ;
 
 // Referenced by Verus' internal encoding for array -> slice coercion
@@ -124,7 +124,7 @@ pub assume_specification<T, const N: usize>[ <[T; N]>::as_slice ](ar: &[T; N]) -
     ensures
         ar@ == out@,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 pub uninterp spec fn spec_array_fill_for_copy_type<T: Copy, const N: usize>(t: T) -> (res: [T; N]);

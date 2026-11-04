@@ -253,11 +253,13 @@ impl<A: PointeeSized + PartialOrd<Rhs>, Rhs: PointeeSized> PartialOrdIs<Rhs> for
 pub assume_specification<T: Ord>[ core::cmp::min ](v1: T, v2: T) -> (r: T)
     ensures
         call_ensures(T::min, (v1, v2), r),
+    allocates call_allocates(T::min, (v1, v2))
 ;
 
 pub assume_specification<T: Ord>[ core::cmp::max ](v1: T, v2: T) -> (r: T)
     ensures
         call_ensures(T::max, (v1, v2), r),
+    allocates call_allocates(T::max, (v1, v2))
 ;
 
 // `min_by` and `max_by` call `compare(&v1, &v2)` once. When it returns `Equal`,
@@ -507,6 +509,7 @@ pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as P
 ) -> Option<core::cmp::Ordering>
 where
     A: PartialOrd<B>,
+    allocates call_allocates(<A as PartialOrd<B>>::partial_cmp, (*a, *b))
 ;
 
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::lt ](
@@ -515,6 +518,7 @@ pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as P
 ) -> bool
 where
     A: PartialOrd<B>,
+    allocates call_allocates(<A as PartialOrd<B>>::lt, (*a, *b))
 ;
 
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::le ](
@@ -523,6 +527,7 @@ pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as P
 ) -> bool
 where
     A: PartialOrd<B>,
+    allocates call_allocates(<A as PartialOrd<B>>::le, (*a, *b))
 ;
 
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::gt ](
@@ -531,6 +536,7 @@ pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as P
 ) -> bool
 where
     A: PartialOrd<B>,
+    allocates call_allocates(<A as PartialOrd<B>>::gt, (*a, *b))
 ;
 
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::ge ](
@@ -539,6 +545,7 @@ pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as P
 ) -> bool
 where
     A: PartialOrd<B>,
+    allocates call_allocates(<A as PartialOrd<B>>::ge, (*a, *b))
 ;
 
 impl<A: PointeeSized + Ord> OrdSpecImpl for &A {
@@ -555,6 +562,7 @@ pub assume_specification<'a, A: PointeeSized + Ord>[ <&'a A as Ord>::cmp ](
     a: &&'a A,
     b: &&'a A,
 ) -> core::cmp::Ordering
+    allocates call_allocates(<A as Ord>::cmp, (*a, *b))
 ;
 
 } // verus!

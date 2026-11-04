@@ -1029,3 +1029,32 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_slice_option_result ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn f(s: &mut [u8], o: Option<u8>, r: Result<u8, ()>) -> (x: u8)
+            requires
+                s.len() >= 2,
+                o is Some,
+                r is Ok,
+            allocates 0
+        {
+            s.swap(0, 1);
+            let a = s[0];
+            let b = o.unwrap();
+            let c = r.unwrap();
+            let d = if s.is_empty() { 0 } else { *s.first().unwrap() };
+            let _ = o.is_some();
+            let _ = s.len();
+            (a / 4) + (b / 4) + (c / 4) + (d / 4)
+        }
+
+        fn g(a: u8, b: u8) -> u8
+            allocates 0
+        {
+            a.wrapping_add(b)
+        }
+    } => Ok(())
+}

@@ -230,7 +230,7 @@ pub assume_specification<'a, T: Copy>[ Option::<&'a T>::copied ](opt: Option<&'a
         res == match opt {
             Some(x) => Some(*x),
             None => None::<T>,
-        },
+        },  allocates 0
 ;
 
 // and_then
@@ -386,7 +386,7 @@ pub assume_specification<T>[ Option::as_mut ](option: &mut Option<T>) -> (res: O
             None => final(option).is_none() && res.is_none(),
             Some(r) => final(option).is_some() && res.is_some() && *res.unwrap() == r
                 && *final(res.unwrap()) == final(option).unwrap(),
-        }),
+        }),  allocates 0
 ;
 
 pub assume_specification<T>[ Option::as_slice ](option: &Option<T>) -> (res: &[T])
@@ -394,7 +394,7 @@ pub assume_specification<T>[ Option::as_slice ](option: &Option<T>) -> (res: &[T
         res@ == (match *option {
             Some(x) => seq![x],
             None => seq![],
-        }),
+        }),  allocates 0
 ;
 
 #[doc(hidden)]
@@ -408,7 +408,7 @@ pub assume_specification<T>[ Option::as_mut_slice ](option: &mut Option<T>) -> (
         final(option)@ == (match *old(option) {
             Some(_) => Some(final(res)@[0]),
             None => None,
-        }),
+        }),  allocates 0
 ;
 
 #[doc(hidden)]
@@ -426,7 +426,7 @@ pub assume_specification<T>[ Option::get_or_insert ](option: &mut Option<T>, val
             Some(x) => x,
             None => value,
         }),
-        *final(option) == Some(*final(res)),
+        *final(option) == Some(*final(res)),  allocates 0
 ;
 
 } // verus!

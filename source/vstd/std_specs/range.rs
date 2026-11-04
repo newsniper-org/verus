@@ -149,7 +149,7 @@ pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty 
 pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx) -> (ret:
     core::ops::RangeInclusive<Idx>)
     ensures
-        ret@ == (RangeInclusiveView { start, end, exhausted: false }),
+        ret@ == (RangeInclusiveView { start, end, exhausted: false }),  allocates 0
 ;
 
 impl<A: core::iter::Step> super::iter::IteratorSpecImpl for Range<A> {
