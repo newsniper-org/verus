@@ -71,7 +71,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::index ](
     i: usize,
 ) -> (output: &T)
     ensures
-        output == v.spec_index(i as int),
+        output == v.spec_index(i as int),  allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::index_mut ](
@@ -80,19 +80,19 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::index_mut ](
 ) -> (output: &mut T)
     ensures
         *output == old(v).spec_index(i as int),
-        final(v)@ == old(v)@.update(i as int, *final(output)),
+        final(v)@ == old(v)@.update(i as int, *final(output)),  allocates 0
 ;
 
 #[verifier::when_used_as_spec(spec_vec_dequeue_len)]
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::len ](v: &VecDeque<T, A>) -> (len:
     usize)
     ensures
-        len == spec_vec_dequeue_len(v),
+        len == spec_vec_dequeue_len(v),  allocates 0
 ;
 
 pub assume_specification<T>[ VecDeque::<T>::new ]() -> (v: VecDeque<T>)
     ensures
-        v@ == Seq::<T>::empty(),
+        v@ == Seq::<T>::empty(),  allocates 0
 ;
 
 pub assume_specification<T>[ <VecDeque<T> as core::default::Default>::default ]() -> (v: VecDeque<
@@ -105,6 +105,7 @@ pub assume_specification<T>[ <VecDeque<T> as core::default::Default>::default ](
 pub assume_specification<T>[ VecDeque::<T>::with_capacity ](capacity: usize) -> (v: VecDeque<T>)
     ensures
         v@ == Seq::<T>::empty(),
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::reserve ](
@@ -113,6 +114,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::reserve ](
 )
     ensures
         final(v)@ == old(v)@,
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_back ](
@@ -121,6 +123,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_back ](
 )
     ensures
         final(v)@ == old(v)@.push(value),
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_front ](
@@ -129,6 +132,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_front ](
 )
     ensures
         final(v)@ == seq![value] + old(v)@,
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_back ](
@@ -145,7 +149,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_back ](
                 &&& old(v)@.len() == 0
                 &&& final(v)@ == old(v)@
             },
-        },
+        },  allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_front ](
@@ -162,7 +166,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_front ](
                 &&& old(v)@.len() == 0
                 &&& final(v)@ == old(v)@
             },
-        },
+        },  allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::append ](
@@ -172,6 +176,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::append ](
     ensures
         final(v)@ == old(v)@ + old(other)@,
         final(other)@ == Seq::<T>::empty(),
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::insert ](
@@ -183,6 +188,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::insert ](
         i <= old(v).len(),
     ensures
         final(v)@ == old(v)@.insert(i as int, element),
+    allocates 1
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::remove ](
@@ -200,12 +206,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::remove ](
                 &&& old(v)@.len() <= i
                 &&& final(v)@ == old(v)@
             },
-        },
+        },  allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::clear ](v: &mut VecDeque<T, A>)
     ensures
-        final(v).view() == Seq::<T>::empty(),
+        final(v).view() == Seq::<T>::empty(),  allocates 0
 ;
 
 pub assume_specification<T, A: Allocator + core::clone::Clone>[ VecDeque::<T, A>::split_off ](
@@ -217,6 +223,7 @@ pub assume_specification<T, A: Allocator + core::clone::Clone>[ VecDeque::<T, A>
     ensures
         final(v)@ == old(v)@[..at],
         return_value@ == old(v)@[at..],
+    allocates 1
 ;
 
 pub open spec fn vec_dequeue_clone_trigger<T, A: Allocator>(
@@ -242,7 +249,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::truncate ](
 )
     ensures
         len <= old(v).len() ==> final(v)@ == old(v)@[..len],
-        len > old(v).len() ==> final(v)@ == old(v)@,
+        len > old(v).len() ==> final(v)@ == old(v)@,  allocates 0
 ;
 
 pub assume_specification<T: Clone, A: Allocator>[ VecDeque::<T, A>::resize ](
@@ -320,7 +327,7 @@ pub assume_specification<'a, T, A: Allocator>[ VecDeque::<T, A>::iter ](
     ensures
         IteratorSpec::remaining(&iter) == v@.as_ref(),
         into_iter_elts(iter) == IteratorSpec::remaining(&iter),
-        IteratorSpec::decrease(&iter) is Some,
+        IteratorSpec::decrease(&iter) is Some,  allocates 0
 ;
 
 pub broadcast group group_vec_dequeue_axioms {

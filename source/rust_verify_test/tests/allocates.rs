@@ -1147,3 +1147,26 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 1)
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_vecdeque_hashmap ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::collections::{VecDeque, HashMap};
+
+        fn q(d: &mut VecDeque<u8>) -> usize
+            requires old(d)@.len() > 0
+            allocates 2
+        {
+            d.push_back(1);
+            d.push_front(2);
+            let _ = d.pop_front();
+            d.len()
+        }
+
+        fn m(h: &HashMap<u8, u8>) -> bool
+            allocates 0
+        {
+            h.is_empty() || h.len() == 0
+        }
+    } => Ok(())
+}
