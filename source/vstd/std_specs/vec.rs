@@ -370,6 +370,32 @@ pub open spec fn vec_clone_trigger<T, A: Allocator>(v1: Vec<T, A>, v2: Vec<T, A>
     true
 }
 
+/// Sum of the `allocates` bounds of cloning the first `n` elements (for `-V alloc-check`)
+pub open spec fn seq_clone_allocates<T: Clone>(s: Seq<T>, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_clone_allocates(s, (n - 1) as nat) + call_allocates(T::clone, (&s[n - 1],))
+    }
+}
+
+/// Cloning elements that each allocate nothing allocates nothing in total
+pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: nat)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
+            ==> #[trigger] seq_clone_allocates(s, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_clone_allocates_zero(s, (n - 1) as nat);
+    }
+}
+
+// rustc 1.99.1: `<[T]>::to_vec_in`, i.e. `with_capacity_in(len)` and one `T::clone` per element
+// (the allocator's own clone is allocator-internal and not counted)
 pub assume_specification<T: Clone, A: Allocator + Clone>[ <Vec<T, A> as Clone>::clone ](
     vec: &Vec<T, A>,
 ) -> (res: Vec<T, A>)
@@ -378,6 +404,7 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Vec<T, A> as Clone>::
         forall|i| #![all_triggers] 0 <= i < vec.len() ==> cloned::<T>(vec[i], res[i]),
         vec_clone_trigger(*vec, res),
         vec@ =~= res@ ==> vec@ == res@,
+    allocates (if vec@.len() == 0 { 0int } else { 1int }) + seq_clone_allocates(vec@, vec@.len())
 ;
 
 pub broadcast proof fn vec_clone_deep_view_proof<T: DeepView, A: Allocator>(
@@ -574,6 +601,7 @@ pub broadcast axiom fn axiom_vec_decreases_to_view<T>(v: Vec<T>)
 pub broadcast group group_vec_axioms {
     axiom_spec_len,
     axiom_spec_capacity,
+    lemma_seq_clone_allocates_zero,
     axiom_vec_index_decreases,
     vec_clone_deep_view_proof,
     axiom_vec_has_resolved,

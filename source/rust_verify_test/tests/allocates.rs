@@ -633,3 +633,95 @@ test_verify_one_file_with_options! {
         impl AllocFreeDrop for Bad {}
     } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
 }
+
+// Decision 1: user impls called by std functions are charged through vstd's `call_allocates`
+// bounds (`?` -> From::from, `&a == &b` -> PartialEq::eq, Vec::clone -> T::clone per element).
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_std_callbacks ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        broadcast use vstd::std_specs::vec::group_vec_axioms;
+
+        pub struct E1 {}
+
+        pub struct E2 {}
+
+        impl AllocFreeDrop for E1 {}
+
+        impl AllocFreeDrop for E2 {}
+
+        impl From<E1> for E2 {
+            #[verifier::external_body]
+            fn from(_e: E1) -> E2
+                allocates 1
+            {
+                let _b = Box::new(1u8);
+                E2 {}
+            }
+        }
+
+        fn q(r: Result<u8, E1>) -> Result<u8, E2>
+            allocates 1
+        {
+            let v = r?;
+            Ok(v)
+        }
+
+        fn q_wrong(r: Result<u8, E1>) -> Result<u8, E2>
+            allocates 0 // FAILS
+        {
+            let v = r?; // FAILS
+            Ok(v) // FAILS
+        }
+
+        pub struct Q {
+            pub x: u8,
+        }
+
+        impl AllocFreeDrop for Q {}
+
+        impl PartialEq for Q {
+            #[verifier::external_body]
+            fn eq(&self, o: &Q) -> bool
+                allocates 1
+            {
+                let _b = Box::new(1u8);
+                self.x == o.x
+            }
+        }
+
+        fn eqr(a: &Q, b: &Q) -> bool
+            allocates 1
+        {
+            a == b
+        }
+
+        fn eqr_wrong(a: &Q, b: &Q) -> bool
+            allocates 0 // FAILS
+        {
+            a == b // FAILS
+        }
+
+        pub struct C {
+            pub x: u8,
+        }
+
+        impl AllocFreeDrop for C {}
+
+        impl Clone for C {
+            fn clone(&self) -> (r: C)
+                ensures r.x == self.x
+                allocates 0
+            {
+                C { x: self.x }
+            }
+        }
+
+        fn vc(v: &Vec<C>) -> Vec<C>
+            allocates 1
+        {
+            v.clone()
+        }
+    } => Err(err) => assert_fails(err, 2)
+}

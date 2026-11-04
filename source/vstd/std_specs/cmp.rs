@@ -468,20 +468,24 @@ where
     }
 }
 
+// rustc 1.99.1: `PartialEq::eq(*self, *other)`
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialEq<&B>>::eq ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialEq<B>,
+    allocates call_allocates(<A as PartialEq<B>>::eq, (*a, *b))
 ;
 
+// rustc 1.99.1: `PartialEq::ne(*self, *other)`
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialEq<&B>>::ne ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialEq<B>,
+    allocates call_allocates(<A as PartialEq<B>>::ne, (*a, *b))
 ;
 
 impl<A: PointeeSized, B: PointeeSized> PartialOrdSpecImpl<&B> for &A
