@@ -277,3 +277,132 @@ test_verify_one_file! {
         }
     } => Ok(())
 }
+
+// Drop rule: implicit drops leave no trace in VIR, so every `Drop::drop` that a checked function
+// may run must be bounded by `allocates 0`.
+
+const ALLOC_DROPS: &str = verus_code_str! {
+    use vstd::prelude::*;
+    pub struct Good {
+        pub x: u8,
+    }
+
+    impl Drop for Good {
+        #[verifier::external_body]
+        fn drop(&mut self)
+            opens_invariants none
+            no_unwind
+            allocates 0
+        {
+        }
+    }
+
+    pub struct Bad {
+        pub x: u8,
+    }
+
+    impl Drop for Bad {
+        #[verifier::external_body]
+        fn drop(&mut self)
+            opens_invariants none
+            no_unwind
+        {
+            let _b = Box::new(1u8);
+        }
+    }
+
+    pub struct WrapBad {
+        pub b: Bad,
+    }
+
+    #[verifier::external_body]
+    fn mk_bad() -> Bad
+        allocates 0
+    {
+        Bad { x: 0 }
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_bounded_ok ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(g: Good, v: Vec<u8>, b: Box<u8>, o: Option<Box<u8>>)
+            allocates 0
+        {
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_unbounded_param ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(b: Bad)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_unbounded_field ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(w: WrapBad)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_unbounded_in_container ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(v: Vec<Bad>)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_unbounded_temporary ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p() -> u8
+            allocates 0
+        {
+            mk_bad().x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_generic_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        fn p<T>(t: T)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the drop of type parameter `T` cannot be bounded yet")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_verified_drop_body_checked ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_body]
+        fn mk(x: u8) -> (r: Box<u8>)
+            ensures *r == x
+            opens_invariants none
+            no_unwind
+            allocates 1
+        {
+            Box::new(x)
+        }
+
+        pub struct D {
+            pub x: u8,
+        }
+
+        impl Drop for D {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+                allocates 0 // FAILS
+            {
+                let _b = mk(1);
+            }
+        }
+    } => Err(err) => assert_one_fails(err)
+}

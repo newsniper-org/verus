@@ -963,6 +963,7 @@ pub fn func_def_to_sst(
     let mut alloc_init: Option<crate::sst::Stm> = None;
     if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
         if let Some(alloc_expr) = &function.x.allocates {
+            crate::alloc_check::check_drop_glue(ctx, function)?;
             let span = &alloc_expr.span;
             let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
             let counter = state.declare_var_stm(

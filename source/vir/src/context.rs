@@ -78,6 +78,10 @@ pub struct GlobalCtx {
     pub check_api_safety: bool,
     /// `-V alloc-check`: check `allocates` bounds of exec functions
     pub alloc_check: bool,
+    /// `-V alloc-check`: for each datatype with a `Drop` impl in the crate (or its imports),
+    /// the impl's span and whether it is bounded by `allocates 0`. Computed before pruning,
+    /// since `Drop::drop` is never called explicitly and would otherwise be pruned away.
+    pub(crate) drop_impl_alloc_zero: Arc<HashMap<Dt, (Span, bool)>>,
     pub axiom_usage_info: bool,
     pub no_bv_simplify: bool,
     pub report_long_running: bool,
@@ -354,6 +358,34 @@ impl GlobalCtx {
     ) -> Result<Self, VirErr> {
         let chosen_triggers: std::cell::RefCell<Vec<ChosenTriggers>> =
             std::cell::RefCell::new(Vec::new());
+
+        let mut drop_impl_alloc_zero: HashMap<Dt, (Span, bool)> = HashMap::new();
+        if alloc_check {
+            for f in krate.functions.iter() {
+                if !f.x.attrs.is_drop {
+                    continue;
+                }
+                // `Drop` is a foreign trait, so its impl methods may have been demoted to static
+                // functions; identify the datatype from the `&mut self` parameter instead.
+                let self_dt = f.x.params.first().and_then(|p| {
+                    let mut t = &p.x.typ;
+                    loop {
+                        match &**t {
+                            TypX::MutRef(inner) | TypX::Decorate(_, _, inner) => t = inner,
+                            TypX::Datatype(dt, _, _) => return Some(dt.clone()),
+                            _ => return None,
+                        }
+                    }
+                });
+                if let Some(dt) = self_dt {
+                    let zero =
+                        f.x.allocates
+                            .as_ref()
+                            .is_some_and(|e| crate::alloc_check::is_literal_zero(e));
+                    drop_impl_alloc_zero.insert(dt, (f.span.clone(), zero));
+                }
+            }
+        }
 
         let datatypes: HashMap<Path, (TypPositives, Variants)> = krate
             .datatypes
@@ -774,6 +806,7 @@ impl GlobalCtx {
             solver,
             check_api_safety,
             alloc_check,
+            drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
             axiom_usage_info,
             no_bv_simplify,
             report_long_running,
@@ -807,6 +840,7 @@ impl GlobalCtx {
             solver: self.solver.clone(),
             check_api_safety: self.check_api_safety,
             alloc_check: self.alloc_check,
+            drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
             axiom_usage_info: self.axiom_usage_info,
             no_bv_simplify: self.no_bv_simplify,
             report_long_running: self.report_long_running,
