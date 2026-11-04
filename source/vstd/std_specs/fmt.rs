@@ -88,6 +88,25 @@ mod rt {
 #[verifier::external_body]
 pub struct ExArgument<'a>(rt::Argument<'a>);
 
+// -V alloc-check: allocations performed by the user `fmt` callbacks that formatting `args` runs.
+// Allocations of the output sink (such as a growing `String`) are charged to the sink's owner, not
+// here; `alloc::fmt::format` has no bound because the number of times its `String` grows depends
+// on the length of the output.
+// For `Arguments::new`, Verus decodes rustc's template bytes (how many times each argument is
+// formatted) and assumes `fmt_allocates(args) == sum_i count_i * fmt_arg_allocates_at(&arr, i)`.
+pub uninterp spec fn fmt_allocates(args: Arguments<'_>) -> nat;
+
+/// The allocations of one call to the `fmt` method an `Argument` was made for.
+pub uninterp spec fn fmt_arg_allocates(arg: rt::Argument<'_>) -> nat;
+
+#[doc(hidden)]
+pub uninterp spec fn fmt_witness_formatter<'f>() -> &'f mut Formatter<'f>;
+
+#[doc(hidden)]
+pub open spec fn fmt_arg_allocates_at<'a, const M: usize>(args: &[rt::Argument<'a>; M], i: int) -> nat {
+    fmt_arg_allocates(args[i])
+}
+
 macro_rules! def_fmt_trait {
     ($trait:path, $extrait: ident, $spec_trait:ident, $impl_trait:ident, $new:ident) => {
         $crate::vstd::prelude::verus! {
@@ -103,10 +122,15 @@ macro_rules! def_fmt_trait {
                         self.fmt_req(f);
             }
 
+            // The `fmt` allocation bound of a type does not depend on the `Formatter` (checked by
+            // -V alloc-check), so any formatter serves as the witness.
             #[doc(hidden)]
-            pub assume_specification<'a, 'b, T: $trait>[ rt::Argument::<'a>::$new ](x: &'b T) -> rt::Argument<'b>
+            pub assume_specification<'a, 'b, T: $trait>[ rt::Argument::<'a>::$new ](x: &'b T) -> (arg: rt::Argument<'b>)
                 requires
                     forall|f: &Formatter<'a>| x.fmt_req(f),
+                ensures
+                    fmt_arg_allocates(arg) == call_allocates(<T as $trait>::fmt, (x, fmt_witness_formatter())),
+                allocates 0
             ;
         }
 };
@@ -133,21 +157,34 @@ def_fmt_trait!(core::fmt::UpperHex, ExUpperHex, UpperHexSpec, UpperHexSpecImpl, 
 #[doc(hidden)]
 pub assume_specification<'a, 'b, T: core::fmt::Debug>[ rt::Argument::<'a>::new_debug_noop ](
     x: &'b T,
-) -> rt::Argument<'b>
+) -> (arg: rt::Argument<'b>)
     requires
         forall|f: &Formatter<'a>| x.fmt_req(f),
+    ensures
+        fmt_arg_allocates(arg) == call_allocates(<T as core::fmt::Debug>::fmt, (x, fmt_witness_formatter())),
+    allocates 0
 ;
 
 #[doc(hidden)]
-pub assume_specification<'a, 'b>[ rt::Argument::<'a>::from_usize ](x: &'b usize) -> rt::Argument<'b>
+// Only read as a width or precision (`as_u16`), never formatted.
+pub assume_specification<'a, 'b>[ rt::Argument::<'a>::from_usize ](x: &'b usize) -> (arg: rt::Argument<'b>)
     requires
         *x <= u16::MAX,
+    ensures
+        fmt_arg_allocates(arg) == 0,
+    allocates 0
 ;
 
-pub assume_specification<'a>[ Arguments::<'a>::from_str ](s: &'static str) -> Arguments<'a>
+pub assume_specification<'a>[ Arguments::<'a>::from_str ](s: &'static str) -> (args: Arguments<'a>)
+    ensures
+        fmt_allocates(args) == 0,
+    allocates 0
 ;
 
-pub assume_specification<'a>[ Arguments::<'a>::from_str_nonconst ](s: &'static str) -> Arguments<'a>
+pub assume_specification<'a>[ Arguments::<'a>::from_str_nonconst ](s: &'static str) -> (args: Arguments<'a>)
+    ensures
+        fmt_allocates(args) == 0,
+    allocates 0
 ;
 
 // Specially handled stand-in for Arguments::new (because it uses the private Argument type)
@@ -166,6 +203,23 @@ pub assume_specification<'a, const N: usize, const M: usize>[ arguments_new ](
     template: &'a [u8; N],
     args: &'a [rt::Argument<'a>; M],
 ) -> Arguments<'a>
+    ensures
+        // (Restates the definition; keeps `fmt_arg_allocates_at` available to the assumption
+        // -V alloc-check adds after this call.)
+        forall|i: int| 0 <= i < M ==> #[trigger] fmt_arg_allocates_at(args, i) == fmt_arg_allocates(args[i]),
+    allocates 0
+;
+
+// The sink's own allocations are charged to whoever owns the sink.
+pub assume_specification<'a>[ Formatter::<'a>::write_fmt ](
+    f: &mut Formatter<'a>,
+    args: Arguments<'_>,
+) -> Result<(), Error>
+    allocates fmt_allocates(args)
+;
+
+pub assume_specification<'a>[ Formatter::<'a>::write_str ](f: &mut Formatter<'a>, data: &str) -> Result<(), Error>
+    allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]

@@ -55,9 +55,18 @@ impl<T, U: From<T>> IntoSpecImpl<U> for T {
     }
 }
 
+// The reflexive `impl<T> From<T> for T` returns its argument (used by every `?` on a `Result`
+// whose error type is unchanged).
+pub assume_specification<T>[ <T as From<T>>::from ](t: T) -> (ret: T)
+    ensures
+        ret == t,
+    allocates 0
+;
+
 pub assume_specification<T, U: From<T>>[ <T as Into<U>>::into ](a: T) -> (ret: U)
     ensures
         call_ensures(U::from, (a,), ret),
+    allocates call_allocates(U::from, (a,))
 ;
 
 #[verifier::external_type_specification]

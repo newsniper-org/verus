@@ -1497,6 +1497,11 @@ fn stm_call(
     // For `-V alloc-check`: the static target, and the resolved one (for error messages)
     let alloc_target =
         (name.clone(), typs.clone(), resolved_method.as_ref().map(|(f, _)| f.clone()));
+    let fmt_assume = if state.alloc_counter.is_some() {
+        fmt_arguments_allocates_assume(ctx, span, &name, &typs, &small_args, &dest)
+    } else {
+        None
+    };
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -1516,6 +1521,9 @@ fn stm_call(
             stms.push(alloc_count_after_call(ctx, span, &counter, &alloc_target, &small_args)?);
         }
     }
+    if let Some(assume) = fmt_assume {
+        stms.push(Spanned::new(span.clone(), StmX::Assume(assume)));
+    }
     if (name == def::nonstatic_call_fun(false) || name == def::nonstatic_call_fun(true))
         && matches!(&*small_args[0].typ, TypX::MutRef(_))
     {
@@ -1529,6 +1537,100 @@ fn stm_call(
         stms.push(Spanned::new(span.clone(), StmX::Assume(equal)));
     }
     Ok(stms_to_one_stm(span, stms))
+}
+
+/// `-V alloc-check`: for a call `arguments_new(template, &args)` (vstd's stand-in for
+/// `core::fmt::Arguments::new`, which `format_args!` expands to), decode the template literal and
+/// return `fmt_allocates(result) == sum_i count_i * fmt_arg_allocates_at(&args, i)`, where
+/// `count_i` is how many times argument `i` is formatted. Consumers of the `Arguments`
+/// (`Formatter::write_fmt`) charge `fmt_allocates`, so an `Arguments` used twice is charged twice.
+/// Returns None (no assumption, so the cost stays unknown) if anything does not have the expected
+/// shape.
+fn fmt_arguments_allocates_assume(
+    ctx: &Ctx,
+    span: &Span,
+    name: &Fun,
+    typs: &Typs,
+    args: &Exps,
+    dest: &Option<Dest>,
+) -> Option<Exp> {
+    let friendly = crate::ast_util::fun_as_friendly_rust_name;
+    // The call names `core::fmt::Arguments::new` itself (vstd's stand-in only supplies its spec)
+    let segments = &name.path.segments;
+    if name.path.krate != crate::ast::CrateId::Core
+        || segments.last() != Some(&crate::ast::Segment::V(Arc::new("new".to_string()), 0))
+        || args.len() != 2
+        || typs.len() != 2
+    {
+        return None;
+    }
+    let returns_arguments = match &*get_function(ctx, span, name).ok()?.x.outer_ret.x.typ {
+        TypX::Datatype(crate::ast::Dt::Path(p), _, _) => {
+            crate::ast_util::path_as_friendly_rust_name(&p) == "core::fmt::Arguments"
+        }
+        _ => false,
+    };
+    if !returns_arguments {
+        return None;
+    }
+    let ExpX::Const(Constant::ByteStr(bytes)) = &args[0].x else {
+        return None;
+    };
+    let num_args = match &*typs[1] {
+        TypX::ConstInt(m) => usize::try_from(m).ok()?,
+        _ => return None,
+    };
+    let counts = crate::alloc_check::fmt_template_counts(bytes, num_args)?;
+    let result = match &dest.as_ref()?.dest.x {
+        ExpX::VarLoc(x) => SpannedTyped::new(span, &dest.as_ref()?.dest.typ, ExpX::Var(x.clone())),
+        _ => return None,
+    };
+    let vstd_fun = |f: &str| {
+        let suffix = format!("::std_specs::fmt::{f}");
+        ctx.func_map
+            .keys()
+            .find(|k| k.path.is_vstd_path() && friendly(k).ends_with(&suffix))
+            .cloned()
+    };
+    let fmt_allocates = vstd_fun("fmt_allocates")?;
+    let fmt_arg_allocates_at = vstd_fun("fmt_arg_allocates_at")?;
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+    let nat_typ = Arc::new(TypX::Int(IntRange::Nat));
+    let mut sum = crate::sst_util::sst_int_literal(span, 0);
+    for (i, count) in counts.iter().enumerate() {
+        if *count == 0 {
+            continue;
+        }
+        let arg_cost = SpannedTyped::new(
+            span,
+            &nat_typ,
+            ExpX::Call(
+                CallFun::Fun(fmt_arg_allocates_at.clone(), None),
+                Arc::new(vec![typs[1].clone()]),
+                Arc::new(vec![args[1].clone(), crate::sst_util::sst_int_literal(span, i as i128)]),
+            ),
+        );
+        let term = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExpX::Binary(
+                crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Mul),
+                crate::sst_util::sst_int_literal(span, *count as i128),
+                arg_cost,
+            ),
+        );
+        sum = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), sum, term),
+        );
+    }
+    let total = SpannedTyped::new(
+        span,
+        &nat_typ,
+        ExpX::Call(CallFun::Fun(fmt_allocates, None), Arc::new(vec![]), Arc::new(vec![result])),
+    );
+    Some(crate::sst_util::sst_equal(span, &total, &sum))
 }
 
 /// `-V alloc-check`: after an exec call, add the callee's `allocates` bound (applied to the

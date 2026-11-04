@@ -270,3 +270,131 @@ pub(crate) fn check_alloc_free_drop_impls(
     }
     Ok(())
 }
+
+const FMT_TRAITS: [&str; 9] = [
+    "core::fmt::Binary",
+    "core::fmt::Debug",
+    "core::fmt::Display",
+    "core::fmt::LowerExp",
+    "core::fmt::LowerHex",
+    "core::fmt::Octal",
+    "core::fmt::Pointer",
+    "core::fmt::UpperExp",
+    "core::fmt::UpperHex",
+];
+
+/// The cost of formatting an argument is taken from its `fmt` bound at an arbitrary `Formatter`
+/// (vstd `fmt_witness_formatter`), which is only sound if no `fmt` bound depends on the
+/// `Formatter`. Reject any that does.
+pub(crate) fn check_fmt_impl_bounds(krate: &Krate) -> Result<(), VirErr> {
+    for f in krate.functions.iter() {
+        let Some(allocates) = &f.x.allocates else { continue };
+        let trait_path = match &f.x.kind {
+            crate::ast::FunctionKind::TraitMethodImpl { trait_path, .. }
+            | crate::ast::FunctionKind::ForeignTraitMethodImpl { trait_path, .. } => trait_path,
+            _ => continue,
+        };
+        let trait_name = crate::ast_util::path_as_friendly_rust_name(trait_path);
+        if !FMT_TRAITS.contains(&trait_name.as_str()) || f.x.params.len() != 2 {
+            continue;
+        }
+        let formatter = &f.x.params[1].x.name;
+        let mut uses_formatter =
+            crate::ast_util::referenced_vars_expr(allocates).contains(formatter);
+        crate::ast_visitor::expr_visitor_check(allocates, &mut |_, e: &crate::ast::Expr| {
+            if matches!(&e.x, ExprX::VarAt(x, _) if x == formatter) {
+                uses_formatter = true;
+            }
+            Ok::<(), VirErr>(())
+        })?;
+        if uses_formatter {
+            return Err(error(
+                &allocates.span,
+                format!(
+                    "the `allocates` bound of `{trait_name}::fmt` cannot depend on the `Formatter`"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Decode the template bytes that rustc 1.99.1 passes to `core::fmt::Arguments::new` (see the
+/// "Internal representation" comment on `Arguments` in `core/src/fmt/mod.rs`, and the
+/// interpreter loop in `core::fmt::write`), returning how many times each of the `num_args`
+/// arguments is formatted. An argument read only as a dynamic width or precision is not
+/// formatted. Returns `None` for any byte sequence that is not a valid template; the caller then
+/// assumes nothing, which is sound (the cost stays unknown).
+///
+/// The format is internal to rustc and may change with the toolchain; the tests below and the
+/// end-to-end test in `rust_verify_test/tests/allocates.rs` fail if it does.
+pub fn fmt_template_counts(bytes: &[u8], num_args: usize) -> Option<Vec<u64>> {
+    let u16_at = |i: usize| -> Option<usize> {
+        Some(u16::from_le_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as usize)
+    };
+    let mut counts = vec![0u64; num_args];
+    let mut i = 0;
+    let mut next_arg = 0usize;
+    loop {
+        let n = *bytes.get(i)?;
+        i += 1;
+        if n == 0 {
+            return if i == bytes.len() { Some(counts) } else { None };
+        } else if n < 0x80 {
+            i += n as usize;
+        } else if n == 0x80 {
+            i += 2 + u16_at(i)?;
+        } else if n < 0xC0 {
+            return None;
+        } else {
+            if n & 1 != 0 {
+                i += 4; // flags
+            }
+            if n & 2 != 0 {
+                i += 2; // width (or the index of a dynamic width argument)
+            }
+            if n & 4 != 0 {
+                i += 2; // precision (or the index of a dynamic precision argument)
+            }
+            if n & 8 != 0 {
+                next_arg = u16_at(i)?;
+                i += 2;
+            }
+            *counts.get_mut(next_arg)? += 1;
+            next_arg += 1;
+        }
+        if i > bytes.len() {
+            return None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_template_counts;
+
+    // Byte sequences produced by rustc 1.99.1 (`-Zunpretty=hir`)
+    #[test]
+    fn fmt_template_rustc_1_99_1() {
+        // "{}"
+        assert_eq!(fmt_template_counts(b"\xc0\x00", 1), Some(vec![1]));
+        // "{0}{0}"
+        assert_eq!(fmt_template_counts(b"\xc0\xc8\x00\x00\x00", 1), Some(vec![2]));
+        // "a{}b{:>w$}{s}{:?}" with args (s, 3u8, 4u8, w, s): s, 3u8 (width = arg 2), s, 4u8
+        // where the args array is [display(s), display(3u8), from_usize(w), display(s), debug(4u8)]
+        assert_eq!(
+            fmt_template_counts(b"\x01a\xc0\x01b\xd3 \x00\x00(\x02\x00\xc8\x03\x00\xc0\x00", 5),
+            Some(vec![1, 1, 0, 1, 1])
+        );
+        // a literal piece of 200 bytes uses the 0x80 form
+        let mut long = vec![0x80u8, 200, 0];
+        long.extend(std::iter::repeat(b'x').take(200));
+        long.extend([0xc0, 0x00]);
+        assert_eq!(fmt_template_counts(&long, 1), Some(vec![1]));
+        // malformed: no end, reserved first byte, argument out of range, trailing bytes
+        assert_eq!(fmt_template_counts(b"\xc0", 1), None);
+        assert_eq!(fmt_template_counts(b"\x90\x00", 1), None);
+        assert_eq!(fmt_template_counts(b"\xc0\xc0\x00", 1), None);
+        assert_eq!(fmt_template_counts(b"\xc0\x00\x00", 1), None);
+    }
+}

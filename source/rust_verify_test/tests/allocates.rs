@@ -852,3 +852,110 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "does not currently support dyn with more than one trait")
 }
+
+// `format_args!`: Verus decodes rustc's template to count how often each argument is formatted
+// (`{0}{0}` formats argument 0 twice), and `Formatter::write_fmt` charges that many `fmt` calls.
+// This test breaks if a toolchain update changes the template encoding.
+const FMT_INNER: &str = verus_code_str! {
+    use core::fmt::{Display, Formatter, Error};
+
+    pub struct Inner;
+
+    impl Display for Inner {
+        fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+            allocates 1
+        {
+            let _b = mk(3);
+            Ok(())
+        }
+    }
+
+    impl vstd::std_specs::fmt::DisplaySpecImpl for Inner {
+        open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_format_template ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + FMT_INNER + verus_code_str! {
+        pub struct Twice(Inner);
+
+        impl Display for Twice {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 2
+            {
+                write!(f, "{0}{0}", self.0)
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for Twice {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+
+        pub struct Mixed(Inner, Inner);
+
+        impl Display for Mixed {
+            // literal pieces, a placeholder with options, an explicit index, and a dynamic width
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 3
+            {
+                let w: usize = 4;
+                write!(f, "a{}b{:>w$}{0}", self.0, self.1)
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for Mixed {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+
+        pub struct Literal;
+
+        impl Display for Literal {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 0
+            {
+                write!(f, "hello")?;
+                f.write_str("world")
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for Literal {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+
+        pub struct TwiceWrong(Inner);
+
+        impl Display for TwiceWrong {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 1 // FAILS
+            {
+                write!(f, "{0}{0}", self.0)
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for TwiceWrong {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_fmt_bound_depends_on_formatter ["vstd", "-V alloc-check"] => verus_code! {
+        use core::fmt::{Display, Formatter, Error};
+
+        pub uninterp spec fn cost(f: Formatter<'_>) -> nat;
+
+        pub struct S;
+
+        impl Display for S {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates cost(*f)
+            {
+                Ok(())
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for S {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "cannot depend on the `Formatter`")
+}
