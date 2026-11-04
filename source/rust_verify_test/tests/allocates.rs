@@ -959,3 +959,53 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "cannot depend on the `Formatter`")
 }
+
+test_verify_one_file_with_options! {
+    // A forwarding impl passes its formatter on to the inner `fmt`; its bound may mention the
+    // formatter only in that position.
+    #[test] alloc_check_fmt_forwarding ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + FMT_INNER + verus_code_str! {
+        pub struct Wrap<U>(pub U);
+
+        impl<U: Display> Display for Wrap<U> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates call_allocates(<U as Display>::fmt, (&self.0, f))
+            {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl<U: Display> vstd::std_specs::fmt::DisplaySpecImpl for Wrap<U> {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool {
+                forall|g: &Formatter<'_>| vstd::std_specs::fmt::DisplaySpec::fmt_req(&self.0, g)
+            }
+        }
+
+        pub struct UseWrap;
+
+        impl Display for UseWrap {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 1
+            {
+                write!(f, "{}", Wrap(Inner))
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for UseWrap {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+
+        pub struct UseWrapWrong;
+
+        impl Display for UseWrapWrong {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 0 // FAILS
+            {
+                write!(f, "{}", Wrap(Inner))
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for UseWrapWrong {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+    } => Err(err) => assert_fails(err, 1)
+}

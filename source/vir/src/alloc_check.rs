@@ -299,6 +299,11 @@ pub(crate) fn check_fmt_impl_bounds(krate: &Krate) -> Result<(), VirErr> {
             continue;
         }
         let formatter = &f.x.params[1].x.name;
+        // The formatter may be passed on to another `fmt` (a forwarding impl's bound is
+        // `call_allocates(<U as Display>::fmt, (&self.0, f))`): that callee's bound does not depend
+        // on its formatter either, by this same rule. Every other use is rejected.
+        let allocates =
+            &crate::ast_visitor::map_expr_visitor(allocates, &scrub_fmt_formatter_args)?;
         let mut uses_formatter =
             crate::ast_util::referenced_vars_expr(allocates).contains(formatter);
         crate::ast_visitor::expr_visitor_check(allocates, &mut |_, e: &crate::ast::Expr| {
@@ -317,6 +322,49 @@ pub(crate) fn check_fmt_impl_bounds(krate: &Krate) -> Result<(), VirErr> {
         }
     }
     Ok(())
+}
+
+/// In `call_allocates(<_ as FmtTrait>::fmt, (a, b))`, replace the formatter argument `b`
+fn scrub_fmt_formatter_args(e: &crate::ast::Expr) -> Result<crate::ast::Expr, VirErr> {
+    use crate::ast::{BuiltinSpecFun, CallTarget};
+    let ExprX::Call {
+        target: CallTarget::BuiltinSpecFun(BuiltinSpecFun::ClosureAlloc, typs, impl_paths),
+        args,
+        post_args,
+        body,
+    } = &e.x
+    else {
+        return Ok(e.clone());
+    };
+    let is_fmt_method = match typs.first().map(|t| &**t) {
+        Some(TypX::FnDef(fun, _, _)) => {
+            let name = crate::ast_util::fun_as_friendly_rust_name(fun);
+            FMT_TRAITS.iter().any(|tr| name == format!("{tr}::fmt"))
+        }
+        _ => false,
+    };
+    if !is_fmt_method || args.len() != 2 {
+        return Ok(e.clone());
+    }
+    let ExprX::Ctor(dt @ Dt::Tuple(2), variant, binders, None) = &args[1].x else {
+        return Ok(e.clone());
+    };
+    let mut binders = (**binders).clone();
+    let Some(last) = binders.get_mut(1) else { return Ok(e.clone()) };
+    let dummy = crate::ast_util::mk_bool(&last.a.span, true);
+    *last = std::sync::Arc::new(air::ast::BinderX { name: last.name.clone(), a: dummy });
+    let tuple =
+        args[1].new_x(ExprX::Ctor(dt.clone(), variant.clone(), std::sync::Arc::new(binders), None));
+    Ok(e.new_x(ExprX::Call {
+        target: CallTarget::BuiltinSpecFun(
+            BuiltinSpecFun::ClosureAlloc,
+            typs.clone(),
+            impl_paths.clone(),
+        ),
+        args: std::sync::Arc::new(vec![args[0].clone(), tuple]),
+        post_args: post_args.clone(),
+        body: body.clone(),
+    }))
 }
 
 /// Decode the template bytes that rustc 1.99.1 passes to `core::fmt::Arguments::new` (see the

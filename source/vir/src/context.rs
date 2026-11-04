@@ -389,9 +389,10 @@ impl GlobalCtx {
                 }
             }
         }
+        // Always checked: vstd's `axiom_fmt_allocates_*` rely on it
+        crate::alloc_check::check_fmt_impl_bounds(krate)?;
         if alloc_check {
             crate::alloc_check::check_alloc_free_drop_impls(krate, &drop_impl_alloc_zero)?;
-            crate::alloc_check::check_fmt_impl_bounds(krate)?;
         }
 
         let datatypes: HashMap<Path, (TypPositives, Variants)> = krate

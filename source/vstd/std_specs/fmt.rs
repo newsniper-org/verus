@@ -314,6 +314,38 @@ def_trait_axiom!(core::fmt::UpperExp, axiom_fmt_req_all_upper_exp);
 
 def_trait_axiom!(core::fmt::UpperHex, axiom_fmt_req_all_upper_hex);
 
+// -V alloc-check: no `fmt` bound depends on its `Formatter` (Verus rejects one that does, except
+// for passing it on to another `fmt`), so the cost at any formatter equals the cost at the witness.
+macro_rules! def_fmt_alloc_axiom {
+    ($trait:path, $name: ident) => {
+        $crate::vstd::prelude::verus! {
+            pub broadcast axiom fn $name<A: $trait + ?Sized>(a: &A, f: &mut Formatter<'_>)
+                ensures
+                    #[trigger] call_allocates(<A as $trait>::fmt, (a, f))
+                        == call_allocates(<A as $trait>::fmt, (a, fmt_witness_formatter())),
+            ;
+        }
+};
+}
+
+def_fmt_alloc_axiom!(core::fmt::Binary, axiom_fmt_allocates_binary);
+
+def_fmt_alloc_axiom!(core::fmt::Debug, axiom_fmt_allocates_debug);
+
+def_fmt_alloc_axiom!(core::fmt::Display, axiom_fmt_allocates_display);
+
+def_fmt_alloc_axiom!(core::fmt::LowerExp, axiom_fmt_allocates_lower_exp);
+
+def_fmt_alloc_axiom!(core::fmt::LowerHex, axiom_fmt_allocates_lower_hex);
+
+def_fmt_alloc_axiom!(core::fmt::Octal, axiom_fmt_allocates_octal);
+
+def_fmt_alloc_axiom!(core::fmt::Pointer, axiom_fmt_allocates_pointer);
+
+def_fmt_alloc_axiom!(core::fmt::UpperExp, axiom_fmt_allocates_upper_exp);
+
+def_fmt_alloc_axiom!(core::fmt::UpperHex, axiom_fmt_allocates_upper_hex);
+
 pub broadcast group group_fmt_axioms {
     // types
     axiom_fmt_req_all_u8,
@@ -347,6 +379,16 @@ pub broadcast group group_fmt_axioms {
     axiom_fmt_req_all_pointer,
     axiom_fmt_req_all_upper_exp,
     axiom_fmt_req_all_upper_hex,
+    // allocation bounds
+    axiom_fmt_allocates_binary,
+    axiom_fmt_allocates_debug,
+    axiom_fmt_allocates_display,
+    axiom_fmt_allocates_lower_exp,
+    axiom_fmt_allocates_lower_hex,
+    axiom_fmt_allocates_octal,
+    axiom_fmt_allocates_pointer,
+    axiom_fmt_allocates_upper_exp,
+    axiom_fmt_allocates_upper_hex,
 }
 
 } // verus!
