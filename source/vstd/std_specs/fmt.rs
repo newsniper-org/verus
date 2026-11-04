@@ -346,6 +346,58 @@ def_fmt_alloc_axiom!(core::fmt::UpperExp, axiom_fmt_allocates_upper_exp);
 
 def_fmt_alloc_axiom!(core::fmt::UpperHex, axiom_fmt_allocates_upper_hex);
 
+
+// -V alloc-check: formatting a primitive into a `Formatter` allocates nothing itself (the output
+// sink's growth is charged to the sink's owner).
+macro_rules! def_fmt_prim_alloc {
+    ($ty:ty, $($trait:path),+) => {
+        $(
+            $crate::vstd::prelude::verus! {
+                pub assume_specification[ <$ty as $trait>::fmt ](x: &$ty, f: &mut Formatter<'_>) -> Result<(), Error>
+                    allocates 0
+                ;
+            }
+        )+
+};
+}
+
+def_fmt_prim_alloc!(u8, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(u16, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(u32, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(u64, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(u128, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(usize, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(i8, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(i16, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(i32, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(i64, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(i128, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(isize, core::fmt::Display, core::fmt::Debug, core::fmt::Binary, core::fmt::Octal, core::fmt::LowerHex, core::fmt::UpperHex, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(f32, core::fmt::Display, core::fmt::Debug, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(f64, core::fmt::Display, core::fmt::Debug, core::fmt::LowerExp, core::fmt::UpperExp);
+
+def_fmt_prim_alloc!(bool, core::fmt::Display, core::fmt::Debug);
+
+def_fmt_prim_alloc!(char, core::fmt::Display, core::fmt::Debug);
+
+def_fmt_prim_alloc!(str, core::fmt::Display, core::fmt::Debug);
+
+#[cfg(all(feature = "alloc", not(verus_verify_core)))]
+def_fmt_prim_alloc!(alloc::string::String, core::fmt::Display, core::fmt::Debug);
+
 pub broadcast group group_fmt_axioms {
     // types
     axiom_fmt_req_all_u8,

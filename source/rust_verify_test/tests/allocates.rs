@@ -1009,3 +1009,23 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 1)
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_fmt_primitives ["vstd", "-V alloc-check"] => verus_code! {
+        use core::fmt::{Display, Formatter, Error};
+
+        pub struct P(pub u8, pub bool, pub char);
+
+        impl Display for P {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
+                allocates 0
+            {
+                write!(f, "{} {:?} {:x} {:#b} {}", self.0, self.1, self.0, self.0, self.2)
+            }
+        }
+
+        impl vstd::std_specs::fmt::DisplaySpecImpl for P {
+            open spec fn fmt_req(&self, f: &Formatter<'_>) -> bool { true }
+        }
+    } => Ok(())
+}
