@@ -120,6 +120,7 @@ pub struct ArgsX {
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
     pub alloc_check: bool,
+    pub alloc_check_strict: bool,
     pub no_bv_simplify: bool,
     pub observer: Option<String>,
 }
@@ -171,6 +172,7 @@ impl ArgsX {
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
             alloc_check: Default::default(),
+            alloc_check_strict: Default::default(),
             no_bv_simplify: Default::default(),
             observer: None,
         }
@@ -419,6 +421,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
     const EXTENDED_CHECK_API_SAFETY: &str = "check-api-safety";
     const EXTENDED_ALLOC_CHECK: &str = "alloc-check";
+    const EXTENDED_ALLOC_CHECK_STRICT: &str = "alloc-check-strict";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
     const EXTENDED_OBSERVER: &str = "observer";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
@@ -447,6 +450,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_ALLOC_CHECK,
             "Check the `allocates` bounds of exec functions (an upper bound on allocation-source calls on a normal return). Experimental.",
+        ),
+        (
+            EXTENDED_ALLOC_CHECK_STRICT,
+            "Like alloc-check, and also require every function with an `allocates` bound to be `no_unwind`, so that no panic path exists. Experimental.",
         ),
         (
             EXTENDED_NO_BV_SIMPLIFY,
@@ -860,7 +867,9 @@ pub fn parse_args_with_imports(
         smt_encoding,
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
-        alloc_check: extended.contains_key(EXTENDED_ALLOC_CHECK),
+        alloc_check: extended.contains_key(EXTENDED_ALLOC_CHECK)
+            || extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
+        alloc_check_strict: extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
         observer: match extended.get(EXTENDED_OBSERVER) {
             None => None,

@@ -1542,6 +1542,19 @@ fn alloc_count_after_call(
     args: &Exps,
 ) -> Result<Stm, VirErr> {
     let target_fun = get_function(ctx, span, target)?;
+    if matches!(
+        crate::ast_util::fun_as_friendly_rust_name(target).as_str(),
+        "std::panic::catch_unwind" | "std::panicking::catch_unwind"
+    ) {
+        // A caught panic lets execution continue after allocations on the panic path, which
+        // `allocates` (a claim about normal returns) does not count.
+        // (Unreachable today: Verus cannot specify `catch_unwind`, whose result type contains
+        // `dyn Any + Send`; this guards the soundness argument if that ever changes.)
+        return Err(error(
+            span,
+            "`catch_unwind` cannot be used in a function checked with -V alloc-check: allocations on the caught panic path are not counted",
+        ));
+    }
     if let Some(resolved) = resolved {
         let resolved_fun = get_function(ctx, span, resolved)?;
         if resolved_fun.x.allocates.is_none() && target_fun.x.allocates.is_none() {

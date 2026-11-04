@@ -403,6 +403,9 @@ pub fn run_verus(
         } else if *option == "-V alloc-check" {
             verus_args.push("-V".to_string());
             verus_args.push("alloc-check".to_string());
+        } else if *option == "-V alloc-check-strict" {
+            verus_args.push("-V".to_string());
+            verus_args.push("alloc-check-strict".to_string());
         } else if *option == "-V axiom-usage-info" {
             verus_args.push("-V".to_string());
             verus_args.push("axiom-usage-info".to_string());

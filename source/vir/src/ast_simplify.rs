@@ -1875,6 +1875,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         true,
         ctx.check_api_safety,
         ctx.alloc_check,
+        ctx.alloc_check_strict,
         ctx.axiom_usage_info,
         ctx.no_bv_simplify,
         ctx.report_long_running,

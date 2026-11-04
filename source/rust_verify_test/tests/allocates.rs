@@ -809,3 +809,46 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 3)
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_strict_requires_no_unwind ["vstd", "-V alloc-check-strict"] => verus_code! {
+        fn f() -> u8
+            allocates 0
+        {
+            3
+        }
+    } => Err(err) => assert_vir_error_msg(err, "must be `no_unwind`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_strict_no_unwind_ok ["vstd", "-V alloc-check-strict"] => verus_code! {
+        fn f() -> u8
+            no_unwind
+            allocates 0
+        {
+            3
+        }
+
+        fn g() -> u8
+            no_unwind
+            allocates 0
+        {
+            f()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // `catch_unwind` cannot be specified at all today (its result holds `dyn Any + Send`), so no
+    // checked function can observe a caught panic; alloc-check also rejects it explicitly.
+    #[test] alloc_check_catch_unwind_unspecifiable ["vstd", "-V alloc-check"] => verus_code! {
+        pub assume_specification<F: FnOnce() -> R + std::panic::UnwindSafe, R>[ std::panic::catch_unwind::<F, R> ](f: F) -> std::thread::Result<R>;
+
+        fn f() -> bool
+            allocates 0
+        {
+            let r = std::panic::catch_unwind(|| 3u8);
+            r.is_ok()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "does not currently support dyn with more than one trait")
+}

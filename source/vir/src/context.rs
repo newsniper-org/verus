@@ -78,6 +78,8 @@ pub struct GlobalCtx {
     pub check_api_safety: bool,
     /// `-V alloc-check`: check `allocates` bounds of exec functions
     pub alloc_check: bool,
+    /// `-V alloc-check-strict`: functions with an `allocates` bound must be `no_unwind`
+    pub alloc_check_strict: bool,
     /// `-V alloc-check`: for each datatype with a `Drop` impl in the crate (or its imports),
     /// the impl's span and whether it is bounded by `allocates 0`. Computed before pruning,
     /// since `Drop::drop` is never called explicitly and would otherwise be pruned away.
@@ -352,6 +354,7 @@ impl GlobalCtx {
         after_simplify: bool,
         check_api_safety: bool,
         alloc_check: bool,
+        alloc_check_strict: bool,
         axiom_usage_info: bool,
         no_bv_simplify: bool,
         report_long_running: bool,
@@ -809,6 +812,7 @@ impl GlobalCtx {
             solver,
             check_api_safety,
             alloc_check,
+            alloc_check_strict,
             drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
             axiom_usage_info,
             no_bv_simplify,
@@ -843,6 +847,7 @@ impl GlobalCtx {
             solver: self.solver.clone(),
             check_api_safety: self.check_api_safety,
             alloc_check: self.alloc_check,
+            alloc_check_strict: self.alloc_check_strict,
             drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
             axiom_usage_info: self.axiom_usage_info,
             no_bv_simplify: self.no_bv_simplify,

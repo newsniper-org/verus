@@ -976,6 +976,14 @@ pub fn func_def_to_sst(
     {
         crate::alloc_check::check_drop_glue(ctx, function)?;
         let span = &own_bound.as_ref().or(inherited_bound.as_ref()).unwrap().span;
+        if ctx.global.alloc_check_strict
+            && !matches!(function.x.unwind_spec_or_default(), crate::ast::UnwindSpec::NoUnwind)
+        {
+            return Err(crate::messages::error(
+                span,
+                "with -V alloc-check-strict, a function with an `allocates` bound must be `no_unwind`",
+            ));
+        }
         let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
         let bool_typ = Arc::new(TypX::Bool);
         let counter = state.declare_var_stm(
