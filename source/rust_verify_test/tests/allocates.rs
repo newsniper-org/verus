@@ -406,3 +406,85 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+// vstd: Box/Rc/Arc and Vec carry `allocates` bounds; Vec has a capacity model built from what std
+// documents as guaranteed (push never reallocates when capacity suffices).
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_vec_capacity ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        broadcast use vstd::std_specs::vec::group_vec_axioms;
+
+        fn make(x: u8) -> (r: Box<u8>)
+            ensures *r == x
+            allocates 1
+        {
+            Box::new(x)
+        }
+
+        fn fill_reserved(n: usize) -> (v: Vec<u8>)
+            ensures v@.len() == n
+            allocates 1
+        {
+            let mut v: Vec<u8> = Vec::with_capacity(n);
+            let mut i: usize = 0;
+            while i < n
+                invariant
+                    i <= n,
+                    v@.len() == i,
+                    v.capacity() >= n,
+                    allocated() <= 1,
+                decreases n - i
+            {
+                v.push(0);
+                i = i + 1;
+            }
+            v
+        }
+
+        fn fill_unreserved(n: usize) -> (v: Vec<u8>)
+            ensures v@.len() == n
+            allocates n
+        {
+            let mut v: Vec<u8> = Vec::new();
+            let mut i: usize = 0;
+            while i < n
+                invariant
+                    i <= n,
+                    v@.len() == i,
+                    allocated() <= i,
+                decreases n - i
+            {
+                v.push(0);
+                i = i + 1;
+            }
+            v
+        }
+
+        fn fill_unreserved_wrong(n: usize) -> (v: Vec<u8>)
+            ensures v@.len() == n
+            allocates 1 // FAILS
+        {
+            let mut v: Vec<u8> = Vec::new();
+            let mut i: usize = 0;
+            while i < n
+                invariant
+                    i <= n,
+                    v@.len() == i,
+                    allocated() <= i,
+                decreases n - i
+            {
+                v.push(0);
+                i = i + 1;
+            }
+            v
+        }
+
+        fn pop_and_clear(v: &mut Vec<u8>)
+            allocates 0
+        {
+            let _x = v.pop();
+            v.clear();
+        }
+    } => Err(err) => assert_one_fails(err)
+}

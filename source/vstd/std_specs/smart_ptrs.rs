@@ -12,11 +12,13 @@ verus! {
 pub assume_specification<T, A: Allocator>[ <[T]>::into_vec ](b: Box<[T], A>) -> (v: Vec<T, A>)
     ensures
         v@ == b@,
+    allocates 0
 ;
 
 pub assume_specification<T>[ Box::<T>::new ](t: T) -> (v: Box<T>)
     ensures
         *v == t,
+    allocates 1
 ;
 
 pub assume_specification<T: core::default::Default>[ <Box<
@@ -29,6 +31,7 @@ pub assume_specification<T: core::default::Default>[ <Box<
 pub assume_specification<T>[ Rc::<T>::new ](t: T) -> (v: Rc<T>)
     ensures
         *v == t,
+    allocates 1
 ;
 
 pub assume_specification<T: core::default::Default>[ <Rc<
@@ -41,6 +44,7 @@ pub assume_specification<T: core::default::Default>[ <Rc<
 pub assume_specification<T>[ Arc::<T>::new ](t: T) -> (v: Arc<T>)
     ensures
         *v == t,
+    allocates 1
 ;
 
 pub assume_specification<T: core::default::Default>[ <Arc<
@@ -66,6 +70,7 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>)
             Ok(t) => t == *v,
             Err(e) => e == v,
         },
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>) -> (result: Option<
@@ -73,6 +78,7 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>)
 >)
     ensures
         result matches Some(t) ==> t == *v,
+    allocates 0
 ;
 
 } // verus!

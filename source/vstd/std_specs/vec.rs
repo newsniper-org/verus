@@ -56,6 +56,7 @@ pub fn vec_index<T, A: Allocator>(vec: &Vec<T, A>, i: usize) -> (element: &T)
     ensures
         *element == vec.view().index(i as int),
     no_unwind
+    allocates 0
 {
     &vec[i]
 }
@@ -73,6 +74,7 @@ pub fn vec_index_mut<T, A: Allocator>(vec: &mut Vec<T, A>, i: usize) -> (element
 
         *final(element) == final(vec).view().index(i as int),
     no_unwind
+    allocates 0
 {
     &mut vec[i]
 }
@@ -94,32 +96,65 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::len ](vec: &Vec<T, A>) -
     ensures
         len == spec_vec_len(vec),
     no_unwind
+    allocates 0
+;
+
+////// Capacity (for allocation checking, -V alloc-check)
+// Only what std documents as guaranteed (alloc/src/vec/mod.rs, "Guarantees" and the method docs)
+// is stated here; `allocates` bounds are upper bounds on allocator calls (allocate or grow).
+pub uninterp spec fn spec_vec_capacity<T, A: Allocator>(v: &Vec<T, A>) -> usize;
+
+// A Vec's capacity is at least its length, and is usize::MAX for zero-sized elements.
+pub broadcast proof fn axiom_spec_capacity<T, A: Allocator>(v: &Vec<T, A>)
+    ensures
+        #[trigger] spec_vec_capacity(v) >= v@.len(),
+        crate::layout::size_of::<T>() == 0 ==> spec_vec_capacity(v) == usize::MAX,
+{
+    admit();
+}
+
+#[verifier::when_used_as_spec(spec_vec_capacity)]
+pub assume_specification<T, A: Allocator>[ Vec::<T, A>::capacity ](vec: &Vec<T, A>) -> (capacity: usize)
+    ensures
+        capacity == spec_vec_capacity(vec),
+    no_unwind
+    allocates 0
 ;
 
 ////// Other functions
 pub assume_specification<T>[ Vec::<T>::new ]() -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
+        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+    allocates 0
 ;
 
 pub assume_specification<T>[ <Vec<T> as core::default::Default>::default ]() -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
+        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::new_in ](alloc: A) -> (v: Vec<T, A>)
     ensures
         v@ == Seq::<T>::empty(),
+        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+    allocates 0
 ;
 
 pub assume_specification<T>[ Vec::<T>::with_capacity ](capacity: usize) -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
+        spec_vec_capacity(&v) >= capacity,
+    allocates if capacity == 0 { 0int } else { 1int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::with_capacity_in ](capacity: usize, alloc: A) -> (v: Vec<T, A>)
     ensures
         v@ == Seq::<T>::empty(),
+        spec_vec_capacity(&v) >= capacity,
+    allocates if capacity == 0 { 0int } else { 1int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::reserve ](
@@ -128,6 +163,10 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::reserve ](
 )
     ensures
         final(vec)@ == old(vec)@,
+        spec_vec_capacity(final(vec)) >= old(vec)@.len() + additional,
+        spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional { 0int } else { 1int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve ](
@@ -136,6 +175,10 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve ](
 ) -> (result: Result<(), TryReserveError>)
     ensures
         final(vec)@ == old(vec)@,
+        result is Ok ==> spec_vec_capacity(final(vec)) >= old(vec)@.len() + additional,
+        spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional { 0int } else { 1int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
@@ -144,11 +187,18 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
 ) -> (result: Result<(), TryReserveError>)
     ensures
         final(vec)@ == old(vec)@,
+        result is Ok ==> spec_vec_capacity(final(vec)) >= old(vec)@.len() + additional,
+        spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional { 0int } else { 1int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::push ](vec: &mut Vec<T, A>, value: T)
     ensures
         final(vec)@ == old(vec)@.push(value),
+        old(vec)@.len() < spec_vec_capacity(old(vec))
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if old(vec)@.len() == spec_vec_capacity(old(vec)) { 1int } else { 0int }
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::pop ](vec: &mut Vec<T, A>) -> (value:
@@ -157,6 +207,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::pop ](vec: &mut Vec<T, A
         old(vec)@.len() > 0 ==> value == Some(old(vec)@[old(vec)@.len() - 1])
             && final(vec)@ == old(vec)@[..old(vec)@.len() - 1],
         old(vec)@.len() == 0 ==> value == None::<T> && final(vec)@ == old(vec)@,
+        spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::append ](
@@ -166,6 +218,9 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::append ](
     ensures
         final(vec)@ == old(vec)@ + old(other)@,
         final(other)@ == Seq::<T>::empty(),
+        spec_vec_capacity(old(vec)) - old(vec)@.len() >= old(other)@.len()
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if spec_vec_capacity(old(vec)) - old(vec)@.len() >= old(other)@.len() { 0int } else { 1int }
 ;
 
 pub assume_specification<T: core::clone::Clone, A: Allocator>[ Vec::<T, A>::extend_from_slice ](
@@ -195,6 +250,8 @@ pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index
 ) -> (r: &<Vec<T, A> as Index<I>>::Output)
     ensures
         exists|s: &[T]| #[trigger] s@ == vec@ && call_ensures(<I as SliceIndex<[T]>>::index, (i, s), r),
+    // SliceIndex is sealed: only std's (non-allocating) impls exist
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::swap_remove ](
@@ -206,6 +263,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::swap_remove ](
     ensures
         element == old(vec)[i as int],
         final(vec)@ == old(vec)@.update(i as int, old(vec)@.last()).drop_last(),
+        spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::insert ](
@@ -217,6 +276,9 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::insert ](
         i <= old(vec).len(),
     ensures
         final(vec)@ == old(vec)@.insert(i as int, element),
+        old(vec)@.len() < spec_vec_capacity(old(vec))
+            ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates if old(vec)@.len() == spec_vec_capacity(old(vec)) { 1int } else { 0int }
 ;
 
 pub assume_specification<T, A: Allocator> [ <Vec<T, A>>::is_empty ](
@@ -225,6 +287,7 @@ pub assume_specification<T, A: Allocator> [ <Vec<T, A>>::is_empty ](
     ensures res <==> v@.len() == 0,
     opens_invariants none
     no_unwind
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::remove ](
@@ -236,11 +299,15 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::remove ](
     ensures
         element == old(vec)[i as int],
         final(vec)@ == old(vec)@.remove(i as int),
+        spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::clear ](vec: &mut Vec<T, A>)
     ensures
         final(vec).view() == Seq::<T>::empty(),
+        spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_slice ](vec: &Vec<T, A>) -> (slice: &[T])
@@ -248,6 +315,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_slice ](vec: &Vec<T, 
         slice@ == vec@,
     opens_invariants none
     no_unwind
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::convert::AsRef<[T]>>::as_ref ](
@@ -257,6 +325,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::convert::AsRef<[T
         slice@ == vec@,
     opens_invariants none
     no_unwind
+    allocates 0
 ;
 
 #[doc(hidden)]
@@ -266,6 +335,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_mut_slice ](vec: &mut
         final(slice)@ == final(vec)@,
     opens_invariants none
     no_unwind
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::Deref>::deref ](
@@ -273,6 +343,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::Deref>::dere
 ) -> (slice: &[T])
     ensures
         slice@ == vec@,
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::DerefMut>::deref_mut ](
@@ -281,6 +352,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::DerefMut>::d
     ensures
         slice@ == old(vec)@,
         final(slice)@ == final(vec)@,
+    allocates 0
 ;
 
 pub assume_specification<T, A: Allocator + core::clone::Clone>[ Vec::<T, A>::split_off ](
@@ -324,6 +396,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::truncate ](vec: &mut Vec
     ensures
         len <= old(vec).len() ==> final(vec)@ == old(vec)@[..len],
         len > old(vec).len() ==> final(vec)@ == old(vec)@,
+        spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+    allocates 0
 ;
 
 pub assume_specification<T: Clone, A: Allocator>[ Vec::<T, A>::resize ](
@@ -424,6 +498,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_iter ](vec: Vec<T, 
         IteratorSpec::remaining(&iter) == vec@,
         into_iter_elts(iter) == IteratorSpec::remaining(&iter),
         IteratorSpec::decrease(&iter) is Some,
+    allocates 0
 ;
 
 pub assume_specification<'a, T, A: Allocator> [<&'a Vec<T, A> as core::iter::IntoIterator>::into_iter] (vec: &'a Vec<T, A>) ->
@@ -431,7 +506,7 @@ pub assume_specification<'a, T, A: Allocator> [<&'a Vec<T, A> as core::iter::Int
     ensures
         IteratorSpec::remaining(&iter) == vec@.as_ref(),
         super::slice::into_iter_elts(iter) == IteratorSpec::remaining(&iter).unref(),
-        IteratorSpec::decrease(&iter) is Some,
+        IteratorSpec::decrease(&iter) is Some,    allocates 0
 ;
 
 impl<T>  FromIteratorSpecImpl<T> for Vec<T> {
@@ -498,6 +573,7 @@ pub broadcast axiom fn axiom_vec_decreases_to_view<T>(v: Vec<T>)
 
 pub broadcast group group_vec_axioms {
     axiom_spec_len,
+    axiom_spec_capacity,
     axiom_vec_index_decreases,
     vec_clone_deep_view_proof,
     axiom_vec_has_resolved,
