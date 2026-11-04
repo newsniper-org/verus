@@ -1005,6 +1005,8 @@ pub enum BuiltinSpecFun {
     DefaultEns,
     /// `allocated()`: allocation-source calls made so far by the enclosing exec function
     Allocated,
+    /// `call_allocates(f, args)`: the `allocates` bound of a function value at the given args
+    ClosureAlloc,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]

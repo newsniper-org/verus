@@ -692,6 +692,21 @@ pub fn inherit_default_bodies(
                         .expect("map_generic_bounds_visitor");
                 let typ_bounds: Vec<GenericBound> =
                     trait_impl.x.typ_bounds.iter().chain(f_typ_bounds.iter()).cloned().collect();
+                // `allocates` (-V alloc-check) is kept on the per-impl copy, with the impl's types
+                // substituted, so that calls to the inherited default method are charged with it.
+                let allocates = match &default_function.x.allocates {
+                    None => None,
+                    Some(e) => Some(crate::ast_visitor::map_expr_visitor_env(
+                        e,
+                        &mut air::scope_map::ScopeMap::new(),
+                        &mut (),
+                        &|_, _, e| Ok(e.clone()),
+                        &|_, _, s| Ok(vec![s.clone()]),
+                        &ft,
+                        &|_, _, p| Ok(p.clone()),
+                        &|_, _, p| Ok(p.clone()),
+                    )?),
+                };
                 let inherit_functionx = FunctionX {
                     name,
                     proxy: None,
@@ -717,7 +732,7 @@ pub fn inherit_default_bodies(
                     atomic_update: None,
                     mask_spec: None,
                     unwind_spec: None,
-                    allocates: None,
+                    allocates,
                     item_kind: default_function.x.item_kind,
                     attrs: Arc::new(crate::ast::FunctionAttrsX::default()),
                     body: None,

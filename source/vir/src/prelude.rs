@@ -60,6 +60,7 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let closure_req = str_to_node(CLOSURE_REQ);
     let closure_ens = str_to_node(CLOSURE_ENS);
     let closure_opens_invariants = str_to_node(CLOSURE_OPENS_INVARIANTS);
+    let closure_alloc = str_to_node(CLOSURE_ALLOC);
     let default_ens = str_to_node(DEFAULT_ENS);
     #[allow(non_snake_case)]
     let Poly = str_to_node(POLY);
@@ -1035,6 +1036,16 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         (declare-fun [closure_ens] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Bool)
         (declare-fun [closure_opens_invariants] (/*[decoration] skipped */ [typ] [decoration] [typ] [decoration] [typ] [Poly] [Poly]) Poly)
         (declare-fun [default_ens] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Bool)
+        // call_allocates (-V alloc-check): the `allocates` bound of a function value at given args.
+        // Allocation counts are never negative (charges are clamped at 0), so neither is an
+        // unknown bound.
+        (declare-fun [closure_alloc] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Int)
+        (axiom (forall ((t1 [typ]) (d2 [decoration]) (t2 [typ]) (f [Poly]) (a [Poly])) (!
+            (<= 0 ([closure_alloc] t1 d2 t2 f a))
+            :pattern (([closure_alloc] t1 d2 t2 f a))
+            :qid prelude_closure_alloc_nonneg
+            :skolemid skolem_prelude_closure_alloc_nonneg
+        )))
 
         // Decreases
         (declare-fun [height] ([Poly]) [Height])

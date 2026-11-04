@@ -375,7 +375,7 @@ test_verify_one_file_with_options! {
             allocates 0
         {
         }
-    } => Err(err) => assert_vir_error_msg(err, "the drop of type parameter `T` cannot be bounded yet")
+    } => Err(err) => assert_vir_error_msg(err, "add the bound `T: vstd::alloc_check::AllocFreeDrop` (or `T: Copy`)")
 }
 
 test_verify_one_file_with_options! {
@@ -487,4 +487,149 @@ test_verify_one_file_with_options! {
             v.clear();
         }
     } => Err(err) => assert_one_fails(err)
+}
+
+// W: a generic function's bound mentions its callbacks with `call_allocates`; calls through a
+// trait method are charged with `call_allocates(T::m, args)`, tied to each impl's own bound.
+// M: `vstd::alloc_check::AllocFreeDrop` marks types whose drop cannot allocate (checked).
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_call_allocates_generic_and_default ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+
+        pub struct C {
+            pub x: u8,
+        }
+
+        impl AllocFreeDrop for C {}
+
+        impl Clone for C {
+            fn clone(&self) -> (r: C)
+                ensures r.x == self.x
+                allocates 0
+            {
+                C { x: self.x }
+            }
+        }
+
+        pub struct H {
+            pub x: u8,
+        }
+
+        impl AllocFreeDrop for H {}
+
+        impl Clone for H {
+            #[verifier::external_body]
+            fn clone(&self) -> (r: H)
+                allocates 1
+            {
+                let _b = Box::new(1u8);
+                H { x: self.x }
+            }
+        }
+
+        fn dup<T: Clone + AllocFreeDrop>(x: &T) -> (r: T)
+            allocates call_allocates(T::clone, (x,))
+        {
+            x.clone()
+        }
+
+        fn use_c(c: &C)
+            allocates 0
+        {
+            let _d = dup(c);
+        }
+
+        fn use_h(h: &H)
+            allocates 1
+        {
+            let _d = dup(h);
+        }
+
+        fn use_h_wrong(h: &H)
+            allocates 0 // FAILS
+        {
+            let _d = dup(h);
+        }
+
+        pub trait Tr {
+            fn req(&self) -> u8;
+
+            fn twice(&self) -> (r: (u8, u8))
+                allocates 2 * call_allocates(Self::req, (self,))
+            {
+                (self.req(), self.req())
+            }
+        }
+
+        pub struct S;
+
+        impl Tr for S {
+            fn req(&self) -> u8
+                allocates 1
+            {
+                let _b = Box::new(1u8);
+                7
+            }
+        }
+
+        fn use_twice(s: &S)
+            allocates 2
+        {
+            let _r = s.twice();
+        }
+
+        fn use_twice_wrong(s: &S)
+            allocates 1 // FAILS
+        {
+            let _r = s.twice();
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_marker_bound_ok ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+
+        pub struct Wrap<T> {
+            pub t: T,
+        }
+
+        impl<T: AllocFreeDrop> AllocFreeDrop for Wrap<T> {}
+
+        fn take<T: AllocFreeDrop>(w: Wrap<T>, v: Vec<T>)
+            allocates 0
+        {
+        }
+
+        fn take_copy<T: Copy>(t: T)
+            allocates 0
+        {
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_marker_impl_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+
+        pub struct Bad {
+            pub x: u8,
+        }
+
+        impl Drop for Bad {
+            #[verifier::external_body]
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+            {
+                let _b = Box::new(1u8);
+            }
+        }
+
+        impl AllocFreeDrop for Bad {}
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
 }

@@ -349,7 +349,8 @@ fn gather_terms(ctxt: &mut Ctxt, ctx: &Ctx, exp: &Exp, depth: u64) -> (bool, Ter
                     InternalFun::ClosureReq
                     | InternalFun::ClosureEns
                     | InternalFun::ClosureOpensInvariants
-                    | InternalFun::DefaultEns,
+                    | InternalFun::DefaultEns
+                    | InternalFun::ClosureAlloc,
                 ) => (is_pure, Arc::new(TermX::App(App::ClosureSpec, Arc::new(all_terms)))),
                 CallFun::InternalFun(
                     InternalFun::CheckDecreaseHeight

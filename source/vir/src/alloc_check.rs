@@ -10,8 +10,8 @@
 //! body (this includes temporaries, whose types are the return types of calls).
 
 use crate::ast::{
-    Constant, CrateId, Datatype, Dt, ExprX, Function, Ident, Primitive, Typ, TypDecoration, TypX,
-    VirErr,
+    Constant, CrateId, Datatype, Dt, ExprX, Function, GenericBoundX, GenericBounds, Ident, Krate,
+    Path, Primitive, TraitId, Typ, TypDecoration, TypX, VirErr,
 };
 use crate::context::Ctx;
 use crate::messages::{Span, error};
@@ -34,15 +34,53 @@ pub(crate) fn is_literal_zero(e: &crate::ast::Expr) -> bool {
     }
 }
 
+/// `vstd::alloc_check::AllocFreeDrop`: types whose drop glue performs no allocation
+fn is_alloc_free_drop_trait(path: &Path) -> bool {
+    crate::ast_util::path_as_friendly_rust_name(path) == "vstd::alloc_check::AllocFreeDrop"
+}
+
+/// `Copy` types have no drop glue at all
+fn is_copy_trait(path: &Path) -> bool {
+    crate::ast_util::path_as_friendly_rust_name(path) == "core::marker::Copy"
+}
+
+/// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
+fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
+    let mut params = HashSet::new();
+    for bound in bounds.iter() {
+        if let GenericBoundX::Trait(TraitId::Path(path), args) = &**bound {
+            if is_alloc_free_drop_trait(path) || is_copy_trait(path) {
+                if let Some(self_typ) = args.first() {
+                    if let TypX::TypParam(x) = &**self_typ {
+                        params.insert(x.clone());
+                    }
+                }
+            }
+        }
+    }
+    params
+}
+
 struct DropGlueCheck<'a> {
-    ctx: &'a Ctx,
+    datatypes: &'a HashMap<Dt, Datatype>,
+    drop_table: &'a HashMap<Dt, (Span, bool)>,
+    alloc_free_params: HashSet<Ident>,
     /// Types already checked, keyed by their debug form (TypX is not Eq)
     visited: HashSet<String>,
 }
 
 impl<'a> DropGlueCheck<'a> {
-    fn new(ctx: &'a Ctx) -> Self {
-        DropGlueCheck { ctx, visited: HashSet::new() }
+    fn new(
+        datatypes: &'a HashMap<Dt, Datatype>,
+        drop_table: &'a HashMap<Dt, (Span, bool)>,
+        bounds: &GenericBounds,
+    ) -> Self {
+        DropGlueCheck {
+            datatypes,
+            drop_table,
+            alloc_free_params: alloc_free_typ_params(bounds),
+            visited: HashSet::new(),
+        }
     }
 
     fn unsupported(&self, span: &Span, typ: &Typ, why: &str) -> VirErr {
@@ -66,7 +104,7 @@ impl<'a> DropGlueCheck<'a> {
         if !datatype.x.destructor {
             return Ok(());
         }
-        match self.ctx.global.drop_impl_alloc_zero.get(dt) {
+        match self.drop_table.get(dt) {
             Some((_, true)) => Ok(()),
             Some((drop_span, false)) => Err(error(
                 span,
@@ -125,7 +163,7 @@ impl<'a> DropGlueCheck<'a> {
                 Ok(())
             }
             TypX::Datatype(dt, args, _) => {
-                let Some(datatype) = self.ctx.datatype_map.get(dt) else {
+                let Some(datatype) = self.datatypes.get(dt) else {
                     return Err(self.unsupported(span, typ, "its definition is not visible"));
                 };
                 let datatype = datatype.clone();
@@ -155,10 +193,14 @@ impl<'a> DropGlueCheck<'a> {
                 }
                 Ok(())
             }
+            TypX::TypParam(x) if self.alloc_free_params.contains(x) => Ok(()),
             TypX::TypParam(x) => Err(self.unsupported(
                 span,
                 typ,
-                &format!("the drop of type parameter `{}` cannot be bounded yet", x),
+                &format!(
+                    "add the bound `{}: vstd::alloc_check::AllocFreeDrop` (or `{}: Copy`)",
+                    x, x
+                ),
             )),
             TypX::Projection { .. } | TypX::PointeeMetadata(_) => {
                 Err(self.unsupported(span, typ, "projected types are not supported yet"))
@@ -183,7 +225,11 @@ impl<'a> DropGlueCheck<'a> {
 
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
 pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirErr> {
-    let mut checker = DropGlueCheck::new(ctx);
+    let mut checker = DropGlueCheck::new(
+        &ctx.datatype_map,
+        &ctx.global.drop_impl_alloc_zero,
+        &function.x.typ_bounds,
+    );
     for param in function.x.params.iter() {
         checker.check(&param.span, &param.x.typ)?;
     }
@@ -197,6 +243,30 @@ pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirE
         for (span, typ) in typs {
             checker.check(&span, &typ)?;
         }
+    }
+    Ok(())
+}
+
+/// Marker rule: `impl AllocFreeDrop for X` is accepted only if dropping an `X` cannot allocate,
+/// i.e. X's drop glue passes the drop rule (with the impl's own bounds on its type parameters).
+/// Impls from imported crates (including vstd's impls for std types) are checked too.
+pub(crate) fn check_alloc_free_drop_impls(
+    krate: &Krate,
+    drop_table: &HashMap<Dt, (Span, bool)>,
+) -> Result<(), VirErr> {
+    let datatypes: HashMap<Dt, Datatype> =
+        krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect();
+    for imp in krate.trait_impls.iter() {
+        if !is_alloc_free_drop_trait(&imp.x.trait_path) {
+            continue;
+        }
+        let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
+        let mut checker = DropGlueCheck::new(&datatypes, drop_table, &imp.x.typ_bounds);
+        checker.check(&imp.span, self_typ).map_err(|e| {
+            e.help(
+                "an `AllocFreeDrop` impl is only accepted when dropping the type cannot allocate",
+            )
+        })?;
     }
     Ok(())
 }

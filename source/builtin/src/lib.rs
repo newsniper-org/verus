@@ -2152,6 +2152,14 @@ pub fn allocated() -> int {
     unimplemented!();
 }
 
+/// The `allocates` bound of `f` at `args` (`-V alloc-check`). Unknown (unconstrained) when `f`
+/// has no `allocates` bound.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::call_allocates"]
+pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> int {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_requires"]
 pub fn call_requires<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {

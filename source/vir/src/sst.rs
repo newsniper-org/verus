@@ -57,6 +57,8 @@ pub enum InternalFun {
     OpenInvariantMask(Fun, usize),
     /// The `allocates` bound of the given exec function, applied to the call's arguments
     AllocBound(Fun),
+    /// `call_allocates(f, args)`: the `allocates` bound of a function value
+    ClosureAlloc,
 }
 
 #[derive(Debug, Clone, Hash, ToDebugSNode)]

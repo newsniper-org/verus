@@ -991,7 +991,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 InternalFun::ClosureReq
                 | InternalFun::ClosureEns
                 | InternalFun::ClosureOpensInvariants
-                | InternalFun::DefaultEns => true,
+                | InternalFun::DefaultEns
+                | InternalFun::ClosureAlloc => true,
                 _ => false,
             };
 
@@ -1010,6 +1011,7 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                         str_ident(crate::def::CLOSURE_OPENS_INVARIANTS)
                     }
                     InternalFun::DefaultEns => str_ident(crate::def::DEFAULT_ENS),
+                    InternalFun::ClosureAlloc => str_ident(crate::def::CLOSURE_ALLOC),
                     InternalFun::CheckDecreaseHeight => {
                         str_ident(crate::def::CHECK_DECREASE_HEIGHT)
                     }

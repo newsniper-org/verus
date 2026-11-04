@@ -1494,11 +1494,9 @@ fn stm_call(
         }
     }
 
-    // For `-V alloc-check`: the function whose `allocates` bound this call is charged with
-    let alloc_target = match &resolved_method {
-        Some((f, ts)) => (f.clone(), ts.clone()),
-        None => (name.clone(), typs.clone()),
-    };
+    // For `-V alloc-check`: the static target, and the resolved one (for error messages)
+    let alloc_target =
+        (name.clone(), typs.clone(), resolved_method.as_ref().map(|(f, _)| f.clone()));
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -1540,11 +1538,42 @@ fn alloc_count_after_call(
     ctx: &Ctx,
     span: &Span,
     counter: &VarIdent,
-    (target, target_typs): &(Fun, Typs),
+    (target, target_typs, resolved): &(Fun, Typs, Option<Fun>),
     args: &Exps,
 ) -> Result<Stm, VirErr> {
     let target_fun = get_function(ctx, span, target)?;
-    if target_fun.x.allocates.is_none() {
+    if let Some(resolved) = resolved {
+        let resolved_fun = get_function(ctx, span, resolved)?;
+        if resolved_fun.x.allocates.is_none() && target_fun.x.allocates.is_none() {
+            return Err(error(
+                span,
+                format!(
+                    "cannot bound the allocations of this call: `{}` has no `allocates` specification",
+                    crate::ast_util::fun_as_friendly_rust_name(&resolved_fun.x.name)
+                ),
+            ));
+        }
+    }
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+    let is_trait_method =
+        matches!(target_fun.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. });
+    let bound = if is_trait_method {
+        // A call through a trait method (resolved or not): charge `call_allocates(T::m, args)`.
+        // The FnDef axioms of each impl tie it to that impl's own bound, so a resolved call gets
+        // the impl's bound and an unresolved one (`x.clone()` for `T: Clone`) stays symbolic,
+        // for the caller's own bound to mention.
+        sst_call_allocates(span, target, target_typs, &target_fun, args)
+    } else if target_fun.x.allocates.is_some() {
+        SpannedTyped::new(
+            span,
+            &int_typ,
+            ExpX::Call(
+                CallFun::InternalFun(InternalFun::AllocBound(target.clone())),
+                target_typs.clone(),
+                args.clone(),
+            ),
+        )
+    } else {
         return Err(error(
             span,
             format!(
@@ -1553,25 +1582,65 @@ fn alloc_count_after_call(
             ),
         )
         .help("give the callee an `allocates` bound, or call it outside of functions checked with -V alloc-check"));
-    }
-    let int_typ = Arc::new(TypX::Int(IntRange::Int));
-    let bound = SpannedTyped::new(
+    };
+    // Clamp at 0: a (trusted) negative bound must not offset other allocations
+    let zero = SpannedTyped::new(span, &int_typ, ExpX::Const(Constant::Int(BigInt::zero())));
+    let nonneg = SpannedTyped::new(
         span,
-        &int_typ,
-        ExpX::Call(
-            CallFun::InternalFun(InternalFun::AllocBound(target.clone())),
-            target_typs.clone(),
-            args.clone(),
+        &Arc::new(TypX::Bool),
+        ExpX::Binary(
+            crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+            zero.clone(),
+            bound.clone(),
         ),
     );
+    let charged = SpannedTyped::new(span, &int_typ, ExpX::If(nonneg, bound, zero));
     let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter.clone()));
     let sum = SpannedTyped::new(
         span,
         &int_typ,
-        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, bound),
+        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, charged),
     );
     let lhs = Dest { dest: var_loc_exp(span, &int_typ, counter.clone()), is_init: false };
     Ok(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum }))
+}
+
+/// `call_allocates(fun, args)` as an SST expression (before poly coercion)
+fn sst_call_allocates(
+    span: &Span,
+    fun: &Fun,
+    typ_args: &Typs,
+    func: &Function,
+    args: &Exps,
+) -> Exp {
+    let mut typ_substs: HashMap<Ident, Typ> = HashMap::new();
+    for (typ_param, arg) in func.x.typ_params.iter().zip(typ_args.iter()) {
+        typ_substs.insert(typ_param.clone(), arg.clone());
+    }
+    let skip_dummy =
+        func.x.params.len() > 0 && func.x.params[0].x.name == crate::def::dummy_param_name();
+    let skip_dummy = if skip_dummy { 1 } else { 0 };
+    let param_typs: Vec<Typ> = func
+        .x
+        .params
+        .iter()
+        .skip(skip_dummy)
+        .map(|p| crate::sst_util::subst_typ(&typ_substs, &p.x.typ))
+        .collect();
+    let tuple_typ = crate::ast_util::mk_tuple_typ(&Arc::new(param_typs));
+    let fndef_typ = Arc::new(TypX::FnDef(fun.clone(), typ_args.clone(), None));
+    let fndef_value = SpannedTyped::new(span, &fndef_typ, ExpX::ExecFnByName(fun.clone()));
+    let tuple_args: Vec<Exp> = args.iter().skip(skip_dummy).cloned().collect();
+    let args_tuple = crate::sst_util::sst_tuple(span, &Arc::new(tuple_args));
+    SpannedTyped::new(
+        span,
+        &Arc::new(TypX::Int(IntRange::Int)),
+        ExpX::Call(
+            CallFun::InternalFun(InternalFun::ClosureAlloc),
+            Arc::new(vec![fndef_typ, tuple_typ]),
+            Arc::new(vec![fndef_value, args_tuple]),
+        ),
+    )
 }
 
 fn if_to_stm(
@@ -1831,6 +1900,7 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::ClosureEns => InternalFun::ClosureEns,
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,
                 BuiltinSpecFun::DefaultEns => InternalFun::DefaultEns,
+                BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,
             };
             Ok((
                 check_stms,

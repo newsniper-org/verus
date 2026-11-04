@@ -223,6 +223,7 @@ pub const HAS_RESOLVED: &str = "has_resolved";
 pub const CLOSURE_REQ: &str = "closure_req";
 pub const CLOSURE_ENS: &str = "closure_ens";
 pub const CLOSURE_OPENS_INVARIANTS: &str = "closure_opens_invariants";
+pub const CLOSURE_ALLOC: &str = "closure_alloc";
 pub const DEFAULT_ENS: &str = "default_ens";
 const CLOSURE_PARAM: &str = "%closure";
 pub const EXT_EQ: &str = "ext_eq";

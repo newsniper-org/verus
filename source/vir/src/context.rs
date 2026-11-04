@@ -386,6 +386,9 @@ impl GlobalCtx {
                 }
             }
         }
+        if alloc_check {
+            crate::alloc_check::check_alloc_free_drop_impls(krate, &drop_impl_alloc_zero)?;
+        }
 
         let datatypes: HashMap<Path, (TypPositives, Variants)> = krate
             .datatypes
@@ -919,6 +922,16 @@ impl Ctx {
         let mut fndef_type_set = HashSet::new();
         for fndef_type in fndef_types.iter() {
             fndef_type_set.insert(fndef_type.clone());
+        }
+        if global.alloc_check {
+            for f in krate.functions.iter() {
+                if f.x.allocates.is_some() {
+                    fndef_type_set.insert(f.x.name.clone());
+                    if let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+                        fndef_type_set.insert(method.clone());
+                    }
+                }
+            }
         }
         let mut opaque_type_map: HashMap<Path, OpaqueType> = HashMap::new();
         for opaque_type in krate.opaque_types.iter() {

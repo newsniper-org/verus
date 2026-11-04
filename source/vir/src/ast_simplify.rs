@@ -1305,6 +1305,61 @@ fn add_fndef_axioms_to_function(
         }
     }
 
+    // `call_allocates(f, args)` (-V alloc-check): equal to f's `allocates` bound, clamped at 0
+    // (a negative bound must not offset other allocations)
+    if let Some(alloc_expr) = &function.x.allocates {
+        let span = &function.span;
+        let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
+        let tuple_typ = tuple_var.typ.clone();
+        let mut decls: Vec<Stmt> = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let typ = &p.a;
+            let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+            let tuple_field = tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+            let decl = StmtX::Decl {
+                pattern,
+                mode: None,
+                init: Some(PlaceX::spec_temporary(tuple_field)),
+                els: None,
+                assert_irrefutable: false,
+            };
+            decls.push(Spanned::new(span.clone(), decl));
+        }
+        let int_typ = Arc::new(TypX::Int(IntRange::Int));
+        let bound = SpannedTyped::new(
+            &alloc_expr.span,
+            &int_typ,
+            ExprX::Block(Arc::new(decls), Some(alloc_expr.clone())),
+        );
+        let zero = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        let nonneg = crate::ast_util::mk_ineq(span, &zero, &bound, crate::ast::InequalityOp::Le);
+        let clamped =
+            SpannedTyped::new(span, &int_typ, ExprX::If(nonneg, bound.clone(), Some(zero.clone())));
+        let alloc_call = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::ClosureAlloc,
+                    closure_trait_call_typ_args(state, &fndef_singleton, &params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![fndef_singleton.clone(), tuple_var.clone()]),
+                post_args: None,
+                body: None,
+            },
+        );
+        let eq = crate::ast_util::mk_eq(span, &wrap_in_trigger(&alloc_call), &clamped);
+        let forall = Quant { quant: air::ast::Quant::Forall };
+        let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
+        let bool_typ = Arc::new(TypX::Bool);
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, eq)));
+    }
+
     let mut functionx = function.x.clone();
     assert!(functionx.fndef_axioms.is_none());
     functionx.fndef_axioms = Some(Arc::new(fndef_axioms));
@@ -1583,6 +1638,19 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
 
     let fn_once_trait_path = ClosureKind::FnOnce.trait_path();
     let fn_once_trait_in_scope = traits.iter().any(|t| t.x.name == fn_once_trait_path);
+
+    // -V alloc-check: calls through a trait method are charged with `call_allocates`, so every
+    // function with an `allocates` bound (and the trait method it implements) needs FnDef axioms
+    if ctx.alloc_check {
+        for f in functions.iter() {
+            if f.x.allocates.is_some() {
+                state.fndef_typs.insert(f.x.name.clone());
+                if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+                    state.fndef_typs.insert(method.clone());
+                }
+            }
+        }
+    }
 
     // A TraitMethodImpl needs fndef axioms only if its trait method is in fndef_typs
     let fndef_funs: HashMap<&Fun, &Function> = functions

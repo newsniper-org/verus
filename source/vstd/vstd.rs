@@ -31,6 +31,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod alloc_check;
 pub mod arithmetic;
 pub mod array;
 pub mod atomic;
