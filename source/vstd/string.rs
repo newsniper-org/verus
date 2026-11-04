@@ -111,7 +111,7 @@ pub broadcast proof fn is_ascii_concat(s1: &str, s2: &str, s3: &str)
 #[verifier::when_used_as_spec(is_ascii)]
 pub assume_specification[ str::is_ascii ](s: &str) -> (b: bool)
     ensures
-        b == is_ascii(s),
+        b == is_ascii(s),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -121,6 +121,7 @@ use crate::alloc::borrow::ToOwned;
 pub assume_specification[ str::to_owned ](s: &str) -> (res: String)
     ensures
         s@ == res@,
+    allocates 1
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -128,7 +129,7 @@ pub assume_specification[ str::as_bytes ](s: &str) -> (b: &[u8])
     ensures
         b@ == s.spec_bytes(),
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -137,7 +138,7 @@ pub assume_specification[ str::len ](s: &str) -> usize
     returns
         s.spec_bytes().len() as usize,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -146,14 +147,14 @@ pub assume_specification[ str::is_empty ](s: &str) -> bool
     returns
         s@.len() == 0,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[cfg(not(verus_verify_core))]
 #[verifier::allow_in_spec]
 pub assume_specification[ str::is_char_boundary ](s: &str, index: usize) -> bool
     returns
-        is_char_boundary(s.spec_bytes(), index as int),
+        is_char_boundary(s.spec_bytes(), index as int),  allocates 0
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -162,7 +163,7 @@ pub assume_specification[ str::split_at ](s: &str, mid: usize) -> (res: (&str, &
         is_char_boundary(s.spec_bytes(), mid as int),
     ensures
         res.0.spec_bytes() =~= s.spec_bytes()[..mid],
-        res.1.spec_bytes() =~= s.spec_bytes()[mid..],
+        res.1.spec_bytes() =~= s.spec_bytes()[mid..],  allocates 0
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -170,7 +171,7 @@ pub assume_specification[ str::from_utf8_unchecked ](v: &[u8]) -> (res: &str)
     requires
         valid_utf8(v@),
     ensures
-        res.spec_bytes() =~= v@,
+        res.spec_bytes() =~= v@,  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -391,51 +392,54 @@ pub assume_specification<'a>[ String::as_str ](s: &'a String) -> (res: &'a str)
     ensures
         res@ == s@,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 // same as above
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification<'a>[ <String as core::ops::Deref>::deref ](s: &'a String) -> (res: &'a str)
     ensures
-        res@ == s@,
+        res@ == s@,  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ <String as Clone>::clone ](s: &String) -> (res: String)
     ensures
         res == s,
+    allocates 1
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ <String as PartialEq>::eq ](s: &String, other: &String) -> (res: bool)
     ensures
-        res == (s@ == other@),
+        res == (s@ == other@),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ String::new ]() -> (res: String)
     ensures
-        res@ == Seq::<char>::empty(),
+        res@ == Seq::<char>::empty(),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ String::push ](s: &mut String, c: char)
     ensures
         final(s)@ == old(s)@.push(c),
+    allocates 1
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ String::pop ](s: &mut String) -> (res: Option<char>)
     ensures
         old(s)@.len() == 0 ==> res is None && final(s)@ == old(s)@,
-        old(s)@.len() > 0 ==> res == Some(old(s)@.last()) && final(s)@ == old(s)@.drop_last(),
+        old(s)@.len() > 0 ==> res == Some(old(s)@.last()) && final(s)@ == old(s)@.drop_last(),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ String::push_str ](s: &mut String, other: &str)
     ensures
         final(s)@ == old(s)@ + other@,
+    allocates 1
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -443,19 +447,19 @@ pub assume_specification[ String::is_empty ](s: &String) -> (res: bool)
     ensures
         res == (s@.len() == 0),
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ String::clear ](s: &mut String)
     ensures
-        final(s)@ == Seq::<char>::empty(),
+        final(s)@ == Seq::<char>::empty(),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ <String as core::default::Default>::default ]() -> (r: String)
     ensures
-        r@ == Seq::<char>::empty(),
+        r@ == Seq::<char>::empty(),  allocates 0
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -528,7 +532,7 @@ pub uninterp spec fn into_iter_elts<'a>(i: Chars<'a>) -> Seq<char>;
 pub assume_specification[ str::chars ](s: &str) -> (iter: Chars<'_>)
     ensures
         IteratorSpec::remaining(&iter) == s@,
-        IteratorSpec::decrease(&iter) is Some,
+        IteratorSpec::decrease(&iter) is Some,  allocates 0
 ;
 
 #[cfg(verus_keep_ghost)]
@@ -632,28 +636,28 @@ impl super::slice::SliceIndexSpecImpl<str> for (Bound<usize>, Bound<usize>) {
 pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::get ](
     i: (Bound<usize>, Bound<usize>),
     s: &str,
-) -> (r: Option<&str>)
+) -> (r: Option<&str>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::index ](
     i: (Bound<usize>, Bound<usize>),
     s: &str,
-) -> (r: &str)
+) -> (r: &str)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::get_mut ](
     i: (Bound<usize>, Bound<usize>),
     s: &mut str,
-) -> (r: Option<&mut str>)
+) -> (r: Option<&mut str>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::index_mut ](
     i: (Bound<usize>, Bound<usize>),
     s: &mut str,
-) -> (r: &mut str)
+) -> (r: &mut str)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -685,28 +689,28 @@ impl super::slice::SliceIndexSpecImpl<str> for Range<usize> {
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <Range<usize> as SliceIndex<str>>::get ](i: Range<usize>, s: &str) -> (r:
-    Option<&<Range<usize> as SliceIndex<str>>::Output>)
+    Option<&<Range<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <Range<usize> as SliceIndex<str>>::index ](
     i: Range<usize>,
     s: &str,
-) -> (r: &<Range<usize> as SliceIndex<str>>::Output)
+) -> (r: &<Range<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <Range<usize> as SliceIndex<str>>::get_mut ](
     i: Range<usize>,
     s: &mut str,
-) -> (r: Option<&mut <Range<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <Range<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <Range<usize> as SliceIndex<str>>::index_mut ](
     i: Range<usize>,
     s: &mut str,
-) -> (r: &mut <Range<usize> as SliceIndex<str>>::Output)
+) -> (r: &mut <Range<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -740,28 +744,28 @@ impl super::slice::SliceIndexSpecImpl<str> for RangeFrom<usize> {
 pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::get ](
     i: RangeFrom<usize>,
     s: &str,
-) -> (r: Option<&<RangeFrom<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&<RangeFrom<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::index ](
     i: RangeFrom<usize>,
     s: &str,
-) -> (r: &<RangeFrom<usize> as SliceIndex<str>>::Output)
+) -> (r: &<RangeFrom<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::get_mut ](
     i: RangeFrom<usize>,
     s: &mut str,
-) -> (r: Option<&mut <RangeFrom<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <RangeFrom<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::index_mut ](
     i: RangeFrom<usize>,
     s: &mut str,
-) -> (r: &mut <RangeFrom<usize> as SliceIndex<str>>::Output)
+) -> (r: &mut <RangeFrom<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -793,26 +797,26 @@ impl super::slice::SliceIndexSpecImpl<str> for RangeFull {
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFull as SliceIndex<str>>::get ](i: RangeFull, s: &str) -> (r:
-    Option<&<RangeFull as SliceIndex<str>>::Output>)
+    Option<&<RangeFull as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFull as SliceIndex<str>>::index ](i: RangeFull, s: &str) -> (r:
-    &<RangeFull as SliceIndex<str>>::Output)
+    &<RangeFull as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFull as SliceIndex<str>>::get_mut ](
     i: RangeFull,
     s: &mut str,
-) -> (r: Option<&mut <RangeFull as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <RangeFull as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFull as SliceIndex<str>>::index_mut ](
     i: RangeFull,
     s: &mut str,
-) -> (r: &mut <RangeFull as SliceIndex<str>>::Output)
+) -> (r: &mut <RangeFull as SliceIndex<str>>::Output)  allocates 0
 ;
 
 // Indexing with an empty range doesn't verify, since std doesn't say whether it
@@ -867,28 +871,28 @@ impl super::slice::SliceIndexSpecImpl<str> for RangeInclusive<usize> {
 pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::get ](
     i: RangeInclusive<usize>,
     s: &str,
-) -> (r: Option<&<RangeInclusive<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&<RangeInclusive<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::index ](
     i: RangeInclusive<usize>,
     s: &str,
-) -> (r: &<RangeInclusive<usize> as SliceIndex<str>>::Output)
+) -> (r: &<RangeInclusive<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::get_mut ](
     i: RangeInclusive<usize>,
     s: &mut str,
-) -> (r: Option<&mut <RangeInclusive<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <RangeInclusive<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::index_mut ](
     i: RangeInclusive<usize>,
     s: &mut str,
-) -> (r: &mut <RangeInclusive<usize> as SliceIndex<str>>::Output)
+) -> (r: &mut <RangeInclusive<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -922,28 +926,28 @@ impl super::slice::SliceIndexSpecImpl<str> for RangeTo<usize> {
 pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::get ](
     i: RangeTo<usize>,
     s: &str,
-) -> (r: Option<&<RangeTo<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&<RangeTo<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::index ](
     i: RangeTo<usize>,
     s: &str,
-) -> (r: &<RangeTo<usize> as SliceIndex<str>>::Output)
+) -> (r: &<RangeTo<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::get_mut ](
     i: RangeTo<usize>,
     s: &mut str,
-) -> (r: Option<&mut <RangeTo<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <RangeTo<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::index_mut ](
     i: RangeTo<usize>,
     s: &mut str,
-) -> (r: &mut <RangeTo<usize> as SliceIndex<str>>::Output)
+) -> (r: &mut <RangeTo<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -977,28 +981,28 @@ impl super::slice::SliceIndexSpecImpl<str> for RangeToInclusive<usize> {
 pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::get ](
     i: RangeToInclusive<usize>,
     s: &str,
-) -> (r: Option<&<RangeToInclusive<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&<RangeToInclusive<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::index ](
     i: RangeToInclusive<usize>,
     s: &str,
-) -> (r: &<RangeToInclusive<usize> as SliceIndex<str>>::Output)
+) -> (r: &<RangeToInclusive<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::get_mut ](
     i: RangeToInclusive<usize>,
     s: &mut str,
-) -> (r: Option<&mut <RangeToInclusive<usize> as SliceIndex<str>>::Output>)
+) -> (r: Option<&mut <RangeToInclusive<usize> as SliceIndex<str>>::Output>)  allocates 0
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::index_mut ](
     i: RangeToInclusive<usize>,
     s: &mut str,
-) -> (r: &mut <RangeToInclusive<usize> as SliceIndex<str>>::Output)
+) -> (r: &mut <RangeToInclusive<usize> as SliceIndex<str>>::Output)  allocates 0
 ;
 
 // `<str as ops::Index<I>>::index(&self, index: I)` just invokes

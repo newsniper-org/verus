@@ -1113,3 +1113,37 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 1)
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_string ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::string::*;
+
+        fn f(s: &mut String, t: &str) -> bool
+            allocates 2
+        {
+            s.push_str(t);
+            s.push('a');
+            s.is_empty() || s.as_str().len() == 0
+        }
+
+        fn g(t: &str) -> String
+            allocates 1
+        {
+            t.to_owned()
+        }
+
+        fn h() -> String
+            allocates 0
+        {
+            String::new()
+        }
+
+        fn bad(s: &mut String, t: &str)
+            allocates 1 // FAILS
+        {
+            s.push_str(t);
+            s.push('a'); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
