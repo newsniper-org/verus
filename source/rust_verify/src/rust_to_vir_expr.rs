@@ -4763,7 +4763,9 @@ pub(crate) fn closure_to_vir<'tcx>(
         let mut header =
             vir::headers::read_header(&mut body, &vir::headers::HeaderAllows::Closure)?;
         add_param_decls(bctx, closure_expr.span, &mut header, &mut body, pattern_stmts)?;
-        let vir::headers::Header { require, ensure, ensure_id_typ, invariant_mask, .. } = header;
+        let vir::headers::Header {
+            require, ensure, ensure_id_typ, invariant_mask, allocates, ..
+        } = header;
         assert!(ensure.1.len() == 0);
 
         let exprx = if is_spec_fn {
@@ -4825,6 +4827,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 requires: require,
                 ensures: ensure.0,
                 mask_spec: invariant_mask,
+                allocates,
                 ret: ret,
                 external_spec: None, // filled in by ast_simplify
             }

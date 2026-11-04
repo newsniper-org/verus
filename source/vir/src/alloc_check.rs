@@ -213,11 +213,11 @@ impl<'a> DropGlueCheck<'a> {
                 typ,
                 "the drop of an opaque `impl Trait` value cannot be bounded yet",
             )),
-            TypX::AnonymousClosure(..) => Err(self.unsupported(
-                span,
-                typ,
-                "the drop of a closure (and its captures) cannot be bounded yet",
-            )),
+            // Dropping a closure drops its captures, which are variables of the function that
+            // creates it: their types are the types of the variable uses inside the closure
+            // body, which `collect_expr_typs` includes (and a closure's parameters and return
+            // type are collected there too).
+            TypX::AnonymousClosure(..) => Ok(()),
             _ => Err(self.unsupported(span, typ, "this kind of type is not supported yet")),
         }
     }
@@ -235,12 +235,72 @@ pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirE
     }
     checker.check(&function.x.outer_ret.span, &function.x.outer_ret.x.typ)?;
     if let Some(body) = &function.x.body {
-        let mut typs: Vec<(Span, Typ)> = Vec::new();
-        crate::ast_visitor::expr_visitor_check::<VirErr, _>(body, &mut |_scope, e| {
-            typs.push((e.span.clone(), e.typ.clone()));
+        for (span, typ) in collect_expr_typs(body)? {
+            checker.check(&span, &typ)?;
+        }
+    }
+    Ok(())
+}
+
+/// The types of every sub-expression of `expr`, and of the parameters and return value of every
+/// closure inside it.
+fn collect_expr_typs(expr: &crate::ast::Expr) -> Result<Vec<(Span, Typ)>, VirErr> {
+    // (expressions, places such as a captured variable that is only borrowed, and closure
+    // parameter/return types; a place has the type of the value it denotes)
+    let typs: std::cell::RefCell<Vec<(Span, Typ)>> = std::cell::RefCell::new(Vec::new());
+    crate::ast_visitor::ast_visitor_check_with_scope_map::<VirErr, _, _, _, _, _, _>(
+        expr,
+        &mut crate::ast_visitor::VisitorScopeMap::new(),
+        &mut (),
+        &mut |_, _, e| {
+            typs.borrow_mut().push((e.span.clone(), e.typ.clone()));
+            if let ExprX::NonSpecClosure { params, ret, .. } = &e.x {
+                for p in params.iter() {
+                    typs.borrow_mut().push((e.span.clone(), p.a.clone()));
+                }
+                typs.borrow_mut().push((e.span.clone(), ret.a.clone()));
+            }
             Ok(())
-        })?;
-        for (span, typ) in typs {
+        },
+        &mut |_, _, _| Ok(()),
+        &mut |_, _, _| Ok(()),
+        &mut |_, _, _, _| Ok(()),
+        &mut |_, _, p| {
+            // only a whole local variable is owned (a field place may sit behind a reference)
+            if matches!(&p.x, crate::ast::PlaceX::Local(_)) {
+                typs.borrow_mut().push((p.span.clone(), p.typ.clone()));
+            }
+            Ok(())
+        },
+    )?;
+    Ok(typs.into_inner())
+}
+
+/// A closure with an `allocates` bound is checked like a function with one: drops it may run
+/// must be allocation-free (and, in strict mode, the bound is only a claim about normal returns,
+/// which a closure cannot back with `no_unwind`, so strict mode rejects it).
+pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Result<(), VirErr> {
+    let Some(body) = &function.x.body else { return Ok(()) };
+    let mut closures: Vec<(Span, crate::ast::Expr)> = Vec::new();
+    crate::ast_visitor::expr_visitor_check::<VirErr, _>(body, &mut |_scope, e| {
+        if let ExprX::NonSpecClosure { allocates: Some(_), .. } = &e.x {
+            closures.push((e.span.clone(), e.clone()));
+        }
+        Ok(())
+    })?;
+    for (span, closure) in closures {
+        if ctx.global.alloc_check_strict {
+            return Err(error(
+                &span,
+                "with -V alloc-check-strict, a closure cannot have an `allocates` bound (it cannot be `no_unwind`)",
+            ));
+        }
+        let mut checker = DropGlueCheck::new(
+            &ctx.datatype_map,
+            &ctx.global.drop_impl_alloc_zero,
+            &function.x.typ_bounds,
+        );
+        for (span, typ) in collect_expr_typs(&closure)? {
             checker.check(&span, &typ)?;
         }
     }

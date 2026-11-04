@@ -1056,6 +1056,7 @@ impl<'a> Builder<'a> {
                 requires: _,
                 ensures: _,
                 mask_spec: _,
+                allocates: _,
                 ret: _,
                 external_spec: _,
             } => {

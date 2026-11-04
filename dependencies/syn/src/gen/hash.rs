@@ -964,6 +964,7 @@ impl Hash for crate::ExprClosure {
         self.requires.hash(state);
         self.ensures.hash(state);
         self.invariants.hash(state);
+        self.allocates.hash(state);
         self.inner_attrs.hash(state);
         self.body.hash(state);
     }

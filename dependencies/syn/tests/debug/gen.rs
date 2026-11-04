@@ -1227,6 +1227,20 @@ impl Debug for Lite<syn::Expr> {
                     }
                     formatter.field("invariants", Print::ref_cast(val));
                 }
+                if let Some(val) = &_val.allocates {
+                    #[derive(RefCast)]
+                    #[repr(transparent)]
+                    struct Print(Box<syn::SignatureAllocates>);
+                    impl Debug for Print {
+                        fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                            formatter.write_str("Some(")?;
+                            Debug::fmt(Lite(&self.0), formatter)?;
+                            formatter.write_str(")")?;
+                            Ok(())
+                        }
+                    }
+                    formatter.field("allocates", Print::ref_cast(val));
+                }
                 if !_val.inner_attrs.is_empty() {
                     formatter.field("inner_attrs", Lite(&_val.inner_attrs));
                 }
@@ -2281,6 +2295,20 @@ impl Debug for Lite<syn::ExprClosure> {
                 }
             }
             formatter.field("invariants", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.allocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(Box<syn::SignatureAllocates>);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("allocates", Print::ref_cast(val));
         }
         if !self.value.inner_attrs.is_empty() {
             formatter.field("inner_attrs", Lite(&self.value.inner_attrs));

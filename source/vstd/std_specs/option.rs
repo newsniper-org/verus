@@ -213,6 +213,11 @@ pub assume_specification<T, U, F: FnOnce(T) -> U>[ Option::<T>::map ](a: Option<
     ensures
         ret.is_some() == a.is_some(),
         ret.is_some() ==> f.ensures((a.unwrap(),), ret.unwrap()),
+    allocates if a.is_some() {
+        call_allocates(f, (a.unwrap(),))
+    } else {
+        0
+    }
 ;
 
 // cloned
@@ -248,6 +253,11 @@ pub assume_specification<T, U, F: FnOnce(T) -> Option<U>>[ Option::<T>::and_then
     ensures
         option.is_none() ==> res.is_none(),
         option.is_some() ==> f.ensures((option.unwrap(),), res),
+    allocates if option.is_some() {
+        call_allocates(f, (option.unwrap(),))
+    } else {
+        0
+    }
 ;
 
 // ok_or_else
@@ -263,6 +273,11 @@ pub assume_specification<T, E, F: FnOnce() -> E>[ Option::<T>::ok_or_else ](
             &&& res.is_err()
             &&& err.ensures((), res->Err_0)
         }
+    allocates if option.is_none() {
+        call_allocates(err, ())
+    } else {
+        0
+    }
 ;
 
 // unwrap_or_default
@@ -272,6 +287,11 @@ pub assume_specification<T: core::default::Default>[ Option::<T>::unwrap_or_defa
     ensures
         option.is_some() ==> res == option.unwrap(),
         option.is_none() ==> T::default.ensures((), res),
+    allocates if option.is_none() {
+        call_allocates(T::default, ())
+    } else {
+        0
+    }
 ;
 
 // unwrap_or_else
@@ -284,6 +304,11 @@ pub assume_specification<T, F: FnOnce() -> T>[ Option::<T>::unwrap_or_else ](
     ensures
         option.is_some() ==> res == option.unwrap(),
         option.is_none() ==> f.ensures((), res),
+    allocates if option.is_none() {
+        call_allocates(f, ())
+    } else {
+        0
+    }
 ;
 
 // clone

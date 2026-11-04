@@ -2398,6 +2398,7 @@ pub(crate) fn expr_to_stm_opt(
             requires,
             ensures,
             mask_spec,
+            allocates,
             ret,
             external_spec,
         } => {
@@ -2415,6 +2416,7 @@ pub(crate) fn expr_to_stm_opt(
                 requires,
                 ensures,
                 mask_spec,
+                allocates,
                 proof_fn_modes.is_some(),
             )?;
             let block = Spanned::new(expr.span.clone(), StmX::Block(Arc::new(inner_stms)));
@@ -5008,10 +5010,46 @@ fn exec_closure_body_stms(
     requires: &Exprs,
     ensures: &Exprs,
     mask_spec: &Option<MaskSpec>,
+    allocates: &Option<Expr>,
     is_proof: bool,
 ) -> Result<(Vec<Stm>, Arc<Vec<(UniqueIdent, Typ)>>), VirErr> {
     let mut typ_inv_vars = vec![];
 
+    // `-V alloc-check`: the closure body runs when the closure is called, not where it is
+    // created, so its calls must not be charged to the enclosing function's counter. A closure
+    // with an `allocates` bound gets a counter of its own, checked against the bound at every
+    // return; a closure without one is not checked.
+    let outer_alloc_counter = state.alloc_counter.take();
+    let result = exec_closure_body_stms_inner(
+        ctx,
+        state,
+        params,
+        ret,
+        body,
+        requires,
+        ensures,
+        mask_spec,
+        allocates,
+        is_proof,
+        &mut typ_inv_vars,
+    );
+    state.alloc_counter = outer_alloc_counter;
+    result.map(|stms| (stms, Arc::new(typ_inv_vars)))
+}
+
+fn exec_closure_body_stms_inner(
+    ctx: &Ctx,
+    state: &mut State,
+    params: &VarBinders<Typ>,
+    ret: &VarBinder<Typ>,
+    body: &Expr,
+    requires: &Exprs,
+    ensures: &Exprs,
+    mask_spec: &Option<MaskSpec>,
+    allocates: &Option<Expr>,
+    is_proof: bool,
+    typ_inv_vars: &mut Vec<(UniqueIdent, Typ)>,
+) -> Result<Vec<Stm>, VirErr> {
     state.push_scope();
 
     let mut param_set = HashSet::<VarIdent>::new();
@@ -5031,6 +5069,32 @@ fn exec_closure_body_stms(
         stms.extend(check_stms);
         let stm = Spanned::new(req.span.clone(), StmX::Assume(exp));
         stms.push(stm);
+    }
+
+    // `-V alloc-check`: counter and bound
+    let mut alloc_ens: Option<Exp> = None;
+    if let (true, Some(bound), false) = (ctx.global.alloc_check, allocates, is_proof) {
+        let (check_stms, bound_exp) = expr_to_pure_exp_check(ctx, state, bound)?;
+        stms.extend(check_stms);
+        let int_typ = Arc::new(TypX::Int(IntRange::Int));
+        let span = &bound.span;
+        // (a fresh name: the enclosing function may have its own counter in scope)
+        let (counter_name, _) = state.next_temp(span, &int_typ);
+        let counter =
+            state.declare_var_stm(&counter_name, &int_typ, PreLocalDeclKind::StmtLet, false);
+        let zero = SpannedTyped::new(span, &int_typ, ExpX::Const(Constant::Int(BigInt::zero())));
+        stms.push(init_var(span, &counter, &zero));
+        state.alloc_counter = Some(counter.clone());
+        let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter));
+        alloc_ens = Some(SpannedTyped::new(
+            span,
+            &Arc::new(TypX::Bool),
+            ExpX::Binary(
+                crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                current,
+                bound_exp,
+            ),
+        ));
     }
 
     // Inv mask
@@ -5064,6 +5128,7 @@ fn exec_closure_body_stms(
         ens_checks.extend(check_stms);
         ens_exps.push(exp);
     }
+    ens_exps.extend(alloc_ens);
 
     let ens_exps = ens_exps.iter().map(|e| exp_with_vars_at_pre_state(e, &param_set)).collect();
     let ens_checks = ens_checks.iter().map(|s| stm_with_vars_at_pre_state(s, &param_set)).collect();
@@ -5095,7 +5160,7 @@ fn exec_closure_body_stms(
     std::mem::swap(&mut state.mask, &mut mask);
     state.pop_scope();
 
-    Ok((stms, Arc::new(typ_inv_vars)))
+    Ok(stms)
 }
 
 fn closure_emit_postconditions(

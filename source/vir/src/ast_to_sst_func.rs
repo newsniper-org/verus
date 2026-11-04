@@ -963,6 +963,9 @@ pub fn func_def_to_sst(
     // A trait method impl must also stay within the trait method's own bound, if it has one,
     // and its own bound (if any) must be within the trait's: the FnDef axioms state
     // `call_allocates == impl bound` per impl and `call_allocates <= trait bound` for the trait.
+    if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
+        crate::alloc_check::check_closures_with_bounds(ctx, function)?;
+    }
     let mut alloc_init: Option<crate::sst::Stm> = None;
     let own_bound = function.x.allocates.clone();
     let inherited_bound = match &lo_inheritance {

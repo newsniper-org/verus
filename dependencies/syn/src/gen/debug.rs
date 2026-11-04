@@ -985,6 +985,7 @@ impl crate::ExprClosure {
         formatter.field("requires", &self.requires);
         formatter.field("ensures", &self.ensures);
         formatter.field("invariants", &self.invariants);
+        formatter.field("allocates", &self.allocates);
         formatter.field("inner_attrs", &self.inner_attrs);
         formatter.field("body", &self.body);
         formatter.finish()

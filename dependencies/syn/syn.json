@@ -1854,6 +1854,13 @@
             }
           }
         },
+        "allocates": {
+          "option": {
+            "box": {
+              "syn": "SignatureAllocates"
+            }
+          }
+        },
         "inner_attrs": {
           "vec": {
             "syn": "Attribute"

@@ -2174,6 +2174,9 @@ where
     if let Some(it) = &node.invariants {
         v.visit_signature_invariants(&**it);
     }
+    if let Some(it) = &node.allocates {
+        v.visit_signature_allocates(&**it);
+    }
     for it in &node.inner_attrs {
         v.visit_attribute(it);
     }

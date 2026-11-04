@@ -235,6 +235,11 @@ pub assume_specification<T, E, U, F: FnOnce(T) -> U>[ Result::<T, E>::map ](
             mapped_result->Ok_0,
         ),
         result.is_err() ==> mapped_result == Result::<U, E>::Err(result->Err_0),
+    allocates if result.is_ok() {
+        call_allocates(op, (result->Ok_0,))
+    } else {
+        0
+    }
 ;
 
 // map_err
@@ -247,7 +252,12 @@ pub assume_specification<T, E, F, O: FnOnce(E) -> F>[Result::<T, E>::map_err](re
             (result->Err_0,),
             mapped_result->Err_0,
         ),
-        result.is_ok() ==> mapped_result == Result::<T, F>::Ok(result->Ok_0);
+        result.is_ok() ==> mapped_result == Result::<T, F>::Ok(result->Ok_0)
+    allocates if result.is_err() {
+        call_allocates(op, (result->Err_0,))
+    } else {
+        0
+    };
 
 // ok
 #[verifier::inline]

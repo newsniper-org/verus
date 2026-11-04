@@ -258,6 +258,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                         };
                     }
                     HeaderExprX::Allocates(expr) => {
+                        allowed |= matches!(allows, HeaderAllows::Closure);
                         if allocates.is_some() {
                             return Err(error(&stmt.span, "only one `allocates` spec allowed"));
                         }

@@ -658,6 +658,7 @@ fn simplify_one_expr(
             requires,
             ensures,
             mask_spec,
+            allocates,
             ret,
             external_spec,
         } => {
@@ -679,6 +680,7 @@ fn simplify_one_expr(
                 requires,
                 ensures,
                 mask_spec,
+                allocates,
                 proof_fn_modes.is_some(),
             )?;
             let external_spec = Some((closure_var_ident, external_spec_expr));
@@ -693,6 +695,7 @@ fn simplify_one_expr(
                     requires: requires.clone(),
                     ensures: ensures.clone(),
                     mask_spec: mask_spec.clone(),
+                    allocates: allocates.clone(),
                     ret: ret.clone(),
                     external_spec,
                 },
@@ -1127,6 +1130,65 @@ fn exec_closure_spec_mask(
     Ok(forall)
 }
 
+fn exec_closure_spec_allocates(
+    state: &mut State,
+    span: &Span,
+    closure_var: &Expr,
+    params: &VarBinders<Typ>,
+    bound: &Expr,
+) -> Result<Expr, VirErr> {
+    // `-V alloc-check`: for `|a0, a1| allocates f(a0, a1) { .. }` emit
+    //
+    //      forall x :: closure_alloc(closure, x) == f(x.0, x.1)
+    //
+    // with `closure_alloc(closure, x)` as the trigger. The closure body is checked against `f`.
+    let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, params);
+    let tuple_typ = tuple_var.typ.clone();
+
+    let mut decls: Vec<Stmt> = Vec::new();
+    for (i, p) in params.iter().enumerate() {
+        let typ = &p.a;
+        let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+        let tuple_field = tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+        let decl = StmtX::Decl {
+            pattern,
+            mode: None,
+            init: Some(PlaceX::spec_temporary(tuple_field)),
+            els: None,
+            assert_irrefutable: false,
+        };
+        decls.push(Spanned::new(span.clone(), decl));
+    }
+    let bound_body = SpannedTyped::new(
+        &bound.span,
+        &bound.typ,
+        ExprX::Block(Arc::new(decls), Some(bound.clone())),
+    );
+
+    let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+    let alloc_call = wrap_in_trigger(&SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Call {
+            target: CallTarget::BuiltinSpecFun(
+                BuiltinSpecFun::ClosureAlloc,
+                closure_trait_call_typ_args(state, closure_var, params),
+                Arc::new(vec![]),
+            ),
+            args: Arc::new(vec![closure_var.clone(), tuple_var.clone()]),
+            post_args: None,
+            body: None,
+        },
+    ));
+    // the bound may have any integer type; compare as `int`
+    let quant_body = mk_eq(span, &alloc_call, &bound_body);
+
+    let bool_typ = Arc::new(TypX::Bool);
+    let forall = Quant { quant: air::ast::Quant::Forall };
+    let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
+    Ok(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, quant_body)))
+}
+
 fn exec_closure_spec(
     state: &mut State,
     span: &Span,
@@ -1136,6 +1198,7 @@ fn exec_closure_spec(
     requires: &Exprs,
     ensures: &Exprs,
     mask_spec: &Option<crate::ast::MaskSpec>,
+    allocates: &Option<Expr>,
     is_proof: bool,
 ) -> Result<Expr, VirErr> {
     let req_forall = exec_closure_spec_requires(state, span, closure_var, params, requires)?;
@@ -1153,6 +1216,9 @@ fn exec_closure_spec(
         });
         let ens_mask = exec_closure_spec_mask(state, span, closure_var, params, mask_spec)?;
         exprs.push(ens_mask);
+    }
+    if let Some(bound) = allocates {
+        exprs.push(exec_closure_spec_allocates(state, span, closure_var, params, bound)?);
     }
     Ok(conjoin(span, &exprs))
 }

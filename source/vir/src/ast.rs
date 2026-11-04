@@ -1201,6 +1201,8 @@ pub enum ExprX {
         requires: Exprs,
         ensures: Exprs,
         mask_spec: Option<MaskSpec>,
+        /// `-V alloc-check`: upper bound on the closure's allocations per call, over the params
+        allocates: Option<Expr>,
         ret: VarBinder<Typ>,
         /// The 'external spec' is an Option because it gets filled in during
         /// ast_simplify. It contains the assumptions that surrounding context

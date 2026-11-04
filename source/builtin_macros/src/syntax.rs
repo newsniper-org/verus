@@ -2710,7 +2710,10 @@ impl Visitor {
         let arg = &mut *unary.expr;
         let (inner_attrs, closure_input_types) = match &mut *arg {
             Expr::Closure(closure) => {
-                if closure.requires.is_some() || closure.ensures.is_some() {
+                if closure.requires.is_some()
+                    || closure.ensures.is_some()
+                    || closure.allocates.is_some()
+                {
                     let err = "quantifiers cannot have requires/ensures";
                     *expr = Expr::Verbatim(quote_spanned!(span => ::core::compile_error!(#err)));
                     return true;
@@ -3704,6 +3707,13 @@ impl Visitor {
             return false;
         };
 
+        // The `allocates` bound's integer literals must be typed as `int` (see below), which the
+        // generic visit would do differently, so set it aside until it is lowered.
+        let allocates = match expr {
+            Expr::Closure(c) => self.take_ghost(&mut c.allocates),
+            _ => unreachable!(),
+        };
+
         self.visit_expr_with_arith(expr, InsideArith::None);
 
         let Expr::Closure(mut clos) = take_expr(expr) else {
@@ -3715,8 +3725,8 @@ impl Visitor {
         assert!(is_proof_fn || clos.options.is_none());
         if is_spec_fn {
             let span = clos.span();
-            if clos.requires.is_some() || clos.ensures.is_some() {
-                let err = "ghost closures cannot have requires/ensures";
+            if clos.requires.is_some() || clos.ensures.is_some() || allocates.is_some() {
+                let err = "ghost closures cannot have requires/ensures/allocates";
                 *expr = Expr::Verbatim(quote_spanned!(span => ::core::compile_error!(#err)));
             } else {
                 *expr = Expr::Verbatim(quote_spanned_builtin!(verus_builtin, span =>
@@ -3840,6 +3850,34 @@ impl Visitor {
                     )),
                     Some(Semi { spans: [full_span] }),
                 ));
+            }
+            if let Some(allocates) = allocates {
+                let SignatureAllocates { token, mut exprs } = *allocates;
+                if is_proof_fn {
+                    let err = "proof_fn closures cannot have allocates";
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err))),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                } else if exprs.exprs.len() != 1 {
+                    let err = "allocates takes exactly one expression, e.g. `allocates n`";
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err))),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                } else {
+                    let expr = &mut exprs.exprs[0];
+                    let inside_arith = self.inside_arith;
+                    self.inside_arith = InsideArith::Int;
+                    self.visit_expr_mut(expr);
+                    self.inside_arith = inside_arith;
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(
+                            quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::allocates(#expr)),
+                        ),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                }
             }
             self.inside_ghost -= 1;
             if stmts.len() > 0 {

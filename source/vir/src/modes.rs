@@ -2379,6 +2379,7 @@ fn check_expr(
             requires,
             ensures,
             mask_spec,
+            allocates,
             body,
             external_spec,
         } => {
@@ -2436,6 +2437,18 @@ fn check_expr(
                             &Proph::No,
                         )?;
                     }
+                }
+
+                if let Some(allocates) = &allocates {
+                    check_expr_has_mode(
+                        ctxt,
+                        record,
+                        &mut ghost_typing,
+                        Mode::Spec,
+                        allocates,
+                        Mode::Spec,
+                        &Proph::No,
+                    )?;
                 }
 
                 let mut ens_typing = ghost_typing.push_var_scope();

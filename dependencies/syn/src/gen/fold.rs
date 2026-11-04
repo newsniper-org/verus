@@ -2166,6 +2166,7 @@ where
         ensures: (node.ensures).map(|it| f.fold_ensures(it)),
         invariants: (node.invariants)
             .map(|it| Box::new(f.fold_signature_invariants(*it))),
+        allocates: (node.allocates).map(|it| Box::new(f.fold_signature_allocates(*it))),
         inner_attrs: f.fold_attributes(node.inner_attrs),
         body: Box::new(f.fold_expr(*node.body)),
     }

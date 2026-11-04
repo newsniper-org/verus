@@ -1170,3 +1170,87 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_closures ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + verus_code_str! {
+        fn direct(x: u8) -> u8
+            allocates 1
+        {
+            let c = |y: u8| -> (r: u8)
+                ensures r == y
+                allocates 1
+            {
+                let _b = mk(y);
+                y
+            };
+            c(x)
+        }
+
+        fn via_map(o: Option<u8>) -> Option<u8>
+            allocates 1
+        {
+            o.map(|v: u8| -> (r: u8) allocates 1 { let _b = mk(v); v })
+        }
+
+        fn pure_closure(o: Option<u8>) -> Option<u8>
+            allocates 0
+        {
+            o.map(|v: u8| -> (r: u8) allocates 0 { v })
+        }
+
+        fn counted(x: u8) -> u8
+            allocates 2
+        {
+            let c = |y: u8| -> (r: u8) allocates 1 { let _b = mk(y); y };
+            let a = c(x);
+            c(a)
+        }
+
+        fn too_many(x: u8) -> u8
+            allocates 1 // FAILS
+        {
+            let c = |y: u8| -> (r: u8) allocates 1 { let _b = mk(y); y };
+            let a = c(x);
+            c(a)
+        }
+
+        fn closure_overclaims(x: u8) -> u8
+            allocates 1
+        {
+            let c = |y: u8| -> (r: u8) allocates 0 { let _b = mk(y); y }; // FAILS
+            c(x)
+        }
+
+        fn unbounded_closure(x: u8) -> u8
+            allocates 0 // FAILS
+        {
+            let c = |y: u8| -> (r: u8) { y };
+            c(x)
+        }
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file_with_options! {
+    // a checked closure inside an unchecked function: its captures' drops still count
+    #[test] alloc_check_closure_capture_drop ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn unchecked_outer(b: Bad) -> u8 {
+            let c = move || -> (r: u8) allocates 0 {
+                let _x = &b;
+                3
+            };
+            c()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_closure_strict ["vstd", "-V alloc-check-strict"] => verus_code! {
+        fn f() -> u8
+            no_unwind
+            allocates 0
+        {
+            let c = |y: u8| -> (r: u8) allocates 0 { y };
+            c(1)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "a closure cannot have an `allocates` bound")
+}
