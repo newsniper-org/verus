@@ -7,6 +7,7 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T; N] as Partial
     left: &[T; N],
     right: &[U; N],
 ) -> bool
+    allocates super::slice::seq_eq_allocates(left@, right@)
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for [T; N] where
@@ -27,6 +28,7 @@ impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for [T; N] wher
 pub assume_specification<'a, T: PartialEq<U>, U, const N: usize>[ <&'a [T] as PartialEq<
     [U; N],
 >>::eq ](left: &&'a [T], right: &[U; N]) -> bool
+    allocates super::slice::seq_eq_allocates((*left)@, right@)
 ;
 
 impl<'a, T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for &'a [T] where
@@ -52,6 +54,7 @@ pub assume_specification<'a, T: PartialEq<U>, U, const N: usize>[ <[T; N] as Par
     left: &[T; N],
     right: &&[U],
 ) -> bool
+    allocates super::slice::seq_eq_allocates(left@, (*right)@)
 ;
 
 impl<'a, T, U, const N: usize> super::cmp::PartialEqSpecImpl<&'a [U]> for [T; N] where
@@ -77,6 +80,7 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T] as PartialEq<
     left: &[T],
     right: &[U; N],
 ) -> bool
+    allocates super::slice::seq_eq_allocates(left@, right@)
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for [T] where
@@ -102,6 +106,7 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T; N] as Partial
     left: &[T; N],
     right: &[U],
 ) -> bool
+    allocates super::slice::seq_eq_allocates(left@, right@)
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U]> for [T; N] where

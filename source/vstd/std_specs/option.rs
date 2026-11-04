@@ -221,6 +221,11 @@ pub assume_specification<'a, T: Clone>[ Option::<&'a T>::cloned ](opt: Option<&'
     ensures
         opt.is_none() ==> res.is_none(),
         opt.is_some() ==> res.is_some() && cloned::<T>(*opt.unwrap(), res.unwrap()),
+    allocates if opt.is_some() {
+        call_allocates(T::clone, (opt.unwrap(),))
+    } else {
+        0
+    }
 ;
 
 // copied

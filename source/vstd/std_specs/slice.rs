@@ -280,6 +280,74 @@ pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::get_mut
 pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::index_mut ](i: RangeInclusive<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
 ;
 
+/// -V alloc-check: the sum of the `allocates` bounds of `a[i] != b[i]` for `i < n`. rustc 1.99.1
+/// compares slices element by element with `!=` (`SlicePartialEq::equal_same_length`).
+pub open spec fn seq_ne_allocates<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_ne_allocates(a, b, (n - 1) as nat) + call_allocates(
+            <T as PartialEq<U>>::ne,
+            (&a[n - 1], &b[n - 1]),
+        )
+    }
+}
+
+/// Comparing elements that each allocate nothing allocates nothing in total
+pub broadcast proof fn lemma_seq_ne_allocates_zero<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: nat)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_allocates(<T as PartialEq<U>>::ne, (&a[i], &b[i])) == 0)
+            ==> #[trigger] seq_ne_allocates(a, b, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_ne_allocates_zero(a, b, (n - 1) as nat);
+    }
+}
+
+/// `[T] == [U]` (also `Vec`, arrays): lengths first, then `!=` per element
+pub open spec fn seq_eq_allocates<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>) -> int {
+    if a.len() == b.len() {
+        seq_ne_allocates(a, b, a.len())
+    } else {
+        0
+    }
+}
+
+/// `value` against each element: rustc 1.99.1 `slice_contains` is `x.iter().any(|y| *y == *self)`
+pub open spec fn seq_contains_allocates<T: PartialEq<T>>(s: Seq<T>, value: &T, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_contains_allocates(s, value, (n - 1) as nat) + call_allocates(
+            <T as PartialEq<T>>::eq,
+            (&s[n - 1], value),
+        )
+    }
+}
+
+pub broadcast proof fn lemma_seq_contains_allocates_zero<T: PartialEq<T>>(s: Seq<T>, value: &T, n: nat)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_allocates(<T as PartialEq<T>>::eq, (&s[i], value)) == 0)
+            ==> #[trigger] seq_contains_allocates(s, value, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_contains_allocates_zero(s, value, (n - 1) as nat);
+    }
+}
+
+pub broadcast group group_std_slice_alloc_axioms {
+    lemma_seq_ne_allocates_zero,
+    lemma_seq_contains_allocates_zero,
+}
+
 // starts_with
 // Rust compares `needle == &slice[..needle.len()]`
 pub open spec fn spec_slice_starts_with<T: PartialEq>(slice: &[T], needle: &[T]) -> bool {
@@ -303,6 +371,11 @@ pub assume_specification<T: PartialEq>[ <[T]>::starts_with ](
             slice,
             needle,
         )),
+    allocates if needle@.len() <= slice@.len() {
+        seq_ne_allocates(needle@, slice@.subrange(0, needle@.len() as int), needle@.len())
+    } else {
+        0
+    }
 ;
 
 // ends_with
@@ -328,6 +401,15 @@ pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
             slice,
             needle,
         )),
+    allocates if needle@.len() <= slice@.len() {
+        seq_ne_allocates(
+            needle@,
+            slice@.subrange(slice@.len() - needle@.len(), slice@.len() as int),
+            needle@.len(),
+        )
+    } else {
+        0
+    }
 ;
 
 impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {
@@ -425,6 +507,7 @@ pub assume_specification<T: PartialEq<U>, U>[ <[T] as PartialEq<[U]>>::eq ](
     left: &[T],
     right: &[U],
 ) -> bool
+    allocates seq_eq_allocates(left@, right@)
 ;
 
 impl<T, U> super::cmp::PartialEqSpecImpl<[U]> for [T] where T: PartialEq<U> + super::cmp::PartialEqSpec<U> {
@@ -452,6 +535,7 @@ pub assume_specification<T>[ <[T]>::contains ] (slice: &[T], value: &T) -> (resu
         T: PartialEq<T>,
         ensures
             <T as super::cmp::PartialEqSpec<T>>::obeys_eq_spec() ==> result == spec_slice_contains(slice, value),
+        allocates seq_contains_allocates(slice@, value, slice@.len())
 ;
 
 // reverse

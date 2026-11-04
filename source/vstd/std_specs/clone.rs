@@ -23,6 +23,30 @@ pub fn ex_clone_clone_from<T: Clone>(a: &mut T, b: &T)
 }
 */
 
+/// Sum of the `allocates` bounds of cloning the first `n` elements (for `-V alloc-check`)
+pub open spec fn seq_clone_allocates<T: Clone>(s: Seq<T>, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_clone_allocates(s, (n - 1) as nat) + call_allocates(T::clone, (&s[n - 1],))
+    }
+}
+
+/// Cloning elements that each allocate nothing allocates nothing in total
+pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: nat)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
+            ==> #[trigger] seq_clone_allocates(s, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_clone_allocates_zero(s, (n - 1) as nat);
+    }
+}
+
 pub assume_specification[ <bool as Clone>::clone ](b: &bool) -> (res: bool)
     returns
         b,  allocates 0
@@ -45,7 +69,7 @@ pub assume_specification<T: Clone, const N: usize>[ <[T; N] as Clone>::clone ](a
     [T; N])
     ensures
         forall|i| #![all_triggers] 0 <= i < N ==> cloned::<T>(a@[i], res@[i]),
-        a@ =~= res@ ==> a@ == res@,
+        a@ =~= res@ ==> a@ == res@,    allocates seq_clone_allocates(a@, N as nat)
 ;
 
 /*

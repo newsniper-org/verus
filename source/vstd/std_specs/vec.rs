@@ -3,6 +3,7 @@ use super::iter::{FromIteratorSpecImpl, IteratorSpec};
 use verus_builtin::*;
 
 use super::super::slice::SliceIndexSpec;
+use super::clone::{lemma_seq_clone_allocates_zero, seq_clone_allocates};
 use super::core::IndexSpec;
 use alloc::collections::TryReserveError;
 use alloc::vec::{IntoIter, Vec};
@@ -236,6 +237,9 @@ pub assume_specification<T: core::clone::Clone, A: Allocator>[ Vec::<T, A>::exte
             } else {
                 cloned::<T>(other@[i - old(vec)@.len()], final(vec)@[i])
             },
+    // `reserve(other.len())` (at most one growth), then one `T::clone` per element
+    allocates (if spec_vec_capacity(old(vec)) - old(vec)@.len() >= other@.len() { 0int } else { 1int })
+        + seq_clone_allocates(other@, other@.len())
 ;
 
 impl<T: Sized, I: SliceIndex<[T]>, A: Allocator> super::core::IndexSpecImpl<I> for Vec<T, A> {
@@ -364,34 +368,12 @@ pub assume_specification<T, A: Allocator + core::clone::Clone>[ Vec::<T, A>::spl
     ensures
         final(vec)@ == old(vec)@[..at],
         return_value@ == old(vec)@[at..],
+    // the returned vector's buffer (the allocator's own clone is not counted)
+    allocates 1
 ;
 
 pub open spec fn vec_clone_trigger<T, A: Allocator>(v1: Vec<T, A>, v2: Vec<T, A>) -> bool {
     true
-}
-
-/// Sum of the `allocates` bounds of cloning the first `n` elements (for `-V alloc-check`)
-pub open spec fn seq_clone_allocates<T: Clone>(s: Seq<T>, n: nat) -> int
-    decreases n,
-{
-    if n == 0 {
-        0
-    } else {
-        seq_clone_allocates(s, (n - 1) as nat) + call_allocates(T::clone, (&s[n - 1],))
-    }
-}
-
-/// Cloning elements that each allocate nothing allocates nothing in total
-pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: nat)
-    ensures
-        (forall|i: int|
-            0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
-            ==> #[trigger] seq_clone_allocates(s, n) == 0,
-    decreases n,
-{
-    if n > 0 {
-        lemma_seq_clone_allocates_zero(s, (n - 1) as nat);
-    }
 }
 
 // rustc 1.99.1: `<[T]>::to_vec_in`, i.e. `with_capacity_in(len)` and one `T::clone` per element
@@ -439,6 +421,13 @@ pub assume_specification<T: Clone, A: Allocator>[ Vec::<T, A>::resize ](
             &&& final(vec)@[..old(vec).len()] == old(vec)@
             &&& forall|i| #![all_triggers] old(vec).len() <= i < len ==> cloned::<T>(value, final(vec)@[i])
         },
+    // `extend_with(len - old_len, value)`: at most one growth, at most one `T::clone` per new element
+    allocates if len <= old(vec)@.len() {
+        0int
+    } else {
+        (if spec_vec_capacity(old(vec)) >= len { 0int } else { 1int })
+            + (len - old(vec)@.len()) * call_allocates(T::clone, (&value,))
+    }
 ;
 
 pub broadcast proof fn axiom_vec_index_decreases<A>(v: Vec<A>, i: int)
@@ -454,6 +443,7 @@ pub assume_specification<T: PartialEq<U>, U, A1: Allocator, A2: Allocator>[ <Vec
     x: &Vec<T, A1>,
     y: &Vec<U, A2>,
 ) -> bool
+    allocates super::slice::seq_eq_allocates(x@, y@)
 ;
 
 impl<T: super::cmp::PartialEqSpec<U>, U, A1: Allocator, A2: Allocator> super::cmp::PartialEqSpecImpl<Vec<U, A2>> for Vec<T, A1> {
@@ -515,7 +505,9 @@ impl <T, A: Allocator> super::iter::DoubleEndedIteratorSpecImpl for IntoIter<T, 
 pub assume_specification<T: Clone>[ alloc::vec::from_elem ](elem: T, n: usize) -> (v: Vec<T>)
     ensures
         v.len() == n,
-        forall |i| 0 <= i < n ==> cloned(elem, #[trigger] v@[i]);
+        forall |i| 0 <= i < n ==> cloned(elem, #[trigger] v@[i])
+    // `with_capacity(n)` (one buffer), then at most one `T::clone` per element
+    allocates (if n == 0 { 0int } else { 1int }) + n * call_allocates(T::clone, (&elem,));
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_iter ](vec: Vec<T, A>) -> (iter: <Vec<
     T,

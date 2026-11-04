@@ -1058,3 +1058,58 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_elementwise ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn eq_slices(a: &[u8], b: &[u8], c: &Vec<u8>, d: &Vec<u8>) -> bool
+            allocates 0
+        {
+            let x = a == b;
+            let y = a.contains(&3u8);
+            let z = a.starts_with(b);
+            let w = c == d;
+            let u = a.ends_with(b);
+            x && y && z && w && u
+        }
+
+        fn arrays(a: [u8; 3]) -> [u8; 3]
+            allocates 0
+        {
+            let b = a.clone();
+            if b == a { b } else { a }
+        }
+
+        fn grow(v: &mut Vec<u8>, s: &[u8])
+            requires old(v).capacity() - old(v).len() >= s.len()
+            allocates 0
+        {
+            v.extend_from_slice(s);
+        }
+
+        fn grow_may_alloc(v: &mut Vec<u8>, s: &[u8])
+            allocates 1
+        {
+            v.extend_from_slice(s);
+        }
+
+        fn resized(v: &mut Vec<u8>)
+            allocates 1
+        {
+            v.resize(10, 0u8);
+        }
+
+        fn filled() -> Vec<u8>
+            allocates 1
+        {
+            vec![0u8; 10]
+        }
+
+        fn too_few(v: &mut Vec<u8>, s: &[u8])
+            allocates 0 // FAILS
+        {
+            v.extend_from_slice(s); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
