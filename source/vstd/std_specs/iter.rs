@@ -40,6 +40,26 @@ pub use iter_state_preserved_internal;
 use verus as verus_skip_verusfmt;
 verus_skip_verusfmt! {
 
+/// -V alloc-check: the allocation bound of one call to `Iterator::next` on `i`. It is the bound
+/// that every `Iterator::next` implementation must stay within (see `ExIterator::next`), so a
+/// call through the trait (a `for` loop over a generic iterator) is charged this much.
+/// An implementation that allocates nothing satisfies it by the nonnegativity axiom; one that
+/// allocates states its own bound and an axiom relating it to `iter_next_cost`.
+pub uninterp spec fn iter_next_cost<I: ?Sized>(i: &I) -> int;
+
+/// The same for `DoubleEndedIterator::next_back`
+pub uninterp spec fn iter_next_back_cost<I: ?Sized>(i: &I) -> int;
+
+pub broadcast axiom fn axiom_iter_next_cost_nonneg<I: ?Sized>(i: &I)
+    ensures
+        #[trigger] iter_next_cost(i) >= 0,
+;
+
+pub broadcast axiom fn axiom_iter_next_back_cost_nonneg<I: ?Sized>(i: &I)
+    ensures
+        #[trigger] iter_next_back_cost(i) >= 0,
+;
+
 #[verifier::external_trait_specification]
 #[verifier::external_trait_extension(IteratorSpec via IteratorSpecImpl)]
 pub trait ExIterator {
@@ -85,6 +105,7 @@ pub trait ExIterator {
             // If the iterator isn't done yet, then it successfully decreases its metric (if any)
             final(self).obeys_prophetic_iter_laws() && old(self).remaining().len() > 0 && final(self).decrease() is Some ==>
                 decreases_to!(old(self).decrease()->0 => final(self).decrease()->0),
+        allocates iter_next_cost(&*self)
     ;
 
     /******* Mechanisms that support ergonomic `for` loops *********/
@@ -401,6 +422,7 @@ pub trait ExDoubleEndedIterator : Iterator {
             // If the iterator isn't done yet, then it successfully decreases its metric (if any)
             <Self as IteratorSpec>::obeys_prophetic_iter_laws(final(self)) && <Self as IteratorSpec>::remaining(old(self)).len() > 0 && <Self as IteratorSpec>::decrease(final(self)) is Some ==>
                 <Self as IteratorSpec>::decrease(old(self))->0 > <Self as IteratorSpec>::decrease(final(self))->0,
+        allocates iter_next_back_cost(&*self)
     ;
 
     /******* Mechanisms that support ergonomic `for` loops *********/
@@ -969,6 +991,7 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
     }
 
     /// Bundle the real iterator with its ghost state and loop invariants
+    #[verifier::alloc_check_skip_drops]
     pub fn new(iter: I) -> (s: Self)
         ensures
             s.index == 0,
@@ -976,6 +999,7 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
             s.iter == iter,
             s.history@ == Seq::<I::Item>::empty(),
             s.wf(),
+        allocates 0
     {
         broadcast use group_seq_lemmas;
         proof {
@@ -991,6 +1015,7 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
 
     /// Advance the underlying (real) iterator and prove
     /// that the loop invariants are preserved.
+    #[verifier::alloc_check_skip_drops]
     pub fn next(&mut self) -> (ret: Option<I::Item>)
         requires
             old(self).wf(),
@@ -1009,7 +1034,9 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
             ret is None ==> final(self).history@ == old(self).history@,
             // All of the standard Iterator::next guarantees still hold
             exists |m: &mut I| #![auto] (I::next).ensures((m,), ret) && *m == old(self).iter && *final(m) == final(self).iter,
+        allocates iter_next_cost(&self.iter)
     {
+        broadcast use axiom_iter_next_cost_nonneg;
         let ghost old_history = self.history@;
         let ret = self.iter.next();
         if ret.is_some() {
@@ -1068,6 +1095,8 @@ pub trait ExIterStep: Clone + PartialOrd + Sized {
  ********************************************************************************/
 
 pub broadcast group group_iter_axioms {
+    axiom_iter_next_cost_nonneg,
+    axiom_iter_next_back_cost_nonneg,
     rev_postcondition,
     zip_postcondition,
     filter_postcondition,

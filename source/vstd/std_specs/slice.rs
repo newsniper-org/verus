@@ -12,6 +12,7 @@ use core::ops::{
 };
 use core::slice::{Chunks, Iter, IterMut, SliceIndex};
 
+use super::iter::{iter_next_back_cost, iter_next_cost};
 use verus as verus_skip_verusfmt;
 verus_skip_verusfmt! {
 
@@ -344,6 +345,11 @@ pub broadcast proof fn lemma_seq_contains_allocates_zero<T: PartialEq<T>>(s: Seq
 }
 
 pub broadcast group group_std_slice_alloc_axioms {
+    axiom_next_cost_chunks,
+    axiom_next_cost_slice_iter_mut,
+    axiom_next_back_cost_slice_iter_mut,
+    axiom_next_cost_slice_iter,
+    axiom_next_back_cost_slice_iter,
     lemma_seq_ne_allocates_zero,
     lemma_seq_contains_allocates_zero,
 }
@@ -565,6 +571,16 @@ pub struct ExIter<'a, T: 'a>(Iter<'a, T>);
 // a prophecy, we need a function that gives us the underlying sequence of the original slice.
 pub uninterp spec fn into_iter_elts<'a, T: 'a>(i: Iter<'a, T>) -> Seq<T>;
 
+pub broadcast axiom fn axiom_next_cost_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
+pub broadcast axiom fn axiom_next_back_cost_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_back_cost(i) == 0,
+;
+
 impl <'a, T: 'a> super::iter::IteratorSpecImpl for Iter<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -611,6 +627,16 @@ pub struct ExIterMut<'a, T: 'a>(IterMut<'a, T>);
 
 // See exampes/iterators/slice_iter_mut.rs for a verified implementation of this interface.
 // Any changes here should first be verified over there.
+pub broadcast axiom fn axiom_next_cost_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
+pub broadcast axiom fn axiom_next_back_cost_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
+    ensures
+        #[trigger] iter_next_back_cost(i) == 0,
+;
+
 impl<'a, T: 'a> super::iter::IteratorSpecImpl for IterMut<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -808,6 +834,11 @@ pub struct ExChunks<'a, T: 'a>(Chunks<'a, T>);
 // a prophecy, we need a function that gives us the the sequence of chunk slices
 // remaining in the iterator.
 pub uninterp spec fn after_chunks_elts<'a, T: 'a>(i: Chunks<'a, T>) -> Seq<&'a [T]>;
+
+pub broadcast axiom fn axiom_next_cost_chunks<'a, T: 'a>(i: &Chunks<'a, T>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, T: 'a> super::iter::IteratorSpecImpl for Chunks<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {

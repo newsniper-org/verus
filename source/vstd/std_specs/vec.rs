@@ -15,6 +15,7 @@ use core::option::Option;
 use core::option::Option::None;
 use core::slice::SliceIndex;
 
+use super::iter::{iter_next_back_cost, iter_next_cost};
 use verus as verus_skip_verusfmt;
 verus_skip_verusfmt! {
 
@@ -469,6 +470,16 @@ pub struct ExIntoIter<T, A: Allocator>(IntoIter<T, A>);
 // a prophecy, we need a function that gives us the underlying sequence of the original vec.
 pub uninterp spec fn into_iter_elts<T, A: Allocator>(i: IntoIter<T, A>) -> Seq<T>;
 
+pub broadcast axiom fn axiom_next_cost_vec_into_iter<T, A: Allocator>(i: &IntoIter<T, A>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
+pub broadcast axiom fn axiom_next_back_cost_vec_into_iter<T, A: Allocator>(i: &IntoIter<T, A>)
+    ensures
+        #[trigger] iter_next_back_cost(i) == 0,
+;
+
 impl <T, A: Allocator> super::iter::IteratorSpecImpl for IntoIter<T, A> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -591,6 +602,8 @@ pub broadcast axiom fn axiom_vec_decreases_to_view<T>(v: Vec<T>)
         #[trigger] (decreases_to!(v => v@));
 
 pub broadcast group group_vec_axioms {
+    axiom_next_cost_vec_into_iter,
+    axiom_next_back_cost_vec_into_iter,
     axiom_spec_len,
     axiom_spec_capacity,
     lemma_seq_clone_allocates_zero,

@@ -11,6 +11,7 @@ use core::ops::{Index, IndexMut};
 use core::option::Option;
 use core::option::Option::None;
 
+use super::iter::{iter_next_cost, iter_next_back_cost};
 verus! {
 
 #[verifier::external_type_specification]
@@ -288,6 +289,16 @@ pub struct ExIter<'a, T: 'a>(Iter<'a, T>);
 // a prophecy, we need a function that gives us the underlying sequence of the original vec.
 pub uninterp spec fn into_iter_elts<'a, T: 'a>(i: Iter<'a, T>) -> Seq<&'a T>;
 
+pub broadcast axiom fn axiom_next_cost_vecdeque_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
+pub broadcast axiom fn axiom_next_back_cost_vecdeque_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_back_cost(i) == 0,
+;
+
 impl<'a, T: 'a> super::iter::IteratorSpecImpl for Iter<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -331,6 +342,8 @@ pub assume_specification<'a, T, A: Allocator>[ VecDeque::<T, A>::iter ](
 ;
 
 pub broadcast group group_vec_dequeue_axioms {
+    axiom_next_cost_vecdeque_iter,
+    axiom_next_back_cost_vecdeque_iter,
     axiom_spec_len,
     axiom_vec_dequeue_index_decreases,
 }

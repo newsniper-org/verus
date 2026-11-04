@@ -7,6 +7,7 @@ use core::ops::{
     Bound, Range, RangeBounds, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
+use super::iter::{iter_next_cost, iter_next_back_cost};
 verus! {
 
 #[verifier::external_type_specification]
@@ -152,6 +153,11 @@ pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx
         ret@ == (RangeInclusiveView { start, end, exhausted: false }),  allocates 0
 ;
 
+pub broadcast axiom fn axiom_next_cost_range<A: core::iter::Step>(i: &Range<A>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
 impl<A: core::iter::Step> super::iter::IteratorSpecImpl for Range<A> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         obeys_range_step_spec::<A>()
@@ -195,6 +201,11 @@ pub open spec fn spec_range_inclusive_len<A: core::iter::Step>(r: &RangeInclusiv
         0
     }
 }
+
+pub broadcast axiom fn axiom_next_cost_range_inclusive<A: core::iter::Step>(i: &RangeInclusive<A>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<A: core::iter::Step> super::iter::IteratorSpecImpl for RangeInclusive<A> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -654,6 +665,8 @@ step_specs!(isize, axiom_spec_range_next_isize, axiom_isize_obeys_range_step_spe
 verus! {
 
 pub broadcast group group_range_axioms {
+    axiom_next_cost_range_inclusive,
+    axiom_next_cost_range,
     axiom_range_inclusive_out_of_order,
     axiom_range_inclusive_empty_contains,
     axiom_u8_obeys_range_step_spec,

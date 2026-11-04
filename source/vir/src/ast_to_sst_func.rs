@@ -977,7 +977,9 @@ pub fn func_def_to_sst(
         && !check_api_safety
         && (own_bound.is_some() || inherited_bound.is_some())
     {
-        crate::alloc_check::check_drop_glue(ctx, function)?;
+        if !function.x.attrs.alloc_check_skip_drops {
+            crate::alloc_check::check_drop_glue(ctx, function)?;
+        }
         let span = &own_bound.as_ref().or(inherited_bound.as_ref()).unwrap().span;
         if ctx.global.alloc_check_strict
             && !matches!(function.x.unwind_spec_or_default(), crate::ast::UnwindSpec::NoUnwind)

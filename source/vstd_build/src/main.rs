@@ -137,6 +137,10 @@ fn main() {
         child_args.push("-V".to_string());
         child_args.push("no-solver-version-check".to_string());
     }
+    // vstd's own verified functions with an `allocates` bound (the `for`-loop wrapper) are
+    // checked; other crates then need not re-check them, but must know vstd was checked.
+    child_args.push("-V".to_string());
+    child_args.push("alloc-check".to_string());
     if release {
         child_args.push("-C".to_string());
         child_args.push("opt-level=3".to_string());

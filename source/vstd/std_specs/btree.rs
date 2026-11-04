@@ -28,6 +28,7 @@ use core::marker::PhantomData;
 use core::ops::Bound;
 use core::option::Option;
 
+use super::iter::{iter_next_back_cost, iter_next_cost};
 verus! {
 
 /// Whether the `Key` type obeys the cmp spec, required for [`BTreeMap`]
@@ -73,6 +74,11 @@ pub struct ExKeys<'a, Key, Value>(Keys<'a, Key, Value>);
 // a prophecy, we need a function that gives us the underlying sequence of the original keys.
 pub uninterp spec fn into_iter_keys<'a, Key, Value>(i: Keys<'a, Key, Value>) -> Seq<Key>;
 
+pub broadcast axiom fn axiom_next_cost_btree_keys<'a, K, V>(i: &Keys<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
 impl<'a, K, V> super::iter::IteratorSpecImpl for Keys<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -107,6 +113,11 @@ pub struct ExValues<'a, Key, Value>(Values<'a, Key, Value>);
 // To allow reasoning about the "contents" of the Values iterator, without using
 // a prophecy, we need a function that gives us the underlying sequence of the original values.
 pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>) -> Seq<Value>;
+
+pub broadcast axiom fn axiom_next_cost_btree_values<'a, K, V>(i: &Values<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for Values<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -144,6 +155,11 @@ pub struct ExMapIter<'a, K, V>(btree_map::Iter<'a, K, V>);
 pub uninterp spec fn into_iter<'a, Key, Value>(i: btree_map::Iter<'a, Key, Value>) -> Seq<
     (Key, Value),
 >;
+
+pub broadcast axiom fn axiom_next_cost_btree_map_iter<'a, K, V>(i: &btree_map::Iter<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for btree_map::Iter<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -1043,6 +1059,11 @@ pub struct ExSetIter<'a, K: 'a>(btree_set::Iter<'a, K>);
 // a prophecy, we need a function that gives us the underlying sequence of the original keys.
 pub uninterp spec fn into_iter_btree_keys<'a, Key>(i: btree_set::Iter::<'a, Key>) -> Seq<Key>;
 
+pub broadcast axiom fn axiom_next_cost_btree_set_iter<'a, T>(i: &btree_set::Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
 impl<'a, T> super::iter::IteratorSpecImpl for btree_set::Iter::<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -1294,6 +1315,10 @@ pub broadcast axiom fn axiom_btree_set_decreases<Key, A: Allocator + Clone>(m: B
 ;
 
 pub broadcast group group_btree_axioms {
+    axiom_next_cost_btree_set_iter,
+    axiom_next_cost_btree_map_iter,
+    axiom_next_cost_btree_values,
+    axiom_next_cost_btree_keys,
     axiom_key_obeys_cmp_spec_meaning,
     axiom_increasing_seq_meaning,
     axiom_box_key_removed,

@@ -38,6 +38,7 @@ use std::collections::hash_map::{
 use std::collections::hash_set;
 use std::collections::{HashMap, HashSet};
 
+use super::iter::{iter_next_cost, iter_next_back_cost};
 verus! {
 
 /// Specifications for the behavior of
@@ -277,6 +278,11 @@ pub struct ExKeys<'a, Key: 'a, Value: 'a>(Keys<'a, Key, Value>);
 // a prophecy, we need a function that gives us the underlying sequence of the original keys.
 pub uninterp spec fn into_iter_keys<'a, Key, Value>(i: Keys<'a, Key, Value>) -> Seq<Key>;
 
+pub broadcast axiom fn axiom_next_cost_hash_keys<'a, K, V>(i: &Keys<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
+
 impl<'a, K, V> super::iter::IteratorSpecImpl for Keys<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -311,6 +317,11 @@ pub struct ExValues<'a, Key: 'a, Value: 'a>(Values<'a, Key, Value>);
 // To allow reasoning about the "contents" of the Values iterator, without using
 // a prophecy, we need a function that gives us the underlying sequence of the original values.
 pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>) -> Seq<Value>;
+
+pub broadcast axiom fn axiom_next_cost_hash_values<'a, K, V>(i: &Values<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for Values<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -348,6 +359,11 @@ pub struct ExMapIter<'a, Key: 'a, Value: 'a>(hash_map::Iter<'a, Key, Value>);
 pub uninterp spec fn into_iter<'a, Key, Value>(i: hash_map::Iter<'a, Key, Value>) -> Seq<
     (Key, Value),
 >;
+
+pub broadcast axiom fn axiom_next_cost_hash_map_iter<'a, K, V>(i: &hash_map::Iter<'a, K, V>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for hash_map::Iter<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -878,6 +894,11 @@ pub struct ExSetIter<'a, Key: 'a>(hash_set::Iter<'a, Key>);
 // To allow reasoning about the "contents" of the HashSet iterator, without using
 // a prophecy, we need a function that gives us the underlying sequence of the original keys.
 pub uninterp spec fn into_iter_hash_keys<'a, Key>(i: hash_set::Iter::<'a, Key>) -> Seq<Key>;
+
+pub broadcast axiom fn axiom_next_cost_hash_set_iter<'a, K>(i: &hash_set::Iter<'a, K>)
+    ensures
+        #[trigger] iter_next_cost(i) == 0,
+;
 
 impl<'a, K> super::iter::IteratorSpecImpl for hash_set::Iter::<'a, K> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
@@ -1446,6 +1467,10 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
 ;
 
 pub broadcast group group_hash_axioms {
+    axiom_next_cost_hash_set_iter,
+    axiom_next_cost_hash_map_iter,
+    axiom_next_cost_hash_values,
+    axiom_next_cost_hash_keys,
     axiom_box_key_removed,
     axiom_contains_deref_key,
     axiom_contains_box,

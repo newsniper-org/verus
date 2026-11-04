@@ -1254,3 +1254,88 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "a closure cannot have an `allocates` bound")
 }
+
+test_verify_one_file_with_options! {
+    // the bound is evaluated at function entry, also through a `&mut` parameter
+    #[test] alloc_check_bound_through_mut_ref_is_pre_state ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + verus_code_str! {
+        fn h(v: &mut Vec<u8>)
+            requires old(v).len() >= 1
+            allocates v.len()
+        {
+            let _b = mk(0);
+            v.clear();
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_for_loops ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + verus_code_str! {
+        fn range(n: usize) -> usize
+            allocates 0
+        {
+            let mut s = 0usize;
+            for i in 0..n
+                invariant s <= i, allocated() == 0,
+            {
+                s = i;
+            }
+            s
+        }
+
+        fn slice(v: &[u8]) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in v.iter()
+                invariant allocated() == 0,
+            {
+                s = *x;
+            }
+            s
+        }
+
+        fn vec_iter(v: &Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in v.iter()
+                invariant allocated() == 0,
+            {
+                s = *x;
+            }
+            s
+        }
+
+        fn vec_into(v: Vec<u8>) -> u8
+            allocates 0
+        {
+            let mut s = 0u8;
+            for x in v
+                invariant allocated() == 0,
+            {
+                s = x;
+            }
+            s
+        }
+
+        fn alloc_in_loop(n: usize)
+            allocates n
+        {
+            for i in 0..n
+                invariant allocated() <= i,
+            {
+                let _b = mk(0);
+            }
+        }
+
+        fn alloc_in_loop_wrong(n: usize)
+            allocates 0 // FAILS
+        {
+            for i in 0..n
+                invariant allocated() <= i,
+            {
+                let _b = mk(0);
+            }
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
