@@ -677,6 +677,8 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
         }
         let unwind_condition: <R as Returner>::Opt<Arc<SpannedTyped<ExpX>>> =
             R::map_opt(&func_decl.unwind_condition, &mut |exp| self.visit_exp(exp))?;
+        let alloc_bound: <R as Returner>::Opt<Arc<SpannedTyped<ExpX>>> =
+            R::map_opt(&func_decl.alloc_bound, &mut |exp| self.visit_exp(exp))?;
 
         R::ret(|| FuncDeclSst {
             req_inv_pars: R::get_vec_a(req_inv_pars),
@@ -685,6 +687,7 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
             enss: (R::get_vec_a(enss0), R::get_vec_a(enss1)),
             inv_masks: R::get_vec_a(inv_masks),
             unwind_condition: R::get_opt(unwind_condition),
+            alloc_bound: R::get_opt(alloc_bound),
             fndef_axioms: R::get_vec_a(fndef_axioms),
         })
     }

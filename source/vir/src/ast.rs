@@ -1003,6 +1003,8 @@ pub enum BuiltinSpecFun {
     ClosureOpensInvariants,
     /// default_ensures clauses, for use by call_ensures on impls that inherit the default
     DefaultEns,
+    /// `allocated()`: allocation-source calls made so far by the enclosing exec function
+    Allocated,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]

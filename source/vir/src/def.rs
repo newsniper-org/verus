@@ -54,6 +54,9 @@ const PREFIX_REQUIRES: &str = "req%";
 const PREFIX_ENSURES: &str = "ens%";
 const PREFIX_OPEN_INV: &str = "openinv%";
 const PREFIX_NO_UNWIND_WHEN: &str = "no_unwind_when%";
+const PREFIX_ALLOC_BOUND: &str = "alloc_bound%";
+/// Ghost local that counts allocations in a function checked with `-V alloc-check`
+pub const ALLOC_COUNT: &str = "alloc%count";
 const PREFIX_RECURSIVE: &str = "rec%";
 const PREFIX_SIMPLIFY_TEMP_VAR: &str = "tmp%%";
 const PREFIX_TEMP_VAR: &str = "tmp%";
@@ -723,6 +726,10 @@ pub fn prefix_open_inv(ident: &Ident, i: usize) -> Ident {
 
 pub fn prefix_no_unwind_when(ident: &Ident) -> Ident {
     Arc::new(PREFIX_NO_UNWIND_WHEN.to_string() + ident)
+}
+
+pub fn prefix_alloc_bound(ident: &Ident) -> Ident {
+    Arc::new(PREFIX_ALLOC_BOUND.to_string() + ident)
 }
 
 fn prefix_path(prefix: String, path: &Path) -> Path {

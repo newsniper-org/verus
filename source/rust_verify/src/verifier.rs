@@ -2073,6 +2073,7 @@ impl Verifier {
             self.args.solver,
             false,
             self.args.check_api_safety,
+            self.args.alloc_check,
             self.args.axiom_usage_info,
             self.args.no_bv_simplify,
             self.args.report_long_running,

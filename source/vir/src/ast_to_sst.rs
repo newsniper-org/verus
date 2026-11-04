@@ -118,6 +118,9 @@ pub(crate) struct State<'a> {
 
     pub mask: Option<MaskSet>,
 
+    /// `-V alloc-check`: the ghost local counting allocation-source calls in this function
+    pub(crate) alloc_counter: Option<VarIdent>,
+
     /// Function arguments to be used in the construction of the update
     /// predicate for the atomic update by the atomic function call.
     pub au_pred_args: Vec<crate::sst::Exp>,
@@ -263,6 +266,7 @@ impl<'a> State<'a> {
             loop_id_counter: 0,
             loop_result_dests: HashMap::new(),
             mask: None,
+            alloc_counter: None,
             au_pred_args: Vec::new(),
             au_var_exp_to_resolve: None,
             au_var_exp: None,
@@ -1490,6 +1494,11 @@ fn stm_call(
         }
     }
 
+    // For `-V alloc-check`: the function whose `allocates` bound this call is charged with
+    let alloc_target = match &resolved_method {
+        Some((f, ts)) => (f.clone(), ts.clone()),
+        None => (name.clone(), typs.clone()),
+    };
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -1504,6 +1513,11 @@ fn stm_call(
     };
 
     stms.push(Spanned::new(span.clone(), call));
+    if let Some(counter) = state.alloc_counter.clone() {
+        if fun.x.mode == Mode::Exec {
+            stms.push(alloc_count_after_call(ctx, span, &counter, &alloc_target, &small_args)?);
+        }
+    }
     if (name == def::nonstatic_call_fun(false) || name == def::nonstatic_call_fun(true))
         && matches!(&*small_args[0].typ, TypX::MutRef(_))
     {
@@ -1517,6 +1531,47 @@ fn stm_call(
         stms.push(Spanned::new(span.clone(), StmX::Assume(equal)));
     }
     Ok(stms_to_one_stm(span, stms))
+}
+
+/// `-V alloc-check`: after an exec call, add the callee's `allocates` bound (applied to the
+/// call's arguments) to the allocation counter. A callee without an `allocates` bound has an
+/// unknown allocation count, so the call is rejected.
+fn alloc_count_after_call(
+    ctx: &Ctx,
+    span: &Span,
+    counter: &VarIdent,
+    (target, target_typs): &(Fun, Typs),
+    args: &Exps,
+) -> Result<Stm, VirErr> {
+    let target_fun = get_function(ctx, span, target)?;
+    if target_fun.x.allocates.is_none() {
+        return Err(error(
+            span,
+            format!(
+                "cannot bound the allocations of this call: `{}` has no `allocates` specification",
+                crate::ast_util::fun_as_friendly_rust_name(&target_fun.x.name)
+            ),
+        )
+        .help("give the callee an `allocates` bound, or call it outside of functions checked with -V alloc-check"));
+    }
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+    let bound = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExpX::Call(
+            CallFun::InternalFun(InternalFun::AllocBound(target.clone())),
+            target_typs.clone(),
+            args.clone(),
+        ),
+    );
+    let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter.clone()));
+    let sum = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, bound),
+    );
+    let lhs = Dest { dest: var_loc_exp(span, &int_typ, counter.clone()), is_init: false };
+    Ok(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum }))
 }
 
 fn if_to_stm(
@@ -1758,7 +1813,20 @@ pub(crate) fn expr_to_stm_opt(
                 check_stms.extend(stms);
                 arg_exps.push(e);
             }
+            if let BuiltinSpecFun::Allocated = bsf {
+                return match &state.alloc_counter {
+                    Some(counter) => Ok((
+                        check_stms,
+                        Maybe::Some(Value::Exp(mk_exp(ExpX::Var(counter.clone())))),
+                    )),
+                    None => Err(error(
+                        &expr.span,
+                        "`allocated()` can only be used in the body of an exec function with an `allocates` specification, checked with -V alloc-check",
+                    )),
+                };
+            }
             let f = match bsf {
+                BuiltinSpecFun::Allocated => unreachable!(),
                 BuiltinSpecFun::ClosureReq => InternalFun::ClosureReq,
                 BuiltinSpecFun::ClosureEns => InternalFun::ClosureEns,
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,

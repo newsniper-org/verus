@@ -119,6 +119,7 @@ pub struct ArgsX {
     pub smt_encoding: SmtEncoding,
     pub axiom_usage_info: bool,
     pub check_api_safety: bool,
+    pub alloc_check: bool,
     pub no_bv_simplify: bool,
     pub observer: Option<String>,
 }
@@ -169,6 +170,7 @@ impl ArgsX {
             smt_encoding: Default::default(),
             axiom_usage_info: Default::default(),
             check_api_safety: Default::default(),
+            alloc_check: Default::default(),
             no_bv_simplify: Default::default(),
             observer: None,
         }
@@ -416,6 +418,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_USE_CRATE_NAME: &str = "use-crate-name";
     const EXTENDED_AXIOM_USAGE_INFO: &str = "axiom-usage-info";
     const EXTENDED_CHECK_API_SAFETY: &str = "check-api-safety";
+    const EXTENDED_ALLOC_CHECK: &str = "alloc-check";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
     const EXTENDED_OBSERVER: &str = "observer";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
@@ -440,6 +443,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_CHECK_API_SAFETY,
             "Check that the API is memory-safe when called from unverified, safe Rust code. Experimental.",
+        ),
+        (
+            EXTENDED_ALLOC_CHECK,
+            "Check the `allocates` bounds of exec functions (an upper bound on allocation-source calls on a normal return). Experimental.",
         ),
         (
             EXTENDED_NO_BV_SIMPLIFY,
@@ -853,6 +860,7 @@ pub fn parse_args_with_imports(
         smt_encoding,
         axiom_usage_info: extended.contains_key(EXTENDED_AXIOM_USAGE_INFO),
         check_api_safety: extended.contains_key(EXTENDED_CHECK_API_SAFETY),
+        alloc_check: extended.contains_key(EXTENDED_ALLOC_CHECK),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
         observer: match extended.get(EXTENDED_OBSERVER) {
             None => None,

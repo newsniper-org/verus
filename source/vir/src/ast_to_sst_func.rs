@@ -407,6 +407,15 @@ pub fn func_decl_to_sst(
         }
     };
 
+    let alloc_bound = match &function.x.allocates {
+        Some(e) if ctx.global.alloc_check => {
+            let (_pars, exps) = req_ens_to_sst(ctx, diagnostics, function, &vec![e.clone()], true)?;
+            assert!(exps.len() == 1);
+            Some(exps[0].clone())
+        }
+        _ => None,
+    };
+
     let mut fndef_axiom_exps: Vec<Exp> = Vec::new();
     if crate::ast_simplify::need_fndef_axiom(&ctx.fndef_type_set, function) {
         let fndef_axioms = function
@@ -465,6 +474,7 @@ pub fn func_decl_to_sst(
         enss: (Arc::new(enss0), Arc::new(enss1)),
         inv_masks: Arc::new(inv_masks),
         unwind_condition,
+        alloc_bound,
         fndef_axioms: Arc::new(fndef_axiom_exps),
     })
 }
@@ -948,8 +958,48 @@ pub fn func_def_to_sst(
         reqs.extend(exps);
     }
 
+    // `-V alloc-check`: count allocation-source calls in a ghost local, starting at 0, and check
+    // `count <= allocates-bound` (bound evaluated in the pre-state) at every normal return.
+    let mut alloc_init: Option<crate::sst::Stm> = None;
+    if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
+        if let Some(alloc_expr) = &function.x.allocates {
+            let span = &alloc_expr.span;
+            let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+            let counter = state.declare_var_stm(
+                &crate::ast_util::air_unique_var(crate::def::ALLOC_COUNT),
+                &int_typ,
+                PreLocalDeclKind::StmtLet,
+                false,
+            );
+            let zero = SpannedTyped::new(
+                span,
+                &int_typ,
+                crate::sst::ExpX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+            );
+            alloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
+            state.alloc_counter = Some(counter.clone());
+            let bound = lo_current.lower_pure(ctx, &mut state, alloc_expr, &mut req_stms)?;
+            if !ctx.checking_spec_preconditions() {
+                let current = SpannedTyped::new(span, &int_typ, crate::sst::ExpX::Var(counter));
+                let within = SpannedTyped::new(
+                    span,
+                    &Arc::new(TypX::Bool),
+                    crate::sst::ExpX::Binary(
+                        crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                        current,
+                        bound,
+                    ),
+                );
+                enss.push(exp_pre(&within));
+            }
+        }
+    }
+
     // AST --> SST
     let mut stm = expr_to_one_stm_with_post(ctx, &mut state, &body, &function.span)?;
+    if let Some(init) = alloc_init {
+        stm = stms_to_one_stm(&body.span, vec![init, stm]);
+    }
 
     // Add atomic spec related statements
     au_stms.push(stm);

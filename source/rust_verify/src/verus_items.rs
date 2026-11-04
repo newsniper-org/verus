@@ -423,6 +423,7 @@ pub(crate) enum BuiltinFunctionItem {
     CallRequires,
     CallEnsures,
     CallOpensInvariants,
+    Allocated,
     ConstrainType,
     GetFutureOutputType,
     ProofWithCallee,
@@ -786,6 +787,7 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
 
         ("verus::verus_builtin::call_requires",           VerusItem::BuiltinFunction(BuiltinFunctionItem::CallRequires)),
         ("verus::verus_builtin::call_ensures",            VerusItem::BuiltinFunction(BuiltinFunctionItem::CallEnsures)),
+        ("verus::verus_builtin::allocated",               VerusItem::BuiltinFunction(BuiltinFunctionItem::Allocated)),
         ("verus::verus_builtin::call_opens_invariants",   VerusItem::BuiltinFunction(BuiltinFunctionItem::CallOpensInvariants)),
         ("verus::verus_builtin::constrain_type",          VerusItem::BuiltinFunction(BuiltinFunctionItem::ConstrainType)),
         ("verus::verus_builtin::get_future_output_type",  VerusItem::BuiltinFunction(BuiltinFunctionItem::GetFutureOutputType)),

@@ -2287,6 +2287,20 @@ fn verus_item_to_vir<'tcx, 'a>(
 
             mk_expr(ExprX::Binary(vop, lhs, rhs))
         }
+        VerusItem::BuiltinFunction(BuiltinFunctionItem::Allocated) => {
+            record_spec_fn(bctx, expr);
+            assert!(args.len() == 0);
+            return mk_expr(ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::Allocated,
+                    Arc::new(vec![]),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![]),
+                post_args: None,
+                body: None,
+            });
+        }
         VerusItem::BuiltinFunction(
             re @ (BuiltinFunctionItem::CallRequires
             | BuiltinFunctionItem::CallEnsures
@@ -2308,6 +2322,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                     BuiltinSpecFun::ClosureOpensInvariants
                 }
                 BuiltinFunctionItem::ConstrainType => unreachable!(),
+                BuiltinFunctionItem::Allocated => unreachable!(),
                 BuiltinFunctionItem::GetFutureOutputType => unreachable!(),
                 BuiltinFunctionItem::ProofWithCallee => unreachable!(),
             };

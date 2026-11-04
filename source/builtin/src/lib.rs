@@ -2144,6 +2144,14 @@ pub fn closure_to_fn_spec<Args: core::marker::Tuple, F: FnOnce<Args>>(
     unimplemented!();
 }
 
+/// Number of allocation-source calls made so far by the enclosing exec function
+/// (only in functions with an `allocates` bound, checked with `-V alloc-check`).
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::allocated"]
+pub fn allocated() -> int {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_requires"]
 pub fn call_requires<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {

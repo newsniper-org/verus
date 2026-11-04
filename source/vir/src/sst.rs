@@ -55,6 +55,8 @@ pub enum InternalFun {
     DefaultEns,
     CheckDecreaseHeight,
     OpenInvariantMask(Fun, usize),
+    /// The `allocates` bound of the given exec function, applied to the call's arguments
+    AllocBound(Fun),
 }
 
 #[derive(Debug, Clone, Hash, ToDebugSNode)]
@@ -397,6 +399,8 @@ pub struct FuncDeclSst {
     pub enss: (Exps, Exps),
     pub inv_masks: Arc<Vec<Exps>>,
     pub unwind_condition: Option<Exp>,
+    /// `allocates` bound (only generated with `-V alloc-check`)
+    pub alloc_bound: Option<Exp>,
     pub fndef_axioms: Exps,
 }
 
