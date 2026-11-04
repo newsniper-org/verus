@@ -162,7 +162,7 @@ pub fn verify_files_vstd_all_diags(
 
     let files: Vec<(String, String)> = files.into_iter().collect();
 
-    let deps_dir = std::env::current_exe().unwrap();
+    let deps_dir = test_exe_path();
     let deps_dir = deps_dir.parent().unwrap();
     let target_dir = deps_dir.parent().unwrap();
 
@@ -289,6 +289,17 @@ pub fn parse_diags(
     (warnings, notes)
 }
 
+/// Path of the running test binary, as it was invoked. Prefer this over `current_exe()`, which
+/// has symlinks resolved: if `target` is a symlink (e.g. to a build-cache drive), siblings such as
+/// `target-verus` must be found next to the link, not next to its destination.
+fn test_exe_path() -> std::path::PathBuf {
+    std::env::args_os()
+        .next()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute() && p.exists())
+        .unwrap_or_else(|| std::env::current_exe().unwrap())
+}
+
 pub fn run_verus(
     options: &[&str],
     test_dir: &std::path::Path,
@@ -313,7 +324,7 @@ pub fn run_verus(
     #[cfg(target_os = "windows")]
     let (pre, dl, exe) = ("", "dll", ".exe");
 
-    let current_exe = std::env::current_exe().unwrap();
+    let current_exe = test_exe_path();
     let deps_path = current_exe.parent().unwrap();
     let target_path = deps_path.parent().unwrap();
     let profile = target_path.file_name().unwrap().to_str().unwrap();
@@ -552,7 +563,7 @@ pub fn run_verus_raw(args: &[&str], dir: &std::path::Path) -> std::process::Outp
     }
     let exe = if cfg!(target_os = "windows") { ".exe" } else { "" };
 
-    let current_exe = std::env::current_exe().unwrap();
+    let current_exe = test_exe_path();
     let deps_path = current_exe.parent().unwrap();
     let target_path = deps_path.parent().unwrap();
     let profile = target_path.file_name().unwrap().to_str().unwrap();
@@ -610,7 +621,7 @@ pub fn run_cargo_verus_with_target(
 
     // Compute the path to the cargo-verus executable,
     // following the pattern from run_verus
-    let current_exe = std::env::current_exe().unwrap();
+    let current_exe = test_exe_path();
     let deps_path = current_exe.parent().unwrap();
     let target_path = deps_path.parent().unwrap();
     let profile = target_path.file_name().unwrap().to_str().unwrap();
