@@ -235,7 +235,7 @@ pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirE
     }
     checker.check(&function.x.outer_ret.span, &function.x.outer_ret.x.typ)?;
     if let Some(body) = &function.x.body {
-        for (span, typ) in collect_expr_typs(body)? {
+        for (span, typ) in collect_expr_typs(ctx, body)? {
             checker.check(&span, &typ)?;
         }
     }
@@ -244,7 +244,7 @@ pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirE
 
 /// The types of every sub-expression of `expr`, and of the parameters and return value of every
 /// closure inside it.
-fn collect_expr_typs(expr: &crate::ast::Expr) -> Result<Vec<(Span, Typ)>, VirErr> {
+fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Typ)>, VirErr> {
     // (expressions, places such as a captured variable that is only borrowed, and closure
     // parameter/return types; a place has the type of the value it denotes)
     let typs: std::cell::RefCell<Vec<(Span, Typ)>> = std::cell::RefCell::new(Vec::new());
@@ -254,6 +254,32 @@ fn collect_expr_typs(expr: &crate::ast::Expr) -> Result<Vec<(Span, Typ)>, VirErr
         &mut (),
         &mut |_, _, e| {
             typs.borrow_mut().push((e.span.clone(), e.typ.clone()));
+            // A std function (one given a specification, which says nothing about drops) that
+            // receives `&mut C` may drop values inside `C` (`Vec::clear`, `truncate`,
+            // `HashMap::clear`, ...), so the referent's type counts as droppable.
+            if let ExprX::Call {
+                target: crate::ast::CallTarget::Fun(kind, fun, ..), args, ..
+            } = &e.x
+            {
+                let mut funs: Vec<&crate::ast::Fun> = vec![fun];
+                if let crate::ast::CallTargetKind::DynamicResolved { resolved, .. } = kind {
+                    funs.push(resolved);
+                }
+                let std_callee = funs
+                    .iter()
+                    .any(|f| ctx.func_map.get(*f).map_or(false, |g| g.x.proxy.is_some()));
+                if std_callee {
+                    for a in args.iter() {
+                        let mut t = &a.typ;
+                        while let TypX::Decorate(_, _, inner) = &**t {
+                            t = inner;
+                        }
+                        if let TypX::MutRef(inner) = &**t {
+                            typs.borrow_mut().push((a.span.clone(), inner.clone()));
+                        }
+                    }
+                }
+            }
             if let ExprX::NonSpecClosure { params, ret, .. } = &e.x {
                 for p in params.iter() {
                     typs.borrow_mut().push((e.span.clone(), p.a.clone()));
@@ -300,7 +326,7 @@ pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Resu
             &ctx.global.drop_impl_alloc_zero,
             &function.x.typ_bounds,
         );
-        for (span, typ) in collect_expr_typs(&closure)? {
+        for (span, typ) in collect_expr_typs(ctx, &closure)? {
             checker.check(&span, &typ)?;
         }
     }
@@ -337,18 +363,28 @@ pub(crate) fn check_alloc_free_drop_impls(
 /// (Bounds on `external_body` functions and `assume_specification`s have no body and are trusted
 /// by definition.)
 pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), VirErr> {
+    let decl_has_bound: HashSet<&crate::ast::Fun> =
+        krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
     for f in krate.functions.iter() {
         // (an imported function has no body any more, so look at how it was declared)
-        if f.x.allocates.is_some()
-            && !f.x.attrs.is_external_body
-            && f.x.proxy.is_none()
-            && !f.x.attrs.alloc_checked_crate
-        {
+        if f.x.attrs.is_external_body || f.x.proxy.is_some() || f.x.attrs.alloc_checked_crate {
+            continue;
+        }
+        // An implementation of a method whose declaration has a bound must stay within it, which
+        // only a crate verified with -V alloc-check has shown.
+        let impl_of_bounded_decl = match &f.x.kind {
+            crate::ast::FunctionKind::TraitMethodImpl { method, .. } => {
+                decl_has_bound.contains(method)
+            }
+            _ => false,
+        };
+        if f.x.allocates.is_some() || impl_of_bounded_decl {
             return Err(error(
                 &f.span,
                 format!(
-                    "`{}` has an `allocates` bound, but its crate was not verified with -V alloc-check, so the bound was not checked",
-                    crate::ast_util::fun_as_friendly_rust_name(&f.x.name)
+                    "`{}` has an `allocates` bound{}, but its crate was not verified with -V alloc-check, so the bound was not checked",
+                    crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                    if f.x.allocates.is_some() { "" } else { " from its trait declaration" }
                 ),
             ));
         }

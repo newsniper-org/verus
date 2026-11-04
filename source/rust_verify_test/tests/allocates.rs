@@ -1444,3 +1444,26 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    // `clear` drops the elements behind the `&mut`, so their type counts as droppable
+    #[test] alloc_check_drop_through_mut_ref_in_std_call ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(v: &mut Vec<Bad>)
+            allocates 0
+        {
+            v.clear();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_mut_ref_to_droppable_ok ["vstd", "-V alloc-check"] => verus_code! {
+        fn p(v: &mut Vec<u8>)
+            requires old(v).capacity() > old(v).len()
+            allocates 0
+        {
+            v.push(1);
+            v.clear();
+        }
+    } => Ok(())
+}
