@@ -1495,3 +1495,24 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_fails(err, 1)
 }
+
+test_verify_one_file_with_options! {
+    // `to_string` has no numeric bound (the growth of the output `String` depends on its length),
+    // but it is no longer "unspecified": its cost is the callbacks plus an opaque growth term
+    #[test] alloc_check_to_string_opaque_growth ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::std_specs::fmt::sink_growth;
+
+        fn show(x: &u8) -> String
+            allocates sink_growth(x)
+        {
+            x.to_string()
+        }
+
+        fn show_wrong(x: &u8) -> String
+            allocates 0 // FAILS
+        {
+            x.to_string()
+        }
+    } => Err(err) => assert_fails(err, 1)
+}

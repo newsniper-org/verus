@@ -96,6 +96,24 @@ pub struct ExArgument<'a>(rt::Argument<'a>);
 // formatted) and assumes `fmt_allocates(args) == sum_i count_i * fmt_arg_allocates_at(&arr, i)`.
 pub uninterp spec fn fmt_allocates(args: Arguments<'_>) -> nat;
 
+/// How many times the output `String` grows while `x` is formatted into it. The count depends on
+/// the length of the output, which Verus does not model, so this is an opaque term: finite for
+/// every `x`, but not bounded by a constant.
+pub uninterp spec fn sink_growth<T: ?Sized>(x: &T) -> int;
+
+/// The same for formatting `args` into a new `String`
+pub uninterp spec fn format_growth(args: Arguments<'_>) -> int;
+
+pub broadcast axiom fn axiom_sink_growth_nonneg<T: ?Sized>(x: &T)
+    ensures
+        #[trigger] sink_growth(x) >= 0,
+;
+
+pub broadcast axiom fn axiom_format_growth_nonneg(args: Arguments<'_>)
+    ensures
+        #[trigger] format_growth(args) >= 0,
+;
+
 /// The allocations of one call to the `fmt` method an `Argument` was made for.
 pub uninterp spec fn fmt_arg_allocates(arg: rt::Argument<'_>) -> nat;
 
@@ -224,6 +242,8 @@ pub assume_specification<'a>[ Formatter::<'a>::write_str ](f: &mut Formatter<'a>
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
 pub assume_specification[ alloc::fmt::format ](args: Arguments<'_>) -> alloc::string::String
+    // the `fmt` callbacks, and the growth of the new `String`
+    allocates fmt_allocates(args) + format_growth(args)
 ;
 
 pub uninterp spec fn fmt_req_all<A: ?Sized>() -> bool;
@@ -399,6 +419,8 @@ def_fmt_prim_alloc!(str, core::fmt::Display, core::fmt::Debug);
 def_fmt_prim_alloc!(alloc::string::String, core::fmt::Display, core::fmt::Debug);
 
 pub broadcast group group_fmt_axioms {
+    axiom_sink_growth_nonneg,
+    axiom_format_growth_nonneg,
     // types
     axiom_fmt_req_all_u8,
     axiom_fmt_req_all_u16,

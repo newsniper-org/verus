@@ -196,6 +196,11 @@ pub assume_specification<T: core::fmt::Display + ?Sized>[ <T as ToString>::to_st
         forall|f: &core::fmt::Formatter<'_>| t.fmt_req(f),
     ensures
         to_string_from_display_ensures::<T>(t, res),
+    // the `Display::fmt` callback, and the growth of the new `String`
+    allocates call_allocates(
+        <T as core::fmt::Display>::fmt,
+        (t, super::std_specs::fmt::fmt_witness_formatter()),
+    ) + super::std_specs::fmt::sink_growth(t)
 ;
 
 #[cfg(not(verus_verify_core))]
