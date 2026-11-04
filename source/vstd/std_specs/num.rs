@@ -33,7 +33,7 @@ macro_rules! num_specs {
             use super::*;
 
             pub assume_specification[<$uN as Clone>::clone](x: &$uN) -> (res: $uN)
-                ensures res == x;
+                ensures res == x,  allocates 0;
 
             impl super::super::cmp::PartialEqSpecImpl for $uN {
                 open spec fn obeys_eq_spec() -> bool {
@@ -77,63 +77,63 @@ macro_rules! num_specs {
                 }
             }
 
-            pub assume_specification[<$uN as PartialEq<$uN>>::eq](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialEq<$uN>>::eq](x: &$uN, y: &$uN) -> bool  allocates 0;
 
-            pub assume_specification[<$uN as PartialEq<$uN>>::ne](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialEq<$uN>>::ne](x: &$uN, y: &$uN) -> bool  allocates 0;
 
-            pub assume_specification[<$uN as Ord>::cmp](x: &$uN, y: &$uN) -> Ordering;
+            pub assume_specification[<$uN as Ord>::cmp](x: &$uN, y: &$uN) -> Ordering  allocates 0;
 
-            pub assume_specification[<$uN as PartialOrd<$uN>>::partial_cmp](x: &$uN, y: &$uN) -> Option<Ordering>;
+            pub assume_specification[<$uN as PartialOrd<$uN>>::partial_cmp](x: &$uN, y: &$uN) -> Option<Ordering>  allocates 0;
 
-            pub assume_specification[<$uN as PartialOrd<$uN>>::lt](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialOrd<$uN>>::lt](x: &$uN, y: &$uN) -> bool  allocates 0;
 
-            pub assume_specification[<$uN as PartialOrd<$uN>>::le](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialOrd<$uN>>::le](x: &$uN, y: &$uN) -> bool  allocates 0;
 
-            pub assume_specification[<$uN as PartialOrd<$uN>>::gt](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialOrd<$uN>>::gt](x: &$uN, y: &$uN) -> bool  allocates 0;
 
-            pub assume_specification[<$uN as PartialOrd<$uN>>::ge](x: &$uN, y: &$uN) -> bool;
+            pub assume_specification[<$uN as PartialOrd<$uN>>::ge](x: &$uN, y: &$uN) -> bool  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_add](x: $uN, y: $uN) -> $uN
                 returns $mod_u::wrapping_add(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_add_signed](x: $uN, y: $iN) -> $uN
                 returns $mod_u::wrapping_add_signed(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_sub](x: $uN, y: $uN) -> $uN
                 returns $mod_u::wrapping_sub(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_mul](x: $uN, y: $uN) -> $uN
                 returns $mod_u::wrapping_mul(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_shl](x: $uN, rhs: u32) -> $uN
                 returns $mod_u::wrapping_shl(x, rhs)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_shr](x: $uN, rhs: u32) -> $uN
                 returns $mod_u::wrapping_shr(x, rhs)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -145,7 +145,7 @@ macro_rules! num_specs {
                         Some((x + y) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -157,7 +157,7 @@ macro_rules! num_specs {
                         Some((x + y) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -169,7 +169,7 @@ macro_rules! num_specs {
                         Some((x - y) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -181,7 +181,7 @@ macro_rules! num_specs {
                         Some((x * y) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -195,7 +195,7 @@ macro_rules! num_specs {
                         Some(next_multiple_of(x as int, rhs as int) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             pub open spec fn checked_div(x: $uN, y: $uN) -> Option<$uN> {
                 if y == 0 {
@@ -210,7 +210,7 @@ macro_rules! num_specs {
             pub assume_specification[<$uN>::checked_div](lhs: $uN, rhs: $uN) -> (result: Option<$uN>)
                 ensures
                     result == checked_div(lhs, rhs),
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::when_used_as_spec(checked_div)]
             #[cfg(not(verus_verify_core))]
@@ -218,7 +218,7 @@ macro_rules! num_specs {
                 ensures
                     // checked_div is the same as checked_div_euclid for unsigned ints
                     result == checked_div(lhs, rhs),
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -231,7 +231,7 @@ macro_rules! num_specs {
                         Some((lhs % rhs) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -244,7 +244,7 @@ macro_rules! num_specs {
                         Some((lhs % rhs) as $uN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -256,7 +256,7 @@ macro_rules! num_specs {
                         (x + y) as $uN
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -268,7 +268,7 @@ macro_rules! num_specs {
                         (x - y) as $uN
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -280,7 +280,7 @@ macro_rules! num_specs {
                         (x * y) as $uN
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -288,7 +288,7 @@ macro_rules! num_specs {
                 returns (
                     if y == 0 { x == 0 } else { x % y == 0 }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
         }
 
         // Signed ints (i8, i16, etc.)
@@ -297,7 +297,7 @@ macro_rules! num_specs {
             use super::*;
 
             pub assume_specification[<$iN as Clone>::clone](x: &$iN) -> (res: $iN)
-                ensures res == x;
+                ensures res == x,  allocates 0;
 
             impl super::super::cmp::PartialEqSpecImpl for $iN {
                 open spec fn obeys_eq_spec() -> bool {
@@ -341,63 +341,63 @@ macro_rules! num_specs {
                 }
             }
 
-            pub assume_specification[<$iN as PartialEq<$iN>>::eq](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialEq<$iN>>::eq](x: &$iN, y: &$iN) -> bool  allocates 0;
 
-            pub assume_specification[<$iN as PartialEq<$iN>>::ne](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialEq<$iN>>::ne](x: &$iN, y: &$iN) -> bool  allocates 0;
 
-            pub assume_specification[<$iN as Ord>::cmp](x: &$iN, y: &$iN) -> Ordering;
+            pub assume_specification[<$iN as Ord>::cmp](x: &$iN, y: &$iN) -> Ordering  allocates 0;
 
-            pub assume_specification[<$iN as PartialOrd<$iN>>::partial_cmp](x: &$iN, y: &$iN) -> Option<Ordering>;
+            pub assume_specification[<$iN as PartialOrd<$iN>>::partial_cmp](x: &$iN, y: &$iN) -> Option<Ordering>  allocates 0;
 
-            pub assume_specification[<$iN as PartialOrd<$iN>>::lt](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialOrd<$iN>>::lt](x: &$iN, y: &$iN) -> bool  allocates 0;
 
-            pub assume_specification[<$iN as PartialOrd<$iN>>::le](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialOrd<$iN>>::le](x: &$iN, y: &$iN) -> bool  allocates 0;
 
-            pub assume_specification[<$iN as PartialOrd<$iN>>::gt](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialOrd<$iN>>::gt](x: &$iN, y: &$iN) -> bool  allocates 0;
 
-            pub assume_specification[<$iN as PartialOrd<$iN>>::ge](x: &$iN, y: &$iN) -> bool;
+            pub assume_specification[<$iN as PartialOrd<$iN>>::ge](x: &$iN, y: &$iN) -> bool  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_add](x: $iN, y: $iN) -> $iN
                 returns $mod_i::wrapping_add(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_add_unsigned](x: $iN, y: $uN) -> $iN
                 returns $mod_i::wrapping_add_unsigned(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_sub](x: $iN, y: $iN) -> (res: $iN)
                 returns $mod_i::wrapping_sub(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_mul](x: $iN, y: $iN) -> $iN
                 returns $mod_i::wrapping_mul(x, y)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_shl](x: $iN, rhs: u32) -> $iN
                 returns $mod_i::wrapping_shl(x, rhs)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$iN>::wrapping_shr](x: $iN, rhs: u32) -> $iN
                 returns $mod_i::wrapping_shr(x, rhs)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -409,7 +409,7 @@ macro_rules! num_specs {
                         Some((x + y) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -421,7 +421,7 @@ macro_rules! num_specs {
                         Some((x + y) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -433,7 +433,7 @@ macro_rules! num_specs {
                         Some((x - y) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -445,7 +445,7 @@ macro_rules! num_specs {
                         Some((x - y) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -457,7 +457,7 @@ macro_rules! num_specs {
                         Some((x * y) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -469,7 +469,7 @@ macro_rules! num_specs {
                         Some(rust_div(lhs as int, rhs as int) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -481,7 +481,7 @@ macro_rules! num_specs {
                         Some((lhs / rhs) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -493,7 +493,7 @@ macro_rules! num_specs {
                         Some(rust_rem(lhs as int, rhs as int) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
 
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
@@ -505,7 +505,7 @@ macro_rules! num_specs {
                         Some((lhs % rhs) as $iN)
                     }
                 )
-                no_unwind;
+                no_unwind  allocates 0;
         }
 
         }

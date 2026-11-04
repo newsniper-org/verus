@@ -266,56 +266,56 @@ pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::start_bound ](
     range: &'s Range<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.start),
+        result == Bound::Included(&range.start),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::end_bound ](
     range: &'s Range<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Excluded(&range.end),
+        result == Bound::Excluded(&range.end),  allocates 0
 ;
 
 pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::start_bound ](
     range: &'s RangeFull,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,
+        result == Bound::Unbounded,  allocates 0
 ;
 
 pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::end_bound ](
     range: &'s RangeFull,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,
+        result == Bound::Unbounded,  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeFrom<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.start),
+        result == Bound::Included(&range.start),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeFrom<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,
+        result == Bound::Unbounded,  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeTo<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,
+        result == Bound::Unbounded,  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeTo<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Excluded(&range.end),
+        result == Bound::Excluded(&range.end),  allocates 0
 ;
 
 // Shared by `start_bound()`/`end_bound()` and their `RangeBoundsSpec` models.
@@ -339,42 +339,42 @@ pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::start_bo
     range: &'s RangeInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == spec_range_inclusive_start_bound(range),
+        result == spec_range_inclusive_start_bound(range),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == spec_range_inclusive_end_bound(range),
+        result == spec_range_inclusive_end_bound(range),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::start_bound ](
     range: &'s RangeToInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Unbounded,
+        result == Bound::Unbounded,  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::end_bound ](
     range: &'s RangeToInclusive<T>,
 ) -> (result: Bound<&'s T>)
     ensures
-        result == Bound::Included(&range.end),
+        result == Bound::Included(&range.end),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::start_bound ](
     range: &'s (Bound<T>, Bound<T>),
 ) -> (result: Bound<&'s T>)
     ensures
-        result == bound_as_ref(&range.0),
+        result == bound_as_ref(&range.0),  allocates 0
 ;
 
 pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::end_bound ](
     range: &'s (Bound<T>, Bound<T>),
 ) -> (result: Bound<&'s T>)
     ensures
-        result == bound_as_ref(&range.1),
+        result == bound_as_ref(&range.1),  allocates 0
 ;
 
 /// Specification for [`core::ops::RangeBounds`], exposing spec-mode models

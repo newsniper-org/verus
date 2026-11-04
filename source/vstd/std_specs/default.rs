@@ -16,7 +16,7 @@ macro_rules! assume_default_value {
         verus! {
             pub assume_specification [ <$t as core::default::Default>::default ]() -> (r: $t)
                 ensures
-                    r == $default_value,
+                    r == $default_value,  allocates 0
             ;
         }
     };
@@ -45,19 +45,19 @@ verus! {
 
 pub assume_specification<T>[ <Option<T> as core::default::Default>::default ]() -> (r: Option<T>)
     ensures
-        r == Option::<T>::None,
+        r == Option::<T>::None,  allocates 0
 ;
 
 pub assume_specification<'a>[ <&'a str as core::default::Default>::default ]() -> (r: &'a str)
     ensures
-        r == "",
+        r == "",  allocates 0
 ;
 
 pub assume_specification<T: PointeeSized>[ <core::marker::PhantomData<
     T,
 > as core::default::Default>::default ]() -> (r: core::marker::PhantomData<T>)
     ensures
-        r == core::marker::PhantomData::<T>,
+        r == core::marker::PhantomData::<T>,  allocates 0
 ;
 
 pub assume_specification<U: core::default::Default, T: core::default::Default>[ <(

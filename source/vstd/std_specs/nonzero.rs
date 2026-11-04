@@ -75,7 +75,7 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new ](n: T) -> (re
             None => n.is_zero(),
         },
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new_unchecked ](n: T) -> (ret:
@@ -85,7 +85,7 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new_unchecked ](n:
     ensures
         ret@ == n,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[verifier::inline]
@@ -98,7 +98,7 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::get ](n: NonZero<T
     returns
         n@,
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 impl<T: ZeroablePrimitive + PartialEqSpec> PartialEqSpecImpl for NonZero<T> {
@@ -164,7 +164,7 @@ pub assume_specification<T: ZeroablePrimitive>[ <NonZero<T> as Clone>::clone ](
     nz: &NonZero<T>,
 ) -> NonZero<T>
     returns
-        nz,
+        nz, allocates 0
 ;
 
 pub broadcast group group_nonzero_axioms {

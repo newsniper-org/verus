@@ -173,7 +173,7 @@ pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
         *final(a) == *old(b),
         *final(b) == *old(a),
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 #[verifier::external_type_specification]
@@ -203,12 +203,12 @@ pub struct ExPhantomData<V: PointeeSized>(core::marker::PhantomData<V>);
 
 pub assume_specification[ core::intrinsics::likely ](b: bool) -> (c: bool)
     ensures
-        c == b,
+        c == b, allocates 0
 ;
 
 pub assume_specification[ core::intrinsics::unlikely ](b: bool) -> (c: bool)
     ensures
-        c == b,
+        c == b, allocates 0
 ;
 
 pub assume_specification<T, F: FnOnce() -> T>[ bool::then ](b: bool, f: F) -> (ret: Option<T>)
@@ -219,22 +219,22 @@ pub assume_specification<T, F: FnOnce() -> T>[ bool::then ](b: bool, f: F) -> (r
             ret.is_some() && f.ensures((), ret.unwrap())
         } else {
             ret.is_none()
-        },
+        }, allocates 0
 ;
 
 pub assume_specification<T> [core::hint::must_use] (value: T) -> (ret: T)
     ensures
-        ret == value,
+        ret == value, allocates 0
 ;
 
 pub assume_specification [core::panicking::panic] (s: &'static str) -> !
     requires
-        false,
+        false, allocates 0
 ;
 
 pub assume_specification [core::panicking::panic_fmt] (s: core::fmt::Arguments<'_>) -> !
     requires
-        false,
+        false, allocates 0
 ;
 
 // Called by `assert_eq!` and `assert_ne!`; not external_body, since the macros construct an `AssertKind`
@@ -251,7 +251,7 @@ pub assume_specification<T, U>[ core::panicking::assert_failed::<T, U> ](
         T: core::fmt::Debug + ?Sized,
         U: core::fmt::Debug + ?Sized,
     requires
-        false,
+        false, allocates 0
 ;
 
 } // verus!

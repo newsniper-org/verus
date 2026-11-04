@@ -200,7 +200,7 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*mut T as PartialEq<*m
     y: &*mut T,
 ) -> (res: bool)
     ensures
-        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
+        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata), allocates 0
 ;
 
 #[cfg(verus_keep_ghost)]
@@ -223,7 +223,7 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*const T as PartialEq<
     y: &*const T,
 ) -> (res: bool)
     ensures
-        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
+        res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata), allocates 0
 ;
 
 impl<T> View for PointsTo<T> {
@@ -404,7 +404,7 @@ pub assume_specification<
     ensures
         res == ptr_null::<T>(),
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 /// Constructs a mutable null pointer.
@@ -425,7 +425,7 @@ pub assume_specification<
     ensures
         res == ptr_null_mut::<T>(),
     opens_invariants none
-    no_unwind
+    no_unwind  allocates 0
 ;
 
 //////////////////////////////////////
@@ -664,7 +664,7 @@ macro_rules! pointer_specs {
             pub assume_specification<T: ::core::marker::PointeeSized>[<*$mu T>::addr](p: *$mu T) -> (addr: usize)
                 ensures addr == spec_addr(p)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             pub open spec fn spec_with_addr<T: ::core::marker::PointeeSized>(p: *$mu T, addr: usize) -> *$mu T {
                 $ptr_from_data(PtrData::<T> { addr: addr, .. p@ })
@@ -675,7 +675,7 @@ macro_rules! pointer_specs {
             pub assume_specification<T: ::core::marker::PointeeSized>[<*$mu T>::with_addr](p: *$mu T, addr: usize) -> (q: *$mu T)
                 ensures q == spec_with_addr(p, addr)
                 opens_invariants none
-                no_unwind;
+                no_unwind  allocates 0;
 
             }
         }

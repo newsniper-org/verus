@@ -139,7 +139,7 @@ macro_rules! impl_from_spec {
     ($from: ty => [$($to: ty)*]) => {
         verus!{
         $(
-        pub assume_specification[ <$to as core::convert::From<$from>>::from ](a: $from) -> (ret: $to);
+        pub assume_specification[ <$to as core::convert::From<$from>>::from ](a: $from) -> (ret: $to)  allocates 0;
 
         impl FromSpecImpl<$from> for $to {
             open spec fn obeys_from_spec() -> bool {
@@ -168,7 +168,7 @@ macro_rules! impl_int_try_from_spec {
     ($from:ty => [$($to:ty)*]) => {
         verus!{
         $(
-        pub assume_specification[ <$to as TryFrom<$from>>::try_from ](a: $from) -> (ret: Result<$to, <$to as TryFrom<$from>>::Error>);
+        pub assume_specification[ <$to as TryFrom<$from>>::try_from ](a: $from) -> (ret: Result<$to, <$to as TryFrom<$from>>::Error>)  allocates 0;
 
         impl TryFromSpecImpl<$from> for $to {
             open spec fn obeys_try_from_spec() -> bool {
