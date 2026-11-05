@@ -2591,3 +2591,84 @@ fn alloc_check_stale_vir_rejected() {
         stderr
     );
 }
+
+test_verify_one_file_with_options! {
+    // the examples of docs/guide/src/reference-allocates.md (and its Korean counterpart)
+    #[test] alloc_check_guide_examples ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        fn make_pair(x: u64) -> (r: (Box<u64>, Box<u64>))
+            allocates 2
+        {
+            (Box::new(x), Box::new(x))
+        }
+
+        fn push_one(v: &mut Vec<u64>, x: u64)
+            allocates if old(v)@.len() == vstd::std_specs::vec::spec_vec_capacity(&*old(v)) { 1int } else { 0int }
+        {
+            v.push(x);
+        }
+
+        fn boxes(n: usize) -> (r: Vec<Box<usize>>)
+            allocates 1 + n
+        {
+            broadcast use vstd::std_specs::vec::group_vec_axioms;
+            let mut v: Vec<Box<usize>> = Vec::with_capacity(n);
+            for i in 0..n
+                invariant
+                    v@.len() == i,
+                    n <= vstd::std_specs::vec::spec_vec_capacity(&v),
+                    allocated() <= 1 + i,
+            {
+                v.push(Box::new(i));
+            }
+            v
+        }
+
+        pub trait Shape {
+            fn area(&self) -> u64 allocates 0;
+        }
+
+        fn total<S: Shape>(a: &S, b: &S) -> u64
+            allocates 0
+        {
+            let x = a.area();
+            let y = b.area();
+            if x < 1000 && y < 1000 { x + y } else { 0 }
+        }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> u64
+            requires f.requires((x,)),
+            allocates call_allocates(*f, (x,))
+        {
+            f(x)
+        }
+
+        fn use_apply() -> u64
+            allocates 0
+        {
+            let half = |y: u64| -> (r: u64) allocates 0 { y / 2 };
+            apply(&half, 7)
+        }
+
+        fn consume<T: AllocFreeDrop>(t: T)
+            allocates 0
+        {
+        }
+
+        pub struct Handle { pub id: u64 }
+
+        impl Drop for Handle {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+                allocates 0
+            {
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Handle {}
+
+        fn drop_handle(h: Handle) allocates 0 { consume(h) }
+    } => Ok(())
+}

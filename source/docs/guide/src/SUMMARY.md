@@ -189,6 +189,8 @@
     - [returns](./reference-returns.md)
     - [opens_invariants](./reference-opens-invariants.md)
     - [no_unwind](./reference-unwind-sig.md)
+    - [allocates (fork, experimental)](./reference-allocates.md)
+      - [allocates (한국어)](./reference-allocates.ko.md)
     - [recommends](./reference-recommends.md)
   - [Traits and signature inheritance](./reference-signature-inheritance.md)
   - [Specifications on FnOnce](./reference-signature-fnonce.md)
