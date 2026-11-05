@@ -85,9 +85,12 @@ pub struct GlobalCtx {
     /// since `Drop::drop` is never called explicitly and would otherwise be pruned away.
     pub(crate) drop_impl_alloc_zero: Arc<HashMap<Dt, (Span, bool)>>,
     pub(crate) copy_datatypes: Arc<std::collections::HashSet<Dt>>,
+    pub(crate) copy_impls: Arc<crate::alloc_check::CopyImpls>,
     /// -V alloc-check: datatypes of the whole crate (not pruned per module, so a type's
     /// private fields are still there for the drop rule)
     pub(crate) alloc_datatypes: Arc<HashMap<Dt, crate::ast::Datatype>>,
+    /// -V alloc-check: per exec function, the types of its body's exec code (set by ast_simplify)
+    pub(crate) alloc_exec_typs: Arc<HashMap<Fun, Vec<(Span, crate::ast::Typ)>>>,
     pub axiom_usage_info: bool,
     pub no_bv_simplify: bool,
     pub report_long_running: bool,
@@ -371,6 +374,7 @@ impl GlobalCtx {
         // Always checked: vstd's `axiom_fmt_allocates_*` rely on it
         crate::alloc_check::check_fmt_impl_bounds(krate)?;
         let copy_datatypes = crate::alloc_check::copy_datatypes(krate);
+        let copy_impls = crate::alloc_check::copy_impls(krate);
         let alloc_datatypes: HashMap<Dt, crate::ast::Datatype> = if alloc_check {
             krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect()
         } else {
@@ -810,7 +814,9 @@ impl GlobalCtx {
             alloc_check_strict,
             drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
             copy_datatypes: Arc::new(copy_datatypes),
+            copy_impls: Arc::new(copy_impls),
             alloc_datatypes: Arc::new(alloc_datatypes),
+            alloc_exec_typs: Arc::new(HashMap::new()),
             axiom_usage_info,
             no_bv_simplify,
             report_long_running,
@@ -847,7 +853,9 @@ impl GlobalCtx {
             alloc_check_strict: self.alloc_check_strict,
             drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
             copy_datatypes: self.copy_datatypes.clone(),
+            copy_impls: self.copy_impls.clone(),
             alloc_datatypes: self.alloc_datatypes.clone(),
+            alloc_exec_typs: self.alloc_exec_typs.clone(),
             axiom_usage_info: self.axiom_usage_info,
             no_bv_simplify: self.no_bv_simplify,
             report_long_running: self.report_long_running,

@@ -11,7 +11,7 @@ use crate::sst::{BndX, CallFun, Exp, ExpX};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub fn check_safe_api(krate: &Krate) -> Result<(), VirErr> {
+pub fn check_safe_api(krate: &Krate, alloc_check: bool) -> Result<(), VirErr> {
     let mut trait_map = HashMap::<Path, Trait>::new();
     for t in krate.traits.iter() {
         trait_map.insert(t.x.name.clone(), t.clone());
@@ -103,6 +103,26 @@ pub fn check_safe_api(krate: &Krate) -> Result<(), VirErr> {
                     &function.span,
                     &format!(
                         "safe API violation: `invariant` clause is nontrivial for trait method `{:}`; unverified, safe client code may be able to implement this trait without obeying invariant-reentrancy requirements",
+                        fun_as_friendly_rust_name(&function.x.name),
+                    ),
+                ));
+            }
+            // (vstd's bounds on the declarations of the std traits it specifies are
+            // per-implementation cost terms that constrain no other implementation; without
+            // -V alloc-check, bounds are not used at all)
+            if alloc_check
+                && function.x.mode == Mode::Exec
+                && function.x.allocates.is_some()
+                && !matches!(
+                    &function.x.kind,
+                    FunctionKind::TraitMethodDecl { trait_path, .. }
+                        if trait_map.get(trait_path).is_some_and(|t| t.x.proxy.as_ref().is_some_and(|px| px.x.is_vstd_path()))
+                )
+            {
+                return Err(error(
+                    &function.span,
+                    &format!(
+                        "safe API violation: `allocates` clause is nontrivial for trait method `{:}`; unverified, safe client code may be able to implement this trait without staying within this allocation bound",
                         fun_as_friendly_rust_name(&function.x.name),
                     ),
                 ));

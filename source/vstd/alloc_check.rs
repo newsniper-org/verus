@@ -8,119 +8,124 @@ verus! {
 ///
 /// With `-V alloc-check`, every `Drop::drop` that a checked function may run must be bounded by
 /// `allocates 0`. A generic function that may drop a value of a type parameter `T` therefore needs
-/// the bound `T: AllocFreeDrop` (or `T: Copy`). An `impl AllocFreeDrop for X` is only accepted
-/// under `-V alloc-check` when dropping an `X` cannot allocate.
-pub trait AllocFreeDrop {
+/// the bound `T: AllocFreeDrop` (or `T: Copy`). An `unsafe impl AllocFreeDrop for X` is only
+/// accepted under `-V alloc-check` when dropping an `X` cannot allocate, and every impl in the
+/// program must be one that Verus checks.
+///
+/// The trait is `unsafe` because code that Verus does not see (for example, an unverified client
+/// of a library verified with `-V check-api-safety`) could otherwise implement it for a type whose
+/// drop allocates, and so break the bounds of the generic functions that rely on it.
+pub unsafe trait AllocFreeDrop {
 
 }
 
-impl AllocFreeDrop for () {
+unsafe impl AllocFreeDrop for () {
 
 }
 
-impl AllocFreeDrop for bool {
+unsafe impl AllocFreeDrop for bool {
 
 }
 
-impl AllocFreeDrop for char {
+unsafe impl AllocFreeDrop for char {
 
 }
 
-impl AllocFreeDrop for u8 {
+unsafe impl AllocFreeDrop for u8 {
 
 }
 
-impl AllocFreeDrop for u16 {
+unsafe impl AllocFreeDrop for u16 {
 
 }
 
-impl AllocFreeDrop for u32 {
+unsafe impl AllocFreeDrop for u32 {
 
 }
 
-impl AllocFreeDrop for u64 {
+unsafe impl AllocFreeDrop for u64 {
 
 }
 
-impl AllocFreeDrop for u128 {
+unsafe impl AllocFreeDrop for u128 {
 
 }
 
-impl AllocFreeDrop for usize {
+unsafe impl AllocFreeDrop for usize {
 
 }
 
-impl AllocFreeDrop for i8 {
+unsafe impl AllocFreeDrop for i8 {
 
 }
 
-impl AllocFreeDrop for i16 {
+unsafe impl AllocFreeDrop for i16 {
 
 }
 
-impl AllocFreeDrop for i32 {
+unsafe impl AllocFreeDrop for i32 {
 
 }
 
-impl AllocFreeDrop for i64 {
+unsafe impl AllocFreeDrop for i64 {
 
 }
 
-impl AllocFreeDrop for i128 {
+unsafe impl AllocFreeDrop for i128 {
 
 }
 
-impl AllocFreeDrop for isize {
+unsafe impl AllocFreeDrop for isize {
 
 }
 
-impl<'a, T: ?Sized> AllocFreeDrop for &'a T {
+unsafe impl<'a, T: ?Sized> AllocFreeDrop for &'a T {
 
 }
 
-impl<'a, T: ?Sized> AllocFreeDrop for &'a mut T {
+unsafe impl<'a, T: ?Sized> AllocFreeDrop for &'a mut T {
 
 }
 
-impl<T: AllocFreeDrop> AllocFreeDrop for Option<T> {
+unsafe impl<T: AllocFreeDrop> AllocFreeDrop for Option<T> {
 
 }
 
-impl<T: AllocFreeDrop, E: AllocFreeDrop> AllocFreeDrop for Result<T, E> {
+unsafe impl<T: AllocFreeDrop, E: AllocFreeDrop> AllocFreeDrop for Result<T, E> {
 
 }
 
-impl<A: AllocFreeDrop, B: AllocFreeDrop> AllocFreeDrop for (A, B) {
+unsafe impl<A: AllocFreeDrop, B: AllocFreeDrop> AllocFreeDrop for (A, B) {
 
 }
 
-impl<A: AllocFreeDrop, B: AllocFreeDrop, C: AllocFreeDrop> AllocFreeDrop for (A, B, C) {
+unsafe impl<A: AllocFreeDrop, B: AllocFreeDrop, C: AllocFreeDrop> AllocFreeDrop for (A, B, C) {
 
 }
 
 #[cfg(feature = "alloc")]
-impl<T: AllocFreeDrop> AllocFreeDrop for alloc::boxed::Box<T> {
+unsafe impl<T: AllocFreeDrop> AllocFreeDrop for alloc::boxed::Box<T> {
 
 }
 
 #[cfg(feature = "alloc")]
-impl<T: AllocFreeDrop> AllocFreeDrop for alloc::vec::Vec<T> {
+unsafe impl<T: AllocFreeDrop> AllocFreeDrop for alloc::vec::Vec<T> {
 
 }
 
 // (`Global` is behind the unstable `allocator_api`, which vstd only enables when verifying)
 #[cfg(all(feature = "alloc", verus_keep_ghost))]
-impl AllocFreeDrop for alloc::alloc::Global {
+unsafe impl AllocFreeDrop for alloc::alloc::Global {
 
 }
 
 #[cfg(feature = "alloc")]
-impl AllocFreeDrop for alloc::string::String {
+unsafe impl AllocFreeDrop for alloc::string::String {
 
 }
 
 #[cfg(feature = "std")]
-impl AllocFreeDrop for std::hash::RandomState {
+unsafe impl AllocFreeDrop for std::hash::RandomState {
 
 }
 

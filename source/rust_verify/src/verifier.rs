@@ -339,6 +339,11 @@ pub struct Verifier {
     dep_tracker: Option<crate::cargo_verus_dep_tracker::DepTracker>,
     import_virs_via_cargo: Option<Vec<(String, String)>>,
     export_vir_path_via_cargo: Option<std::path::PathBuf>,
+    /// -V alloc-check: the exported .vir is first written with its bounds marked as unchecked,
+    /// and written again with them marked as checked (and with the SVH of the compiled crate)
+    /// only after verification and compilation succeed (a .vir is written before verification, so
+    /// it would otherwise claim bounds that failed, or describe a different build of the crate)
+    alloc_checked_export: Option<(crate::import_export::CrateMetadata, Krate)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -496,6 +501,21 @@ impl CommandBatch {
 }
 
 impl Verifier {
+    /// -V alloc-check: after verification and compilation (which produced the crate with SVH
+    /// `crate_hash`) both succeeded, write the exported .vir again with its bounds marked as
+    /// checked and with that SVH
+    pub(crate) fn finish_alloc_checked_export(&mut self, crate_hash: u128) -> Result<(), VirErr> {
+        let Some((mut metadata, krate)) = self.alloc_checked_export.take() else { return Ok(()) };
+        metadata.crate_hash = Some(crate_hash);
+        crate::import_export::export_crate(
+            &self.args,
+            &self.export_vir_path_via_cargo,
+            metadata,
+            krate,
+            true,
+        )
+    }
+
     pub fn new(
         args: Args,
         via_cargo_args: Option<CargoVerusArgs>,
@@ -531,6 +551,7 @@ impl Verifier {
             via_cargo_args,
             import_virs_via_cargo: None,
             export_vir_path_via_cargo: None,
+            alloc_checked_export: None,
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -580,6 +601,7 @@ impl Verifier {
             dep_tracker: None,
             import_virs_via_cargo: self.import_virs_via_cargo.clone(),
             export_vir_path_via_cargo: self.export_vir_path_via_cargo.clone(),
+            alloc_checked_export: self.alloc_checked_export.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -2780,12 +2802,19 @@ impl Verifier {
         let crate_metadata = crate::import_export::CrateMetadata {
             crate_id: spans.local_crate.as_u64(),
             original_files: spans.local_files.clone(),
+            built_as_vstd: matches!(self.args.vstd, crate::config::Vstd::IsVstd),
+            crate_hash: None,
         };
+        let alloc_checked = crate::rust_to_vir_func::alloc_checked_whole_crate(&self.args);
+        if alloc_checked {
+            self.alloc_checked_export = Some((crate_metadata.clone(), local_crate.clone()));
+        }
         crate::import_export::export_crate(
             &self.args,
             &self.export_vir_path_via_cargo,
             crate_metadata,
             local_crate.clone(),
+            false,
         )
         .map_err(map_err_diagnostics)?;
 
@@ -2798,7 +2827,8 @@ impl Verifier {
         self.user_filter = Some(user_filter);
 
         if self.args.check_api_safety {
-            vir::safe_api::check_safe_api(&merged_crate).map_err(map_err_diagnostics)?;
+            vir::safe_api::check_safe_api(&merged_crate, self.args.alloc_check)
+                .map_err(map_err_diagnostics)?;
         }
 
         self.vir_crate = Some(merged_crate.clone());
@@ -3126,6 +3156,59 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
             };
         let time_import1 = Instant::now();
         self.verifier.time_import = time_import1 - time_import0;
+        if self.verifier.args.alloc_check {
+            // -V alloc-check trusts vstd by its crate (its opaque types, `external_body` drops
+            // and std specifications), so an imported crate named `vstd` must be one that was
+            // verified as vstd
+            // (vstd's items are matched to the linked crate named `vstd` by name alone (other
+            // crates' paths include the crate's stable id), so a .vir with vstd items must also be
+            // the one built with the linked vstd)
+            for (krate, metadata) in imported.vir_crates.iter().zip(imported.metadatas.iter()) {
+                let linked = tcx
+                    .crates(())
+                    .iter()
+                    .find(|cnum| tcx.stable_crate_id(**cnum).as_u64() == metadata.crate_id);
+                let has_vstd_items = krate.functions.iter().any(|f| f.x.name.path.is_vstd_path())
+                    || krate
+                        .datatypes
+                        .iter()
+                        .any(|d| matches!(&d.x.name, vir::ast::Dt::Path(p) if p.is_vstd_path()))
+                    || krate.traits.iter().any(|t| t.x.name.is_vstd_path());
+                // (a .vir whose bounds are marked as checked, or vstd's, must have been produced
+                // together with the linked crate: same SVH. Other crates' paths include the stable
+                // crate id, so an unlinked .vir binds to nothing.)
+                let has_checked = krate.functions.iter().any(|f| f.x.attrs.alloc_checked_crate);
+                let msg = match linked {
+                    None if has_vstd_items => Some(
+                        "-V alloc-check: an imported library file for `vstd` does not belong to the crate named `vstd` that this crate is linked with (it was built together with a different build of it)".to_string(),
+                    ),
+                    None => None,
+                    Some(cnum)
+                        if (has_vstd_items || tcx.crate_name(*cnum).as_str() == "vstd")
+                            && !metadata.built_as_vstd =>
+                    {
+                        Some(
+                            "-V alloc-check: the imported crate named `vstd` was not verified as vstd (`--is-vstd`)".to_string(),
+                        )
+                    }
+                    Some(cnum)
+                        if (has_checked || has_vstd_items)
+                            && metadata.crate_hash != Some(tcx.crate_hash(*cnum).as_u128()) =>
+                    {
+                        Some(format!(
+                            "-V alloc-check: the imported library file for `{}` was not produced together with the build of it that this crate is linked with (it is stale or from a different build; rebuild both with Verus with --compile)",
+                            tcx.crate_name(*cnum)
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(msg) = msg {
+                    compiler.sess.dcx().err(msg);
+                    self.verifier.encountered_vir_error = true;
+                    return rustc_driver::Compilation::Stop;
+                }
+            }
+        }
         let verus_items = Arc::new(crate::verus_items::from_diagnostic_items(tcx));
         self.verifier.verus_items = Some(verus_items.clone());
         let spans = SpanContextX::new(
@@ -3293,6 +3376,14 @@ impl VerifierCallbacksEraseMacro {
         for err in std::mem::take(&mut *self.verifier.deferred_errors.lock().unwrap()) {
             reporter.report_as(&err.to_any(), MessageLevel::Error);
             self.verifier.encountered_vir_error = true;
+        }
+        // (the checked export waits for the compilation pass: see `finish_alloc_checked_export`)
+        if !(self.verifier.count_errors == 0
+            && !self.verifier.encountered_error
+            && !self.verifier.encountered_vir_error
+            && compiler.sess.dcx().has_errors().is_none())
+        {
+            self.verifier.alloc_checked_export = None;
         }
         if !self.verifier.args.output_json
             && !self.verifier.args.no_verify

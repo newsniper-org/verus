@@ -695,7 +695,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
     ensures
         final(m)@ == old(m)@,
     allocates
-        1 + hash_ops_cost(&*m),
+        1 + hash_grow_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ HashMap::<
@@ -713,7 +713,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
             }
         },
     allocates
-        1 + hash_ops_cost(&*m),
+        1 + hash_ops_cost(&*m, &k),
 ;
 
 // The specification for `contains_key` has a parameter `key: &Q`
@@ -767,7 +767,7 @@ pub assume_specification<
             k,
         ),
     allocates
-        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m, k),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -826,7 +826,7 @@ pub assume_specification<
             None => !contains_borrowed_key(m@, k),
         },
     allocates
-        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m, k),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -892,7 +892,7 @@ pub assume_specification<
             }
         },
     allocates
-        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(&*m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(&*m, k),
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::clear ](
@@ -1087,7 +1087,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
     ensures
         final(m)@ == old(m)@,
     allocates
-        1 + hash_ops_cost(&*m),
+        1 + hash_grow_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1101,7 +1101,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
             &&& result == !old(m)@.contains(k)
         },
     allocates
-        1 + hash_ops_cost(&*m),
+        1 + hash_ops_cost(&*m, &k),
 ;
 
 // The specification for `contains` has a parameter `key: &Q`
@@ -1144,7 +1144,7 @@ pub assume_specification<
         obeys_key_model::<Key>() && builds_valid_hashers::<S>() ==> result
             == set_contains_borrowed_key(m@, k),
     allocates
-        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m, k),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -1194,7 +1194,7 @@ pub assume_specification<
             None => !set_contains_borrowed_key(m@, k),
         },
     allocates
-        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m, k),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -1246,7 +1246,7 @@ pub assume_specification<
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
     allocates
-        hash_lookup_cost::<Q, HashSet<Key, S, A>>(&*m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(&*m, k),
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
@@ -1414,7 +1414,7 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
             None => old(m)@.remove(key),
         })),
     allocates
-        1 + hash_ops_cost(&*m),
+        1 + hash_ops_cost(&*m, &key),
 ;
 
 //// Entry
@@ -1586,78 +1586,112 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
         0,
 ;
 
-/// -V alloc-check: the allocations of the user callbacks that one operation on `m` runs: `Hash::hash`
-/// and `Eq::eq` on the keys (a lookup hashes the key; growing the table hashes every key), and
-/// the `BuildHasher`/`Hasher` methods. It is the actual worst case over the operations on `m`, so
-/// it is finite for every `m` but not bounded by a constant.
-pub uninterp spec fn hash_ops_cost<M: ?Sized>(m: &M) -> int;
+/// -V alloc-check: the allocations of the user callbacks that an operation on the table `m` with
+/// the key `k` (`insert`, `entry`) runs: hashing `k`, comparing it with keys of `m` (`Hash::hash`,
+/// `Eq::eq`, and the `BuildHasher`/`Hasher` methods of the table's hasher), and, if the table
+/// grows, rehashing every key of `m`. Like `call_allocates` for a callback without a bound of its
+/// own, it is a function of the inputs: everything those callbacks see is `m` (including its
+/// hasher state) and `k`. (A cost of `m` alone could not exist for keys whose hashing allocates
+/// more for larger keys.)
+pub uninterp spec fn hash_ops_cost<M: ?Sized, K: ?Sized>(m: &M, k: &K) -> int;
 
-pub broadcast axiom fn axiom_hash_ops_cost_nonneg<M: ?Sized>(m: &M)
+pub broadcast axiom fn axiom_hash_ops_cost_nonneg<M: ?Sized, K: ?Sized>(m: &M, k: &K)
     ensures
-        #[trigger] hash_ops_cost(m) >= 0,
+        #[trigger] hash_ops_cost(m, k) >= 0,
+;
+
+/// The allocations of the user callbacks that growing the table `m` runs (`reserve`): rehashing
+/// every key of `m` with its hasher.
+pub uninterp spec fn hash_grow_cost<M: ?Sized>(m: &M) -> int;
+
+pub broadcast axiom fn axiom_hash_grow_cost_nonneg<M: ?Sized>(m: &M)
+    ensures
+        #[trigger] hash_grow_cost(m) >= 0,
 ;
 
 /// Hashing a `K` with an `S` builder, and comparing `K`s, allocates nothing
 pub uninterp spec fn hash_alloc_free<K: ?Sized, S: ?Sized>() -> bool;
 
-/// The allocation bound of a lookup by a borrowed key `&Q` in the table `m` (`contains_key`,
-/// `get`, `remove`, ...): std borrows each candidate key as `&Q` (`K::borrow`), hashes the `Q`
+/// The allocation bound of a lookup by a borrowed key `k: &Q` in the table `m` (`contains_key`,
+/// `get`, `remove`, ...): std borrows each candidate key as `&Q` (`K::borrow`), hashes `k`
 /// with the table's hasher and compares `Q`s, all of which may be user code. It is 0 when `Q`
 /// is the key type itself (`Borrow<K> for K` is the identity) and hashing and comparing keys
 /// allocates nothing, and for `String` keys looked up by `&str` with the std hasher.
-pub uninterp spec fn hash_lookup_cost<Q: ?Sized, M: ?Sized>(m: &M) -> int;
+pub uninterp spec fn hash_lookup_cost<Q: ?Sized, M: ?Sized>(m: &M, k: &Q) -> int;
 
-pub broadcast axiom fn axiom_hash_lookup_cost_nonneg<Q: ?Sized, M: ?Sized>(m: &M)
+pub broadcast axiom fn axiom_hash_lookup_cost_nonneg<Q: ?Sized, M: ?Sized>(m: &M, k: &Q)
     ensures
-        #[trigger] hash_lookup_cost::<Q, M>(m) >= 0,
+        #[trigger] hash_lookup_cost::<Q, M>(m, k) >= 0,
 ;
 
-pub broadcast axiom fn axiom_hash_lookup_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
+pub broadcast axiom fn axiom_hash_lookup_cost_map<K, V, S, A: Allocator>(
+    m: &HashMap<K, V, S, A>,
+    k: &K,
+)
     requires
         hash_alloc_free::<K, S>(),
     ensures
-        #[trigger] hash_lookup_cost::<K, HashMap<K, V, S, A>>(m) == 0,
+        #[trigger] hash_lookup_cost::<K, HashMap<K, V, S, A>>(m, k) == 0,
 ;
 
-pub broadcast axiom fn axiom_hash_lookup_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>)
+pub broadcast axiom fn axiom_hash_lookup_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>, k: &K)
     requires
         hash_alloc_free::<K, S>(),
     ensures
-        #[trigger] hash_lookup_cost::<K, HashSet<K, S, A>>(m) == 0,
+        #[trigger] hash_lookup_cost::<K, HashSet<K, S, A>>(m, k) == 0,
 ;
 
 // `String: Borrow<str>` returns a view of its bytes, and `String` hashes and compares as its
 // `str` does, so a `&str` lookup costs what a `String` one does
 pub broadcast axiom fn axiom_hash_lookup_cost_map_str<V, S, A: Allocator>(
     m: &HashMap<alloc::string::String, V, S, A>,
+    k: &str,
 )
     requires
         hash_alloc_free::<alloc::string::String, S>(),
     ensures
-        #[trigger] hash_lookup_cost::<str, HashMap<alloc::string::String, V, S, A>>(m) == 0,
+        #[trigger] hash_lookup_cost::<str, HashMap<alloc::string::String, V, S, A>>(m, k) == 0,
 ;
 
 pub broadcast axiom fn axiom_hash_lookup_cost_set_str<S, A: Allocator>(
     m: &HashSet<alloc::string::String, S, A>,
+    k: &str,
 )
     requires
         hash_alloc_free::<alloc::string::String, S>(),
     ensures
-        #[trigger] hash_lookup_cost::<str, HashSet<alloc::string::String, S, A>>(m) == 0,
+        #[trigger] hash_lookup_cost::<str, HashSet<alloc::string::String, S, A>>(m, k) == 0,
 ;
 
-pub broadcast axiom fn axiom_hash_ops_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
+pub broadcast axiom fn axiom_hash_ops_cost_map<K, V, S, A: Allocator>(
+    m: &HashMap<K, V, S, A>,
+    k: &K,
+)
     requires
         hash_alloc_free::<K, S>(),
     ensures
-        #[trigger] hash_ops_cost(m) == 0,
+        #[trigger] hash_ops_cost(m, k) == 0,
 ;
 
-pub broadcast axiom fn axiom_hash_ops_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>)
+pub broadcast axiom fn axiom_hash_ops_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>, k: &K)
     requires
         hash_alloc_free::<K, S>(),
     ensures
-        #[trigger] hash_ops_cost(m) == 0,
+        #[trigger] hash_ops_cost(m, k) == 0,
+;
+
+pub broadcast axiom fn axiom_hash_grow_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_grow_cost(m) == 0,
+;
+
+pub broadcast axiom fn axiom_hash_grow_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_grow_cost(m) == 0,
 ;
 
 // `RandomState` is SipHash-1-3, which keeps its state on the stack, and the primitive types hash
@@ -1712,6 +1746,9 @@ pub broadcast group group_hash_axioms {
     axiom_hash_lookup_cost_set_str,
     axiom_hash_ops_cost_map,
     axiom_hash_ops_cost_set,
+    axiom_hash_grow_cost_nonneg,
+    axiom_hash_grow_cost_map,
+    axiom_hash_grow_cost_set,
     axiom_hash_free_u8,
     axiom_hash_free_u16,
     axiom_hash_free_u32,

@@ -1352,6 +1352,7 @@ fn add_fndef_axioms_to_function(
                 trait_typ_arg_impls: Spanned::new(function.span.clone(), Arc::new(vec![])),
                 owning_module: None,
                 auto_imported: true,
+                has_auto_trait_bounds: false,
                 external_trait_blanket: false,
             };
             trait_impls_out.push(Spanned::new(function.span.clone(), trait_implx));
@@ -1746,6 +1747,7 @@ fn add_tuple_auto_impl(
         trait_typ_arg_impls: Spanned::new(ctx.no_span.clone(), Arc::new(vec![])),
         owning_module: None,
         auto_imported: true,
+        has_auto_trait_bounds: false,
         external_trait_blanket: false,
     };
     trait_impls.push(Spanned::new(ctx.no_span.clone(), trait_implx));
@@ -1778,6 +1780,11 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             .map(|d| (d.x.name.expect_path(), (d.x.typ_params.clone(), d.x.variants.clone())))
             .collect(),
     );
+    let alloc_exec_typs = if ctx.alloc_check {
+        crate::alloc_check::exec_typs_of_functions(functions)?
+    } else {
+        HashMap::new()
+    };
     let functions = vec_map_result(functions, |f| simplify_function(ctx, &mut state, f))?;
     let mut trait_impls = vec_map_result(&trait_impls, |t| simplify_trait_impl(&mut state, t))?;
     let mut assoc_type_impls =
@@ -2001,6 +2008,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             trait_typ_arg_impls: Spanned::new(ctx.no_span.clone(), Arc::new(vec![])),
             owning_module: None,
             auto_imported: true,
+            has_auto_trait_bounds: false,
             external_trait_blanket: false,
         };
         trait_impls.push(Spanned::new(ctx.no_span.clone(), trait_implx));
@@ -2059,6 +2067,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         ctx.no_bv_simplify,
         ctx.report_long_running,
     )?;
+    ctx.alloc_exec_typs = Arc::new(alloc_exec_typs);
     Ok(krate)
 }
 

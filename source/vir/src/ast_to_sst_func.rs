@@ -1017,8 +1017,9 @@ pub fn func_def_to_sst(
     // A trait method impl must also stay within the trait method's own bound, if it has one,
     // and its own bound (if any) must be within the trait's: the FnDef axioms state
     // `call_allocates == impl bound` per impl and `call_allocates <= trait bound` for the trait.
+    let mut copy_obligations: Vec<crate::alloc_check::CopyObligation> = Vec::new();
     if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
-        crate::alloc_check::check_closures_with_bounds(ctx, function)?;
+        copy_obligations.extend(crate::alloc_check::check_closures_with_bounds(ctx, function)?);
         crate::alloc_check::check_allocated_not_in_closure_specs(function)?;
     }
     let mut alloc_init: Option<crate::sst::Stm> = None;
@@ -1034,7 +1035,7 @@ pub fn func_def_to_sst(
         && (own_bound.is_some() || inherited_bound.is_some())
     {
         if !function.x.attrs.alloc_check_skip_drops {
-            crate::alloc_check::check_drop_glue(ctx, function)?;
+            copy_obligations.extend(crate::alloc_check::check_drop_glue(ctx, function)?);
         }
         let span = &own_bound.as_ref().or(inherited_bound.as_ref()).unwrap().span;
         if ctx.global.alloc_check_strict
@@ -1121,6 +1122,40 @@ pub fn func_def_to_sst(
     }
     if let Some(check) = alloc_entry_check {
         stm = stms_to_one_stm(&body.span, vec![check, stm]);
+    }
+    // Opaque types whose `Copy`-ness depends on trait bounds of their arguments (drop rule):
+    // show those bounds on entry
+    if !copy_obligations.is_empty() {
+        let mut checks: Vec<crate::sst::Stm> = Vec::new();
+        for (span, typ, bounds) in copy_obligations.iter() {
+            let msg = crate::messages::error(
+                span,
+                format!(
+                    "cannot bound the allocations of dropping a value of type `{}`: its fields are not visible, and it is not known to be `Copy`",
+                    crate::ast_util::typ_to_diagnostic_str(typ)
+                ),
+            );
+            for (path, targs) in bounds.iter() {
+                if !ctx.trait_map.contains_key(path) {
+                    return Err(msg);
+                }
+                let bound = SpannedTyped::new(
+                    span,
+                    &Arc::new(TypX::Bool),
+                    crate::ast::ExprX::NullaryOpr(crate::ast::NullaryOpr::TraitBound(
+                        crate::ast::TraitId::Path(path.clone()),
+                        targs.clone(),
+                    )),
+                );
+                let exp = expr_to_pure_exp_skip_checks(ctx, &mut state, &bound)?;
+                checks.push(Spanned::new(
+                    span.clone(),
+                    StmX::Assert(state.next_assert_id(), Some(msg.clone()), exp),
+                ));
+            }
+        }
+        checks.push(stm);
+        stm = stms_to_one_stm(&body.span, checks);
     }
 
     // Add atomic spec related statements

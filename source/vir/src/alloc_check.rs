@@ -8,6 +8,27 @@
 //! happen. What is needed is only the set of types the function may drop, which this module
 //! over-approximates from the types of the function's parameters and of every expression in its
 //! body (this includes temporaries, whose types are the return types of calls).
+//!
+//! What a bound means: `allocates e` bounds, for one call that returns normally, the number of
+//! calls to the allocator that obtain memory (allocate, allocate-zeroed, grow/shrink i.e.
+//! `realloc`; deallocation is not counted) that the Rust *abstract machine* makes, i.e. the
+//! source program, with `e` evaluated at function entry. It says nothing about bytes, peak
+//! memory or calls on paths that unwind. The compiled program may make fewer calls: the compiler
+//! is documented to be free to remove allocations and to merge them (LLVM LangRef, allocation
+//! elision and the splitting of `realloc` into an allocation and a free one of which may be
+//! elided, at main @932a5ca; the `core::alloc::GlobalAlloc` docs at rustc 1.99.1,
+//! `core/src/alloc/global.rs:97-102, 143-146`, rust-lang/rust#159720, which also allow merging
+//! allocations and say that whether allocations happen is not part of the program behavior). No
+//! current document either allows or forbids the
+//! compiler to *introduce* an allocator call that the source does not make; the bound is not a
+//! claim about such a compiler. `rust_verify_test/tests/alloc_check_runtime.rs` compares
+//! verified bounds with the calls that compiled programs actually make, at several
+//! optimization levels.
+//!
+//! A cost term that is not a number (`call_allocates(f, args)` for a callback `f` without a bound
+//! of its own, vstd's `hash_ops_cost(m, k)`, ...) stands for the largest number of calls the
+//! callback can make on those arguments; the bounds that mention it are claims relative to that
+//! value. Such a term must take every input that the count can depend on as an argument.
 
 use crate::ast::{
     Constant, CrateId, Datatype, Dt, ExprX, Function, GenericBoundX, GenericBounds, Ident, Krate,
@@ -29,7 +50,9 @@ fn is_trusted_std_crate(krate: &CrateId) -> bool {
 
 /// std datatypes that have their own `Drop` impl and whose drop is trusted to only drop their
 /// contents (their type arguments) and free memory. Any other std type with a `Drop` impl (e.g.
-/// `BufWriter`, whose drop flushes and may allocate) is rejected.
+/// `BufWriter`, whose drop flushes and may allocate) is rejected. In particular `vec::Splice`
+/// must never be added: its `Drop` is where `Vec::splice` reserves and collects the replacement
+/// (std 1.99.1 `alloc/src/vec/splice.rs:54-97`).
 const TRUSTED_STD_DROPS: &[&str] = &[
     "alloc::vec::Vec",
     "alloc::vec::into_iter::IntoIter",
@@ -63,6 +86,27 @@ const TRUSTED_STD_OPAQUE: &[&str] = &[
     "std::collections::hash::set::HashSet",
     "std::collections::hash::map::IntoIter",
     "std::collections::hash::set::IntoIter",
+    // std iterator adapters: their fields are their type arguments plus counters and flags
+    // (not `Peekable` or `FlatMap`, which hold values of a projected type `I::Item`/`U::IntoIter`)
+    "core::iter::adapters::enumerate::Enumerate",
+    "core::iter::adapters::chain::Chain",
+    "core::iter::adapters::cloned::Cloned",
+    "core::iter::adapters::copied::Copied",
+    "core::iter::adapters::step_by::StepBy",
+    "core::iter::adapters::fuse::Fuse",
+    "core::iter::adapters::rev::Rev",
+    "core::iter::adapters::skip::Skip",
+    "core::iter::adapters::take::Take",
+    "core::iter::adapters::zip::Zip",
+    "core::iter::adapters::map::Map",
+    "core::iter::adapters::filter::Filter",
+    "core::iter::adapters::filter_map::FilterMap",
+    "core::iter::adapters::take_while::TakeWhile",
+    "core::iter::adapters::skip_while::SkipWhile",
+    "core::iter::adapters::map_while::MapWhile",
+    "core::iter::adapters::inspect::Inspect",
+    "core::iter::adapters::cycle::Cycle",
+    "core::iter::adapters::scan::Scan",
 ];
 
 /// std datatypes whose last type parameter is an allocator. Only the global allocator is
@@ -92,7 +136,14 @@ fn is_global_allocator(typ: &Typ) -> bool {
         TypX::Datatype(Dt::Path(path), _, _) => {
             crate::ast_util::path_as_friendly_rust_name(path) == "alloc::alloc::Global"
         }
-        TypX::Decorate(_, _, t) => is_global_allocator(t),
+        // `&Global` forwards to `Global`
+        TypX::Decorate(TypDecoration::Ref, _, t) | TypX::MutRef(t) => is_global_allocator(t),
+        // `Rc<Global, A>` etc. forward to their contents, but are themselves allocated (and
+        // cloned, and freed) with their own allocator `A`, which must be global too
+        TypX::Decorate(TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc, arg, t) => {
+            arg.as_ref().map_or(true, |a| is_global_allocator(&a.allocator_typ))
+                && is_global_allocator(t)
+        }
         _ => false,
     }
 }
@@ -137,11 +188,25 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     params
 }
 
+/// For each datatype, its `Copy` impls: (self type arguments, impl type parameters, impl bounds)
+pub(crate) type CopyImpls = HashMap<Dt, Vec<(crate::ast::Typs, Vec<Ident>, GenericBounds)>>;
+
+/// The trait bounds (trait, type arguments) that show a value of `typ` is `Copy`
+pub(crate) type CopyObligation = (Span, Typ, Vec<(crate::ast::Path, crate::ast::Typs)>);
+
 struct DropGlueCheck<'a> {
     datatypes: &'a HashMap<Dt, Datatype>,
     drop_table: &'a HashMap<Dt, (Span, bool)>,
-    /// Datatypes with a `Copy` impl (they have no drop glue)
+    /// Datatypes with a `Copy` impl for every instantiation (they have no drop glue)
     copy_datatypes: &'a HashSet<Dt>,
+    /// All `Copy` impls of datatypes: (self type arguments, impl type parameters, impl bounds)
+    copy_impls: &'a CopyImpls,
+    /// Type parameters bounded by `Copy` in the function being checked
+    copy_params: HashSet<Ident>,
+    /// For opaque datatypes whose `Copy`-ness depends on trait bounds of their arguments (a
+    /// bounded `derive(Copy)`): the bounds the verifier must show; `None` where no such
+    /// obligation can be checked (then the type is rejected)
+    copy_obligations: Option<Vec<CopyObligation>>,
     alloc_free_params: HashSet<Ident>,
     /// Types already checked, keyed by their debug form (TypX is not Eq)
     visited: HashSet<String>,
@@ -166,12 +231,29 @@ impl<'a> DropGlueCheck<'a> {
         datatypes: &'a HashMap<Dt, Datatype>,
         drop_table: &'a HashMap<Dt, (Span, bool)>,
         copy_datatypes: &'a HashSet<Dt>,
+        copy_impls: &'a CopyImpls,
+        copy_obligations: bool,
         bounds: &GenericBounds,
     ) -> Self {
+        let copy_params = bounds
+            .iter()
+            .filter_map(|b| match &**b {
+                GenericBoundX::Trait(TraitId::Path(path), args) if is_copy_trait(path) => {
+                    match args.first().map(|t| &**t) {
+                        Some(TypX::TypParam(x)) => Some(x.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
         DropGlueCheck {
             datatypes,
             drop_table,
             copy_datatypes,
+            copy_impls,
+            copy_params,
+            copy_obligations: if copy_obligations { Some(vec![]) } else { None },
             alloc_free_params: alloc_free_typ_params(bounds),
             visited: HashSet::new(),
             on_stack: HashMap::new(),
@@ -209,6 +291,98 @@ impl<'a> DropGlueCheck<'a> {
             }
         }
         false
+    }
+
+    /// Is `typ` syntactically known to be `Copy`?
+    fn is_copy(&self, typ: &Typ, fuel: usize) -> bool {
+        if fuel == 0 {
+            return false;
+        }
+        match &**typ {
+            TypX::Bool | TypX::Int(_) | TypX::Float(_) | TypX::FnDef(..) => true,
+            TypX::Decorate(TypDecoration::Ref | TypDecoration::ConstPtr, _, _) => true,
+            TypX::Primitive(Primitive::Ptr, _) => true,
+            TypX::Primitive(Primitive::Array, ts) => {
+                ts.first().is_some_and(|t| self.is_copy(t, fuel - 1))
+            }
+            TypX::Datatype(Dt::Tuple(_), args, _) => args.iter().all(|t| self.is_copy(t, fuel - 1)),
+            TypX::Datatype(dt, args, _) => {
+                self.copy_datatypes.contains(dt) && args.iter().all(|t| self.is_copy(t, fuel - 1))
+            }
+            TypX::TypParam(x) => self.copy_params.contains(x),
+            _ => false,
+        }
+    }
+
+    /// If some `Copy` impl applies to `dt<args>`, the bounds left for the verifier to show
+    /// (`Copy` bounds are decided here, `Sized` ones are trivial)
+    fn copy_instance_bounds(
+        &self,
+        dt: &Dt,
+        args: &crate::ast::Typs,
+    ) -> Option<Vec<(crate::ast::Path, crate::ast::Typs)>> {
+        let impls = self.copy_impls.get(dt)?;
+        // an impl for exactly these arguments
+        for (self_args, _, bounds) in impls.iter() {
+            if bounds.is_empty()
+                && self_args.len() == args.len()
+                && self_args
+                    .iter()
+                    .zip(args.iter())
+                    .all(|(a, b)| crate::ast_util::types_equal(a, b))
+            {
+                return Some(vec![]);
+            }
+        }
+        // the impl for all arguments (`impl<A: Tr + Copy, ..> Copy for W<A, ..>`)
+        for (self_args, params, bounds) in impls.iter() {
+            let generic = self_args.len() == args.len()
+                && params.len() == self_args.len()
+                && self_args
+                    .iter()
+                    .zip(params.iter())
+                    .all(|(a, x)| matches!(&**a, TypX::TypParam(y) if y == x));
+            if !generic {
+                continue;
+            }
+            let substs: HashMap<Ident, Typ> =
+                params.iter().cloned().zip(args.iter().cloned()).collect();
+            let mut left = Vec::new();
+            for b in bounds.iter() {
+                match &**b {
+                    GenericBoundX::Trait(TraitId::Sizedness(_), _) => {}
+                    GenericBoundX::Trait(TraitId::Path(path), targs) => {
+                        let targs: Vec<Typ> =
+                            targs.iter().map(|t| crate::sst_util::subst_typ(&substs, t)).collect();
+                        if is_copy_trait(path) {
+                            if !targs.first().is_some_and(|t| self.is_copy(t, 16)) {
+                                return None;
+                            }
+                        } else {
+                            // (these types come from before ast_simplify; a closure type there is
+                            // not yet in the form the verifier encodes, so such a bound is not
+                            // left to it)
+                            let has_closure = targs.iter().any(|t| {
+                                crate::ast_visitor::typ_visitor_check::<(), _>(t, &mut |u| {
+                                    match &**u {
+                                        TypX::AnonymousClosure(..) => Err(()),
+                                        _ => Ok(()),
+                                    }
+                                })
+                                .is_err()
+                            });
+                            if has_closure {
+                                return None;
+                            }
+                            left.push((path.clone(), std::sync::Arc::new(targs)));
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            return Some(left);
+        }
+        None
     }
 
     /// (the type itself is not printed: it may be huge)
@@ -428,6 +602,9 @@ impl<'a> DropGlueCheck<'a> {
                             || TRUSTED_STD_OPAQUE.contains(&dt_name.as_str())
                             || TRUSTED_STD_DROPS.contains(&dt_name.as_str())
                     });
+                let vstd_exempt = matches!(dt, Dt::Path(p) if p.is_vstd_path())
+                    && datatype.x.proxy.as_ref().map_or(true, |px| px.x.is_vstd_path())
+                    && !UNTRUSTED_VSTD_OPAQUE.contains(&dt_name.as_str());
                 // A datatype whose fields are hidden: `external_body`, or one whose variants were
                 // removed by pruning because its fields are not visible from here
                 let opaque = datatype.x.variants.is_empty()
@@ -447,17 +624,29 @@ impl<'a> DropGlueCheck<'a> {
                         }
                     }
                 } else if !trusted_std
-                    && (datatype.x.destructor
-                        || (opaque
-                            && !(matches!(dt, Dt::Path(p) if p.is_vstd_path())
-                                && datatype
-                                    .x
-                                    .proxy
-                                    .as_ref()
-                                    .map_or(true, |px| px.x.is_vstd_path())
-                                && !UNTRUSTED_VSTD_OPAQUE.contains(&dt_name.as_str()))
-                            && !self.copy_datatypes.contains(dt)))
+                    && !datatype.x.destructor
+                    && opaque
+                    && !vstd_exempt
+                    && !self.is_copy(typ, 16)
+                    && self.copy_obligations.is_some()
+                    && let Some(bounds) = self.copy_instance_bounds(dt, args)
                 {
+                    // `W<args>` is `Copy` (so it has no drop glue at all) if an impl applies; the
+                    // trait bounds of that impl other than `Copy` are left to the verifier
+                    if !bounds.is_empty() {
+                        self.copy_obligations.as_mut().unwrap().push((
+                            span.clone(),
+                            typ.clone(),
+                            bounds,
+                        ));
+                    }
+                    return Ok(());
+                } else if !trusted_std
+                    && (datatype.x.destructor || (opaque && !vstd_exempt && !self.is_copy(typ, 16)))
+                {
+                    // (a `Copy` impl for every instantiation, `impl<A: Copy> Copy for W<A>`, only
+                    // makes `W<args>` `Copy` if the arguments are: `W<D>` for a non-`Copy` `D` may
+                    // hide a field of any type, e.g. `<D as Tr>::Out`)
                     // An opaque (`external_body`) type hides its fields, so its drop glue may run
                     // a `Drop::drop` of a field type even if it has no `Drop` impl of its own.
                     // Only a `Copy` type is known to have no drop glue. (vstd's opaque types are
@@ -502,28 +691,46 @@ impl<'a> DropGlueCheck<'a> {
 }
 
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
-pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirErr> {
+pub(crate) fn check_drop_glue(
+    ctx: &Ctx,
+    function: &Function,
+) -> Result<Vec<CopyObligation>, VirErr> {
     let mut checker = DropGlueCheck::new(
         &ctx.global.alloc_datatypes,
         &ctx.global.drop_impl_alloc_zero,
         &ctx.global.copy_datatypes,
+        &ctx.global.copy_impls,
+        true,
         &function.x.typ_bounds,
     );
     for param in function.x.params.iter() {
         checker.check(&param.span, &param.x.typ)?;
     }
     checker.check(&function.x.outer_ret.span, &function.x.outer_ret.x.typ)?;
-    if let Some(body) = &function.x.body {
+    // (the types of the body's exec code, collected before ghost code was merged into it; see
+    // `exec_typs_of_functions`)
+    if let Some(typs) = ctx.global.alloc_exec_typs.get(&function.x.name) {
+        for (span, typ) in typs.iter() {
+            checker.check(span, typ)?;
+        }
+    } else if let Some(body) = &function.x.body {
         for (span, typ) in collect_expr_typs(ctx, body)? {
             checker.check(&span, &typ)?;
         }
     }
-    Ok(())
+    Ok(checker.copy_obligations.unwrap_or_default())
 }
 
 /// The types of every sub-expression of `expr`, and of the parameters and return value of every
 /// closure inside it.
 fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Typ)>, VirErr> {
+    collect_expr_typs_in(&|f| ctx.func_map.get(f).cloned(), expr)
+}
+
+fn collect_expr_typs_in(
+    lookup: &dyn Fn(&crate::ast::Fun) -> Option<Function>,
+    expr: &crate::ast::Expr,
+) -> Result<Vec<(Span, Typ)>, VirErr> {
     // (expressions, places such as a captured variable that is only borrowed, and closure
     // parameter/return types; a place has the type of the value it denotes)
     let typs: std::cell::RefCell<Vec<(Span, Typ)>> = std::cell::RefCell::new(Vec::new());
@@ -541,7 +748,7 @@ fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Ty
                 t = inner;
             }
             if let TypX::FnDef(fun, typ_args, _) = &**t {
-                if let Some(g) = ctx.func_map.get(fun) {
+                if let Some(g) = lookup(fun) {
                     if g.x.proxy.is_some() {
                         let substs: HashMap<Ident, Typ> =
                             g.x.typ_params.iter().cloned().zip(typ_args.iter().cloned()).collect();
@@ -569,9 +776,8 @@ fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Ty
                 if let crate::ast::CallTargetKind::DynamicResolved { resolved, .. } = kind {
                     funs.push(resolved);
                 }
-                let std_callee = funs
-                    .iter()
-                    .any(|f| ctx.func_map.get(*f).map_or(false, |g| g.x.proxy.is_some()));
+                let std_callee =
+                    funs.iter().any(|f| lookup(*f).map_or(false, |g| g.x.proxy.is_some()));
                 if std_callee {
                     for a in args.iter() {
                         let mut t = &a.typ;
@@ -609,12 +815,23 @@ fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Ty
 /// A closure with an `allocates` bound is checked like a function with one: drops it may run
 /// must be allocation-free (and, in strict mode, the bound is only a claim about normal returns,
 /// which a closure cannot back with `no_unwind`, so strict mode rejects it).
-pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Result<(), VirErr> {
-    let Some(body) = &function.x.body else { return Ok(()) };
+pub(crate) fn check_closures_with_bounds(
+    ctx: &Ctx,
+    function: &Function,
+) -> Result<Vec<CopyObligation>, VirErr> {
+    let mut obligations: Vec<CopyObligation> = Vec::new();
+    let Some(body) = &function.x.body else { return Ok(obligations) };
     let mut closures: Vec<(Span, crate::ast::Expr)> = Vec::new();
+    // every closure expression of the body, by its closure type
+    let mut closure_exprs: HashMap<Path, Vec<crate::ast::Expr>> = HashMap::new();
     crate::ast_visitor::expr_visitor_check::<VirErr, _>(body, &mut |_scope, e| {
-        if let ExprX::NonSpecClosure { allocates: Some(_), .. } = &e.x {
-            closures.push((e.span.clone(), e.clone()));
+        if let ExprX::NonSpecClosure { allocates, .. } = &e.x {
+            if allocates.is_some() {
+                closures.push((e.span.clone(), e.clone()));
+            }
+            if let TypX::Datatype(Dt::Path(path), _, _) = &*e.typ {
+                closure_exprs.entry(path.clone()).or_default().push(e.clone());
+            }
         }
         Ok(())
     })?;
@@ -629,13 +846,52 @@ pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Resu
             &ctx.global.alloc_datatypes,
             &ctx.global.drop_impl_alloc_zero,
             &ctx.global.copy_datatypes,
+            &ctx.global.copy_impls,
+            true,
             &function.x.typ_bounds,
         );
-        for (span, typ) in collect_expr_typs(ctx, &closure)? {
-            checker.check(&span, &typ)?;
+        // Dropping a value of a closure type drops that closure's captures. The bounded closure's
+        // own captures are uses inside its body, but a capture may itself be (or contain) another
+        // closure of the enclosing function, whose captures are only visible in that closure's
+        // body: so the bodies of all closures whose types are reachable are included too.
+        let mut seen: HashSet<Path> = HashSet::new();
+        let mut work: Vec<crate::ast::Expr> = vec![closure.clone()];
+        while let Some(c) = work.pop() {
+            for (span, typ) in collect_expr_typs(ctx, &c)? {
+                checker.check(&span, &typ)?;
+                // (a closure behind a reference is not dropped with the reference)
+                let mut found: Vec<Path> = Vec::new();
+                let _ = crate::ast_visitor::typ_visitor_dfs::<(), _>(&typ, &mut |t| match &**t {
+                    TypX::Decorate(TypDecoration::Ref, _, _) | TypX::MutRef(_) => {
+                        crate::ast_visitor::VisitorControlFlow::Return
+                    }
+                    TypX::Datatype(Dt::Path(path), _, _) => {
+                        if crate::def::is_closure_type_path(path) {
+                            found.push(path.clone());
+                        }
+                        crate::ast_visitor::VisitorControlFlow::Recurse
+                    }
+                    _ => crate::ast_visitor::VisitorControlFlow::Recurse,
+                });
+                for path in found {
+                    if !seen.insert(path.clone()) {
+                        continue;
+                    }
+                    match closure_exprs.get(&path) {
+                        Some(exprs) => work.extend(exprs.iter().cloned()),
+                        None => {
+                            return Err(error(
+                                &span,
+                                "cannot bound the allocations of this closure: it may drop a closure that is not defined in this function",
+                            ));
+                        }
+                    }
+                }
+            }
         }
+        obligations.extend(checker.copy_obligations.unwrap_or_default());
     }
-    Ok(())
+    Ok(obligations)
 }
 
 /// Marker rule: `impl AllocFreeDrop for X` is accepted only if dropping an `X` cannot allocate,
@@ -648,13 +904,20 @@ pub(crate) fn check_alloc_free_drop_impls(
 ) -> Result<(), VirErr> {
     let datatypes: HashMap<Dt, Datatype> =
         krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect();
+    let empty: CopyImpls = HashMap::new();
     for imp in krate.trait_impls.iter() {
         if !is_alloc_free_drop_trait(&imp.x.trait_path) {
             continue;
         }
         let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
-        let mut checker =
-            DropGlueCheck::new(&datatypes, drop_table, copy_datatypes, &imp.x.typ_bounds);
+        let mut checker = DropGlueCheck::new(
+            &datatypes,
+            drop_table,
+            copy_datatypes,
+            &empty,
+            false,
+            &imp.x.typ_bounds,
+        );
         checker.check(&imp.span, self_typ).map_err(|e| {
             e.help(
                 "an `AllocFreeDrop` impl is only accepted when dropping the type cannot allocate",
@@ -733,18 +996,37 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
     Ok(())
 }
 
+/// All `Copy` impls of datatypes
+pub(crate) fn copy_impls(krate: &Krate) -> CopyImpls {
+    let mut map: CopyImpls = HashMap::new();
+    for imp in krate.trait_impls.iter() {
+        // (an impl with auto-trait bounds applies to fewer types than its `typ_bounds` say)
+        if !is_copy_trait(&imp.x.trait_path) || imp.x.has_auto_trait_bounds {
+            continue;
+        }
+        if let Some(TypX::Datatype(dt, args, _)) = imp.x.trait_typ_args.first().map(|t| &**t) {
+            map.entry(dt.clone()).or_default().push((
+                args.clone(),
+                imp.x.typ_params.iter().cloned().collect(),
+                imp.x.typ_bounds.clone(),
+            ));
+        }
+    }
+    map
+}
+
 /// Datatypes that implement `Copy` (and so have no drop glue)
 pub(crate) fn copy_datatypes(krate: &Krate) -> HashSet<Dt> {
     let mut set = HashSet::new();
     for imp in krate.trait_impls.iter() {
-        if !is_copy_trait(&imp.x.trait_path) {
+        if !is_copy_trait(&imp.x.trait_path) || imp.x.has_auto_trait_bounds {
             continue;
         }
         // Only an impl for every instantiation (`impl<A: Copy, ..> Copy for W<A, ..>`, as
         // `derive(Copy)` produces) shows that every `W<..>` is free of drop glue: an impl for
         // one instantiation says nothing about the others, and rustc only accepts a generic
-        // impl if the fields are `Copy` whenever the bounds hold. (Values of the type arguments
-        // are checked separately.)
+        // impl if the fields are `Copy` whenever the bounds hold. So `W<args>` is `Copy` when the
+        // arguments are (see `is_copy`); with other arguments, the impl says nothing.
         let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
         let TypX::Datatype(dt, args, _) = &**self_typ else { continue };
         let mut params: HashSet<Ident> = HashSet::new();
@@ -1032,12 +1314,22 @@ pub(crate) fn drop_impl_table(krate: &Krate) -> HashMap<Dt, (Span, bool)> {
             }
         });
         if let Some(dt) = self_dt {
-            // `allocates 0` counts only if it was checked (or is trusted by design): a `drop` from
-            // a crate verified without -V alloc-check may say `allocates 0` and still allocate
+            // `allocates 0` counts only if it was checked: a `drop` from a crate verified without
+            // -V alloc-check may say `allocates 0` and still allocate, and so may an
+            // `external_body` (or `assume_specification`) `drop`, whose body Verus accepts
+            // unverified. A `drop` is never called explicitly, so such a claim would silently
+            // cover every implicit drop; only vstd's own are trusted.
+            let unverified_body = f.x.attrs.is_external_body || f.x.proxy.is_some();
             let zero = f.x.allocates.as_ref().is_some_and(|e| is_literal_zero(e))
-                && (f.x.attrs.alloc_checked_crate
-                    || f.x.attrs.is_external_body
-                    || f.x.proxy.is_some());
+                && if unverified_body {
+                    // (for an `assume_specification`, the function that is vstd's is the proxy)
+                    match &f.x.proxy {
+                        Some(px) => px.x.is_vstd_path(),
+                        None => f.x.name.path.is_vstd_path(),
+                    }
+                } else {
+                    f.x.attrs.alloc_checked_crate
+                };
             table.insert(dt, (f.span.clone(), zero));
         }
     }
@@ -1053,6 +1345,26 @@ pub(crate) fn drop_impl_table(krate: &Krate) -> HashMap<Dt, (Span, bool)> {
 pub fn check_merged_krate(krate: &Krate) -> Result<(), VirErr> {
     let decl_has_bound: HashSet<&crate::ast::Fun> =
         krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
+    // An `external_trait_specification` describes a trait whose implementations (and provided
+    // method bodies) Verus does not see, so a bound on one of its methods would be trusted for
+    // all of them; only vstd's are trusted (they are per-implementation cost terms: see
+    // `vstd::std_specs::iter::iter_adapter_cost`)
+    for t in krate.traits.iter() {
+        let Some(px) = &t.x.proxy else { continue };
+        if px.x.is_vstd_path() {
+            continue;
+        }
+        for m in t.x.methods.iter() {
+            if let Some(f) = krate.functions.iter().find(|f| &f.x.name == m) {
+                if f.x.allocates.is_some() {
+                    return Err(error(
+                        &f.span,
+                        "-V alloc-check: an `allocates` bound on a method of an `external_trait_specification` is not supported outside vstd (the trait's implementations and provided methods are not checked by Verus)",
+                    ));
+                }
+            }
+        }
+    }
     for f in krate.functions.iter() {
         if f.x.attrs.is_external_body || f.x.proxy.is_some() || f.x.attrs.alloc_checked_crate {
             continue;
@@ -1137,4 +1449,47 @@ pub(crate) fn proxy_mut_ref_drop_guards(
         })
         .collect();
     (guards, true)
+}
+
+/// Values in ghost code (proof blocks, `Ghost(..)`/`Tracked(..)` arguments, `let ghost`/
+/// `let tracked`) do not exist at run time and are never dropped. ast_simplify merges ghost
+/// blocks into the surrounding code, so the drop rule's types are collected before that: for each
+/// exec function, the types of its body with the ghost code removed.
+pub(crate) fn exec_typs_of_functions(
+    functions: &Vec<Function>,
+) -> Result<HashMap<crate::ast::Fun, Vec<(Span, Typ)>>, VirErr> {
+    let by_name: HashMap<crate::ast::Fun, Function> =
+        functions.iter().map(|f| (f.x.name.clone(), f.clone())).collect();
+    let mut result = HashMap::new();
+    for f in functions.iter() {
+        let (crate::ast::Mode::Exec, Some(body)) = (f.x.mode, &f.x.body) else { continue };
+        let stripped = crate::ast_visitor::map_expr_visitor_env(
+            body,
+            &mut crate::ast_visitor::VisitorScopeMap::new(),
+            &mut (),
+            &|_, _, e: &crate::ast::Expr| match &e.x {
+                ExprX::Ghost { .. } => Ok(crate::ast::SpannedTyped::new(
+                    &e.span,
+                    &crate::ast_util::unit_typ(),
+                    ExprX::Block(std::sync::Arc::new(vec![]), None),
+                )),
+                _ => Ok(e.clone()),
+            },
+            &|_, _, stmt: &crate::ast::Stmt| match &stmt.x {
+                crate::ast::StmtX::Decl {
+                    mode: Some((crate::ast::Mode::Spec | crate::ast::Mode::Proof, _)),
+                    ..
+                } => Ok(vec![]),
+                _ => Ok(vec![stmt.clone()]),
+            },
+            &|_, t: &Typ| Ok(t.clone()),
+            &|_, _, p: &crate::ast::Place| Ok(p.clone()),
+            &|_, _, p: &crate::ast::Pattern| Ok(p.clone()),
+        )?;
+        result.insert(
+            f.x.name.clone(),
+            collect_expr_typs_in(&|g| by_name.get(g).cloned(), &stripped)?,
+        );
+    }
+    Ok(result)
 }

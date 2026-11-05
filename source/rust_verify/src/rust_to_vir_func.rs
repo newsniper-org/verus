@@ -1521,7 +1521,10 @@ fn create_reveal_group<'tcx>(
 
 /// Does `def_id` (or its parent impl/trait) have a bound on an auto trait (`Send`, `Sync`,
 /// `Unpin`)? Those bounds are not translated to VIR (see `check_generic_bound`).
-fn has_auto_trait_bounds<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, def_id: DefId) -> bool {
+pub(crate) fn has_auto_trait_bounds<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    def_id: DefId,
+) -> bool {
     let auto = |d: DefId| {
         Some(d) == tcx.lang_items().unpin_trait()
             || Some(d) == tcx.lang_items().sync_trait()
@@ -4013,4 +4016,18 @@ fn get_async_inner_return_ty<'tcx>(
         crate::internal_err!(span, "`get_async_inner_return_ty` failed to find bound");
     }
     Ok(ty_list[0])
+}
+
+/// The crate's `allocates` bounds are exported as checked (for crates that import it) only if
+/// -V alloc-check is on and every function is verified: not with `--no-verify` or a filter that
+/// verifies only part of the crate (and only once verification has succeeded, see
+/// `Verifier::alloc_checked_export`). (Within one run, a partial verification assumes the bounds
+/// of the functions it skips, like their other specifications.)
+pub(crate) fn alloc_checked_whole_crate(args: &crate::config::Args) -> bool {
+    args.alloc_check
+        && !args.no_verify
+        && !args.verify_root
+        && args.verify_module.is_empty()
+        && args.verify_only_module.is_empty()
+        && args.verify_function.is_none()
 }

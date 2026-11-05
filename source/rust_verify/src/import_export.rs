@@ -6,10 +6,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use vir::ast::{Krate, Mode, VirErr};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct CrateMetadata {
     pub crate_id: u64,
     pub original_files: HashMap<Vec<u8>, FileStartEndPos>,
+    /// The crate was verified as vstd (`--is-vstd`); -V alloc-check trusts vstd's types and
+    /// drops, so it only accepts a crate named `vstd` that was
+    pub built_as_vstd: bool,
+    /// -V alloc-check: the SVH of the crate built from the same source (by the compilation pass
+    /// of the same run). The bounds in this file are marked as checked only when it is set, and an
+    /// importer only trusts them if the linked crate has this SVH (not a different build or
+    /// version of it).
+    pub crate_hash: Option<u128>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,6 +71,7 @@ pub(crate) fn export_crate(
     export_vir_path_via_cargo: &Option<std::path::PathBuf>,
     vir_metadata: CrateMetadata,
     vir_crate: Krate,
+    alloc_checked: bool,
 ) -> Result<(), VirErr> {
     let export = args.export.as_ref().map(|s| s.clone().into());
     if let Some(file_path) = export.as_ref().or(export_vir_path_via_cargo.as_ref()) {
@@ -71,6 +80,11 @@ pub(crate) fn export_crate(
         kratex.functions.retain(|f| f.x.visibility.restricted_to.is_none());
         for func in kratex.functions.iter_mut() {
             let mut functionx = func.x.clone();
+            if !alloc_checked {
+                let mut attrs = (*functionx.attrs).clone();
+                attrs.alloc_checked_crate = false;
+                functionx.attrs = Arc::new(attrs);
+            }
             functionx.decrease_by = None;
             functionx.return_opaque_type_eqs = Arc::new(vec![]);
             if (functionx.mode != Mode::Spec || !functionx.body_visibility.is_public())

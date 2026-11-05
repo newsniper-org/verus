@@ -152,6 +152,10 @@ fn trait_impl_to_vir<'tcx>(
         owning_module: Some(module_path),
         auto_imported,
         external_trait_blanket,
+        has_auto_trait_bounds: crate::rust_to_vir_func::has_auto_trait_bounds(
+            ctxt.tcx,
+            impl_def_id,
+        ),
     };
     let trait_impl = ctxt.spanned_new(span, trait_impl);
     Ok(Some((trait_path, types, trait_impl)))

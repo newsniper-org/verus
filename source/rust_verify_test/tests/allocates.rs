@@ -288,7 +288,6 @@ const ALLOC_DROPS: &str = verus_code_str! {
     }
 
     impl Drop for Good {
-        #[verifier::external_body]
         fn drop(&mut self)
             opens_invariants none
             no_unwind
@@ -502,7 +501,7 @@ test_verify_one_file_with_options! {
             pub x: u8,
         }
 
-        impl AllocFreeDrop for C {}
+        unsafe impl AllocFreeDrop for C {}
 
         impl Clone for C {
             fn clone(&self) -> (r: C)
@@ -517,7 +516,7 @@ test_verify_one_file_with_options! {
             pub x: u8,
         }
 
-        impl AllocFreeDrop for H {}
+        unsafe impl AllocFreeDrop for H {}
 
         impl Clone for H {
             #[verifier::external_body]
@@ -597,7 +596,7 @@ test_verify_one_file_with_options! {
             pub t: T,
         }
 
-        impl<T: AllocFreeDrop> AllocFreeDrop for Wrap<T> {}
+        unsafe impl<T: AllocFreeDrop> AllocFreeDrop for Wrap<T> {}
 
         fn take<T: AllocFreeDrop>(w: Wrap<T>, v: Vec<T>)
             allocates 0
@@ -630,7 +629,7 @@ test_verify_one_file_with_options! {
             }
         }
 
-        impl AllocFreeDrop for Bad {}
+        unsafe impl AllocFreeDrop for Bad {}
     } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
 }
 
@@ -647,9 +646,9 @@ test_verify_one_file_with_options! {
 
         pub struct E2 {}
 
-        impl AllocFreeDrop for E1 {}
+        unsafe impl AllocFreeDrop for E1 {}
 
-        impl AllocFreeDrop for E2 {}
+        unsafe impl AllocFreeDrop for E2 {}
 
         impl From<E1> for E2 {
             #[verifier::external_body]
@@ -679,7 +678,7 @@ test_verify_one_file_with_options! {
             pub x: u8,
         }
 
-        impl AllocFreeDrop for Q {}
+        unsafe impl AllocFreeDrop for Q {}
 
         impl PartialEq for Q {
             #[verifier::external_body]
@@ -707,7 +706,7 @@ test_verify_one_file_with_options! {
             pub x: u8,
         }
 
-        impl AllocFreeDrop for C {}
+        unsafe impl AllocFreeDrop for C {}
 
         impl Clone for C {
             fn clone(&self) -> (r: C)
@@ -1851,4 +1850,744 @@ test_verify_one_file_with_options! {
             m.contains_key(k)
         }
     } => Ok(())
+}
+
+// False rejections fixed after the adversarial hunt (2026-11-05)
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_rc_arc_clone_bounds ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::rc::Rc;
+        use std::sync::Arc;
+        pub trait Tr { fn m(); }
+        pub struct W<T> { x: T }
+        impl<T: Clone> Tr for W<T> { fn m() allocates 0 { } }
+        fn a1() allocates 0 { <W<Rc<u8>> as Tr>::m(); }
+        fn a2() allocates 0 { <W<Arc<u8>> as Tr>::m(); }
+        fn c1(r: &Rc<u8>) -> Rc<u8> allocates 0 { r.clone() }
+    } => Ok(())
+}
+
+// A bounded `derive(Copy)` on an opaque type: `W<u8>` is `Copy` because `u8: Tr + Copy`
+test_verify_one_file_with_options! {
+    #[test] alloc_check_opaque_bounded_derive_copy ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        use std::marker::PhantomData;
+        verus! {
+        pub trait Tr { }
+        impl Tr for u8 { }
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(T)]
+        #[derive(Copy)]
+        pub struct W<T: Tr> { a: u8, p: PhantomData<T> }
+        fn p(w: W<u8>) allocates 0 { }
+        }
+        impl<T: Tr + Copy> Clone for W<T> { fn clone(&self) -> Self { *self } }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_user_declared_std_adapter ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_type_specification]
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(I)]
+        pub struct ExT<I>(std::iter::Enumerate<I>);
+        fn f(x: std::iter::Enumerate<std::vec::IntoIter<u8>>) allocates 0 { }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_ipv4_range ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn n(r: &mut core::ops::Range<std::net::Ipv4Addr>)
+            allocates 0
+        {
+            broadcast use vstd::std_specs::range::group_range_axioms;
+            let _x = r.next();
+        }
+    } => Ok(())
+}
+
+// Ghost/tracked values used only in ghost code are never dropped at run time
+test_verify_one_file_with_options! {
+    #[test] alloc_check_ghost_tracked_types_in_ghost_code ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_body]
+        pub tracked struct Tok {
+            no_copy: core::marker::PhantomData<u8>,
+        }
+        impl Tok {
+            pub uninterp spec fn id(&self) -> int;
+            pub proof fn touch(tracked &self) ensures self.id() == self.id() {}
+        }
+        fn use_tok(Tracked(t): Tracked<Tok>) -> (r: u8)
+            ensures r == 0
+            allocates 0
+        {
+            proof { t.touch(); }
+            0
+        }
+        #[verifier::external_body]
+        pub ghost struct Model { x: u8 }
+        fn use_model(Ghost(m): Ghost<Model>) -> (r: u8)
+            allocates 0
+        {
+            let ghost mm = m;
+            0
+        }
+    } => Ok(())
+}
+
+// Soundness fixes after the third reading and the check of the false-rejection fixes (2026-11-05)
+
+test_verify_one_file_with_options! {
+    // unverified, safe client code may implement a public safe trait without staying within
+    // a bound of its declaration
+    #[test] alloc_check_safe_api_trait_allocates_rejected ["vstd", "-V alloc-check", "-V check-api-safety"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait T {
+            fn m(&self) allocates 0;
+        }
+    } => Err(err) => assert_vir_error_msg(err, "safe API violation: `allocates` clause is nontrivial")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_safe_api_unsafe_or_private_trait_allocates_ok ["vstd", "-V alloc-check", "-V check-api-safety"] => verus_code! {
+        use vstd::prelude::*;
+        pub unsafe trait T {
+            fn m(&self) allocates 0;
+        }
+        trait P {
+            fn m(&self) allocates 0;
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // an `external_body` drop is accepted by Verus unverified, so its `allocates 0` is not trusted
+    #[test] alloc_check_external_body_drop_not_trusted ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub struct S {
+            pub x: u8,
+        }
+        impl Drop for S {
+            #[verifier::external_body]
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+                allocates 0
+            {
+                let _b = Box::new(1u8);
+            }
+        }
+        fn f(s: S) allocates 0 { }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_verified_drop_trusted ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub struct S {
+            pub x: u8,
+        }
+        impl Drop for S {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+                allocates 0
+            {
+            }
+        }
+        fn f(s: S) allocates 0 { }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // `Vec::splice` reserves and collects inside `Splice::drop` (std alloc/src/vec/splice.rs)
+    #[test] alloc_check_splice_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn f(v: &mut Vec<u8>) allocates 0 {
+            let _s = v.splice(0..0, [1u8]);
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "`alloc::vec::splice::Splice` is not supported")
+}
+
+test_verify_one_file_with_options! {
+    // a bounded closure that drops an outer closure drops that closure's captures
+    #[test] alloc_check_closure_drops_outer_closure_captures ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn unchecked_outer(b: Bad) -> u8 {
+            let c1 = move || -> (r: u8) { let _x = &b; 3 };
+            let c2 = move || -> (r: u8) allocates 0 { let _y = c1; 3 };
+            c2()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_closure_drops_outer_closure_ok ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn unchecked_outer(x: u8) -> u8 {
+            let c1 = move || -> (r: u8) { x };
+            let c2 = move || -> (r: u8) allocates 0 { let _y = c1; 3 };
+            c2()
+        }
+    } => Ok(())
+}
+
+// An imported crate that was verified without -V alloc-check and implements a trait method with
+// an `allocates` bound is rejected, even if this crate only reaches that trait through the bounds
+// of an impl in another crate (a.rs: the trait; b.rs: the unchecked impl; c.rs: the checked user).
+#[test]
+fn alloc_check_unchecked_impl_reached_through_impl_bounds() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    let files = [
+        (
+            "a.rs",
+            "verus!{
+            pub trait Tr { fn m(&self) allocates 0; }
+            pub trait Q { fn q(&self) allocates 0; }
+            pub struct Wrap<X>(pub X);
+            impl<X: Tr> Q for Wrap<X> { fn q(&self) allocates 0 { self.0.m() } }
+            }",
+        ),
+        (
+            "b.rs",
+            "verus!{
+            pub struct S;
+            impl a::Tr for S { fn m(&self) { let mut v: Vec<u8> = Vec::new(); v.push(1); } }
+            pub fn make() -> a::Wrap<S> { a::Wrap(S) }
+            }",
+        ),
+        (
+            "c.rs",
+            "verus!{
+            pub fn run<Y: a::Q>(y: &Y) allocates 0 { y.q() }
+            }",
+        ),
+    ];
+    for (name, body) in files.iter() {
+        std::fs::write(dir.join(name), format!("{}{}\n", pre, body)).expect("write source file");
+    }
+    let a = run_verus_raw(
+        &["--crate-type=lib", "--export", "a.vir", "a.rs", "-V", "alloc-check", "--compile"],
+        dir,
+    );
+    assert!(a.status.success(), "a failed:\n{}", String::from_utf8_lossy(&a.stderr));
+    let b = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--export",
+            "b.vir",
+            "b.rs",
+            "--import",
+            "a=a.vir",
+            "--extern",
+            "a=liba.rlib",
+            "--compile",
+        ],
+        dir,
+    );
+    assert!(b.status.success(), "b failed:\n{}", String::from_utf8_lossy(&b.stderr));
+    let c = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "--import",
+            "a=a.vir",
+            "--extern",
+            "a=liba.rlib",
+            "--import",
+            "b=b.vir",
+            "--extern",
+            "b=libb.rlib",
+            "-V",
+            "alloc-check",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&c.stderr);
+    assert!(!c.status.success(), "c should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("implements a trait method with an `allocates` bound, but its crate was not verified with -V alloc-check"),
+        "unexpected error:\n{}", stderr
+    );
+}
+
+test_verify_one_file_with_options! {
+    // `Rc<T, Rc<Global, MyA>>` is not the global allocator just because its outer layer is an
+    // `Rc` over `Global`: its allocator argument is a user allocator
+    #[test] alloc_check_rc_allocator_arg_not_global ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::rc::Rc;
+        use std::alloc::{Allocator, AllocatorClone, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        #[verifier::external]
+        impl Clone for MyA {
+            fn clone(&self) -> Self { let b = Box::new(7u8); MyA }
+        }
+        #[verifier::external]
+        unsafe impl Allocator for MyA {
+            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
+            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
+        }
+        #[verifier::external]
+        unsafe impl AllocatorClone for MyA {}
+        pub struct MyA;
+        fn clone_opt(o: &Option<Rc<u8, Rc<Global, MyA>>>) -> (res: Option<Rc<u8, Rc<Global, MyA>>>)
+            allocates 0
+        {
+            o.clone()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "custom allocators (`allocator_api`) are not supported yet")
+}
+
+// VIR drops `Send` bounds, so an impl of `Copy` with an auto-trait bound does not show that a
+// type is `Copy` (here `W<NotSend>` is not `Copy`, and dropping it drops an `Alloc`). (A file of
+// its own: it needs crate-level features.)
+#[test]
+fn alloc_check_copy_impl_with_auto_trait_bound_not_copy() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let code = format!(
+        "{}\n{}",
+        FEATURE_PRELUDE,
+        r#"
+#![feature(with_negative_coherence)]
+#![feature(negative_impls)]
+use vstd::prelude::*;
+pub trait Unk {}
+impl<T: ?Sized> Unk for T {}
+impl !Send for NotSend {}
+impl<T: Send> Pick for T { type Out = u8; }
+impl Pick for NotSend where NotSend: Unk { type Out = Alloc; }
+verus! {
+pub struct Alloc { pub v: u8 }
+impl Drop for Alloc {
+    #[verifier::external_body]
+    fn drop(&mut self) opens_invariants none no_unwind { }
+}
+pub struct NotSend { pub v: u8 }
+pub trait Pick { type Out; }
+#[verifier::external_body]
+#[verifier::reject_recursive_types(T)]
+pub struct W<T: Pick> { x: <T as Pick>::Out }
+impl<T: Send> Clone for W<T> {
+    #[verifier::external_body]
+    fn clone(&self) -> Self { *self }
+}
+impl<T: Send> Copy for W<T> {}
+pub fn drop_it(w: W<NotSend>) allocates 0 { }
+}
+"#
+    );
+    std::fs::write(tempdir.path().join("test.rs"), code).expect("write source file");
+    let out = run_verus_raw(&["--crate-type=lib", "test.rs", "-V", "alloc-check"], tempdir.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("cannot bound the allocations of dropping a value of type")
+            && stderr.contains("its fields are not visible"),
+        "unexpected error:\n{}",
+        stderr
+    );
+}
+
+test_verify_one_file_with_options! {
+    // a `Copy` obligation on a closure type cannot be stated; rejected instead of crashing
+    #[test] alloc_check_copy_obligation_with_closure_type ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        use std::marker::PhantomData;
+        verus! {
+        pub trait Tr { }
+        impl<F: Fn(u8) -> u8> Tr for F { }
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(T)]
+        #[verifier::reject_recursive_types(U)]
+        pub struct W<T, U: Tr> { a: T, p: PhantomData<U> }
+        #[verifier::external_body]
+        fn mk<U: Tr>(u: &U) -> W<u8, U> allocates 0 { W { a: 0, p: PhantomData } }
+        fn f() allocates 0 {
+            let c = |x: u8| -> (r: u8) allocates 0 { x };
+            let w = mk(&c);
+        }
+        }
+        impl<T: Copy, U: Tr> Clone for W<T, U> { fn clone(&self) -> Self { *self } }
+        impl<T: Copy, U: Tr> Copy for W<T, U> { }
+    } => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
+}
+
+// Adversarial round on the fixes above (2026-11-05)
+
+test_verify_one_file_with_options! {
+    // `AllocFreeDrop` is an `unsafe trait`, and an impl that Verus does not see is not trusted
+    #[test] alloc_check_alloc_free_drop_impl_outside_verus_rejected ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        pub struct Evil { pub b: Box<u8> }
+        impl Drop for Evil { fn drop(&mut self) { let _x = Box::new(1u8); } }
+        unsafe impl AllocFreeDrop for Evil {}
+        verus! {
+        fn consume<X: AllocFreeDrop>(x: X) allocates 0 { }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this `AllocFreeDrop` impl is not checked by Verus")
+}
+
+test_verify_one_file_with_options! {
+    // an impl that Verus does not see may not implement a method whose declaration has a bound
+    #[test] alloc_check_bounded_method_impl_outside_verus_rejected ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        verus! {
+        pub trait Tr { fn m(&self) allocates 0; }
+        fn use_it<T: Tr>(t: &T) allocates 0 { t.m() }
+        }
+        pub struct S;
+        impl Tr for S { fn m(&self) { let _v = Box::new(1u8); } }
+    } => Err(err) => assert_vir_error_msg(err, "whose declaration has an `allocates` bound, but Verus does not check this impl")
+}
+
+test_verify_one_file_with_options! {
+    // `rev`/`map`/`filter`/`skip`/`take`/`zip` may be overridden by an iterator type other than
+    // std's, so they cost 0 only for iterators that are known to be std's (`iter_aux_alloc_free`)
+    #[test] alloc_check_iterator_provided_methods_per_impl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        use std::iter::Rev;
+        fn ok<I: DoubleEndedIterator + AllocFreeDrop>(i: I) -> Rev<I>
+            requires vstd::std_specs::iter::iter_aux_alloc_free::<I>(),
+            allocates 0
+        {
+            i.rev()
+        }
+        fn concrete(v: &Vec<u8>) -> usize allocates 0 {
+            let _it = v.iter().rev();
+            0
+        }
+        fn bad<I: DoubleEndedIterator + AllocFreeDrop>(i: I) -> Rev<I>
+            allocates 0 // FAILS
+        {
+            i.rev()
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+// A dependency named `std` that is not the toolchain's is rejected, also when `--sysroot` is
+// chosen so that it lies inside it (the toolchain's std is then a second crate named `std`)
+#[test]
+fn alloc_check_second_std_crate_rejected() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let libdir = run_verus_raw(&["--print", "target-libdir"], dir);
+    let libdir =
+        String::from_utf8_lossy(&libdir.stdout).lines().next().unwrap_or("").trim().to_string();
+    assert!(!libdir.is_empty(), "no target-libdir");
+    std::fs::write(
+        dir.join("fakestd.rs"),
+        format!("{}\n{}\npub struct Hidden;\n", FEATURE_PRELUDE, USE_PRELUDE),
+    )
+    .expect("write");
+    let fake = run_verus_raw(
+        &[
+            "--crate-type=rlib",
+            "--crate-name",
+            "std",
+            "-C",
+            "metadata=fake",
+            "--no-vstd",
+            "--no-verify",
+            "--compile",
+            "fakestd.rs",
+            "-o",
+            "libfstd.rlib",
+        ],
+        dir,
+    );
+    assert!(fake.status.success(), "fake std failed:\n{}", String::from_utf8_lossy(&fake.stderr));
+    let code = format!(
+        "{}\nuse vstd::prelude::*;\nverus! {{ fn f() allocates 0 {{ }} }}\npub fn g(_h: fstd::Hidden) {{ }}\n",
+        FEATURE_PRELUDE
+    );
+    std::fs::write(dir.join("c.rs"), code).expect("write");
+    for extra in [&[][..], &["--sysroot", "/", "-L", libdir.as_str()][..]] {
+        let mut args =
+            vec!["--crate-type=lib", "c.rs", "-V", "alloc-check", "--extern", "fstd=libfstd.rlib"];
+        args.extend_from_slice(extra);
+        let c = run_verus_raw(&args, dir);
+        let stderr = String::from_utf8_lossy(&c.stderr);
+        assert!(!c.status.success(), "should be rejected ({:?}):\n{}", extra, stderr);
+        assert!(
+            stderr.contains(
+                "-V alloc-check trusts a crate named `std` only if it is the toolchain's"
+            ),
+            "unexpected error ({:?}):\n{}",
+            extra,
+            stderr
+        );
+    }
+}
+
+// An imported crate named `vstd` must have been verified as vstd
+#[test]
+fn alloc_check_fake_vstd_rejected() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let fv = format!(
+        "{}\n{}\npub mod prelude {{ pub use verus_builtin::*; pub use verus_builtin_macros::*; }}\nverus! {{ pub struct Opq {{ pub x: u8 }} }}\n",
+        FEATURE_PRELUDE, USE_PRELUDE
+    );
+    std::fs::write(dir.join("fv.rs"), fv).expect("write");
+    let a = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "vstd",
+            "--no-vstd",
+            "fv.rs",
+            "--export",
+            "vstd.vir",
+            "--compile",
+        ],
+        dir,
+    );
+    assert!(a.status.success(), "fake vstd failed:\n{}", String::from_utf8_lossy(&a.stderr));
+    let c = format!(
+        "{}\n{}\nverus! {{ fn run(d: vstd::Opq) allocates 0 {{ }} }}\n",
+        FEATURE_PRELUDE, USE_PRELUDE
+    );
+    std::fs::write(dir.join("c.rs"), c).expect("write");
+    let out = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "--no-vstd",
+            "-V",
+            "alloc-check",
+            "--import",
+            "vstd=vstd.vir",
+            "--extern",
+            "vstd=libvstd.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("the imported crate named `vstd` was not verified as vstd"),
+        "unexpected error:\n{}",
+        stderr
+    );
+    // and its .vir paired with a different build of the crate named `vstd`
+    let b = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "vstd",
+            "--no-vstd",
+            "-C",
+            "metadata=other",
+            "fv.rs",
+            "--compile",
+            "--out-dir",
+            "other",
+        ],
+        dir,
+    );
+    assert!(b.status.success(), "other vstd failed:\n{}", String::from_utf8_lossy(&b.stderr));
+    let out = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "--no-vstd",
+            "-V",
+            "alloc-check",
+            "--import",
+            "vstd=vstd.vir",
+            "--extern",
+            "vstd=other/libvstd.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("does not belong to the crate named `vstd` that this crate is linked with"),
+        "unexpected error:\n{}",
+        stderr
+    );
+}
+
+test_verify_one_file_with_options! {
+    // the implementations (and provided methods) of a trait given by an
+    // `external_trait_specification` are not checked by Verus, so its methods may not have bounds
+    // (vstd's, per-implementation cost terms, are the exception)
+    #[test] alloc_check_external_trait_spec_bound_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_trait_specification]
+        pub trait ExWrite {
+            type ExternalTraitSpecificationFor: core::fmt::Write;
+            fn write_str(&mut self, s: &str) -> core::fmt::Result allocates 0;
+        }
+    } => Err(err) => assert_vir_error_msg(err, "an `allocates` bound on a method of an `external_trait_specification` is not supported outside vstd")
+}
+
+// A .vir written by a run whose -V alloc-check verification failed does not mark its bounds as
+// checked
+#[test]
+fn alloc_check_failed_export_not_trusted() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("a.rs"),
+        format!(
+            "{pre}verus!{{ pub fn f() -> (r: u64) allocates 0 {{ let b = Box::new(7u64); *b }} }}\n"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("c.rs"),
+        format!("{pre}verus!{{ pub fn run() -> (r: u64) allocates 0 {{ a::f() }} }}\n"),
+    )
+    .expect("write");
+    let failed = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "a",
+            "--export",
+            "a.vir",
+            "a.rs",
+            "-V",
+            "alloc-check",
+        ],
+        dir,
+    );
+    assert!(!failed.status.success(), "a should fail verification");
+    std::fs::rename(dir.join("a.vir"), dir.join("a_failed.vir")).expect("a.vir written");
+    let rlib = run_verus_raw(
+        &["--crate-type=lib", "--crate-name", "a", "a.rs", "--no-verify", "--compile"],
+        dir,
+    );
+    assert!(rlib.status.success(), "a rlib:\n{}", String::from_utf8_lossy(&rlib.stderr));
+    let c = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "-V",
+            "alloc-check",
+            "--import",
+            "a=a_failed.vir",
+            "--extern",
+            "a=liba.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&c.stderr);
+    assert!(!c.status.success(), "c should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("its crate was not verified with -V alloc-check"),
+        "unexpected:\n{}",
+        stderr
+    );
+}
+
+test_verify_one_file_with_options! {
+    // `impl<A: Copy> Copy for W<A>` makes `W<D>` `Copy` only if `D` is: with a non-`Copy` `D`,
+    // the hidden field of the opaque `W<D>` may be anything (here `<D as Pick>::Out`)
+    #[test] alloc_check_generic_copy_impl_needs_copy_args ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        pub struct Noisy(pub u8);
+        impl Drop for Noisy {
+            fn drop(&mut self) { let v: Vec<u8> = vec![self.0; 4]; }
+        }
+        verus! {
+        #[verifier::external_body]
+        pub struct ExtNoisy(Noisy);
+        pub trait Pick { type Out; }
+        impl<T: Copy> Pick for T { type Out = T; }
+        pub struct D;
+        impl Pick for D { type Out = ExtNoisy; }
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(A)]
+        pub struct W<A: Pick>(pub <A as Pick>::Out);
+        impl<A: Copy> Clone for W<A> {
+            fn clone(&self) -> Self { *self }
+        }
+        impl<A: Copy> Copy for W<A> {}
+        pub fn consume(w: W<D>) allocates 0 {}
+        pub fn consume_copy(w: W<u8>) allocates 0 {}
+        }
+    } => Err(err) => assert_vir_error_msg(err, "dropping a value of type `test_crate::W<test_crate::D>`: its fields are not visible")
+}
+
+// A checked .vir describes one build of its crate: an rlib of a newer version of the crate (with
+// the same crate id) is rejected
+#[test]
+fn alloc_check_stale_vir_rejected() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::create_dir_all(dir.join("v1")).expect("mkdir");
+    std::fs::create_dir_all(dir.join("v2")).expect("mkdir");
+    std::fs::write(
+        dir.join("v1/a.rs"),
+        format!("{pre}verus!{{ pub fn f() -> (r: u64) allocates 0 {{ 1 }} }}\n"),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("v2/a.rs"),
+        format!(
+            "{pre}verus!{{ #[verifier::external_body] fn g() -> u64 {{ let b = Box::new(2u64); *b }} pub fn f() -> (r: u64) {{ g() }} }}\n"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("c.rs"),
+        format!("{pre}verus!{{ pub fn run() -> (r: u64) allocates 0 {{ a::f() }} }}\n"),
+    )
+    .expect("write");
+    let v1 = run_verus_raw(
+        &["--crate-type=lib", "v1/a.rs", "-V", "alloc-check", "--export", "a.vir", "--compile"],
+        dir,
+    );
+    assert!(v1.status.success(), "v1:\n{}", String::from_utf8_lossy(&v1.stderr));
+    let ok = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "-V",
+            "alloc-check",
+            "--import",
+            "a=a.vir",
+            "--extern",
+            "a=liba.rlib",
+        ],
+        dir,
+    );
+    assert!(ok.status.success(), "c with v1:\n{}", String::from_utf8_lossy(&ok.stderr));
+    let v2 = run_verus_raw(&["--crate-type=lib", "v2/a.rs", "--compile"], dir);
+    assert!(v2.status.success(), "v2:\n{}", String::from_utf8_lossy(&v2.stderr));
+    let c = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "-V",
+            "alloc-check",
+            "--import",
+            "a=a.vir",
+            "--extern",
+            "a=liba.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&c.stderr);
+    assert!(!c.status.success(), "stale .vir should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains(
+            "the imported library file for `a` was not produced together with the build of it"
+        ),
+        "unexpected:\n{}",
+        stderr
+    );
 }

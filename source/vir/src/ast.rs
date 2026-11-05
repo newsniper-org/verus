@@ -2005,6 +2005,9 @@ pub struct TraitImplX {
     pub auto_imported: bool,
     // Is a blanket implementation declared by external_trait_extension:
     pub external_trait_blanket: bool,
+    /// -V alloc-check: the impl has bounds on auto traits (`Send`, `Sync`, `Unpin`), which are not
+    /// in `typ_bounds`, so `typ_bounds` overstates where the impl applies
+    pub has_auto_trait_bounds: bool,
 }
 
 pub type ModuleReveals = Arc<Spanned<Vec<Fun>>>;

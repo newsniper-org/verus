@@ -225,7 +225,7 @@ pub trait ExIterator {
             !self.obeys_prophetic_iter_laws() ==> forall |x: &Self::Item| #[trigger] predicate.requires((x, )),
         ensures
             self.obeys_prophetic_iter_laws() ==> filter_post(self, predicate, r),
-        allocates 0
+        allocates iter_adapter_cost::<Self>()
     ;
 
     fn find<P>(&mut self, predicate: P) -> (r: Option<Self::Item>)
@@ -311,7 +311,7 @@ pub trait ExIterator {
             !self.obeys_prophetic_iter_laws() ==> forall |x: Self::Item| #[trigger] f.requires((x, )),
         ensures
             self.obeys_prophetic_iter_laws() ==> map_post(self, f, r),
-        allocates 0
+        allocates iter_adapter_cost::<Self>()
     ;
 
     fn position<P>(&mut self, predicate: P) -> (r: Option<usize>)
@@ -357,7 +357,7 @@ pub trait ExIterator {
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> rev_post(self, r),
-        allocates 0
+        allocates iter_adapter_cost::<Self>()
     ;
 
     fn size_hint(&self) -> ((lower, upper): (usize, Option<usize>))
@@ -372,14 +372,14 @@ pub trait ExIterator {
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> skip_post(self, n, s),
-        allocates 0
+        allocates iter_adapter_cost::<Self>()
     ;
 
     fn take(self, n: usize) -> (t: Take<Self>)
         where Self: Sized,
         ensures
             self.obeys_prophetic_iter_laws() ==> take_post(self, n, t),
-        allocates 0
+        allocates iter_adapter_cost::<Self>()
     ;
 
     #[verifier::impls_cannot_extend_spec]
@@ -389,7 +389,7 @@ pub trait ExIterator {
             U: IntoIterator,
         ensures
             self.obeys_prophetic_iter_laws() ==> zip_post(self, other, r),
-        allocates call_allocates(<U as IntoIterator>::into_iter, (other,))
+        allocates iter_adapter_cost::<Self>() + call_allocates(<U as IntoIterator>::into_iter, (other,))
     ;
 }
 
@@ -1106,6 +1106,23 @@ pub trait ExIterStep: Clone + PartialOrd + Sized {
 /// iterators and adapters.)
 pub uninterp spec fn iter_aux_alloc_free<I: ?Sized>() -> bool;
 
+/// The allocations of the `Iterator` provided methods that build an adapter (`map`, `filter`,
+/// `rev`, `skip`, `take`, and `zip` besides its `into_iter`) for an iterator of type `I`: 0 for
+/// std's own iterators (`iter_aux_alloc_free`), which do not override them. Any other type may
+/// override them, so for it this is an uninterpreted per-type cost.
+///
+/// (Every `allocates` bound that vstd puts on a method declaration of a std trait is such a
+/// per-implementation term: it is constrained only for std's own types, so it does not constrain
+/// the implementations of other crates. -V alloc-check relies on this when it does not require
+/// those implementations to be checked.)
+pub uninterp spec fn iter_adapter_cost<I: ?Sized>() -> int;
+
+pub broadcast axiom fn axiom_iter_adapter_cost<I: ?Sized>()
+    ensures
+        #[trigger] iter_adapter_cost::<I>() >= 0,
+        iter_aux_alloc_free::<I>() ==> iter_adapter_cost::<I>() == 0,
+;
+
 /// Every `next` of an iterator of type `I`, in any state, allocates nothing
 pub open spec fn iter_alloc_free<I: ?Sized>() -> bool {
     forall|i: &I| #[trigger] iter_next_cost(i) == 0
@@ -1254,6 +1271,7 @@ pub broadcast axiom fn axiom_aux_alloc_free_filter<I: Iterator, P: for<'a> FnOnc
 
 pub broadcast group group_iter_axioms {
     axiom_iter_next_cost_nonneg,
+    axiom_iter_adapter_cost,
     axiom_aux_alloc_free_rev,
     axiom_aux_alloc_free_skip,
     axiom_aux_alloc_free_take,

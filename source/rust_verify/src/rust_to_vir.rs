@@ -549,6 +549,53 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
                 None,
             ));
         }
+        // and a dependency may only be trusted as std/core/alloc if it is the toolchain's: the
+        // only crate of that name, loaded from the sysroot (a second one, from wherever, is not
+        // the toolchain's; the sysroot path alone can be chosen with `--sysroot`). (vstd is
+        // checked when its .vir is imported: it must have been built as vstd.)
+        let canon = |p: &std::path::Path| std::fs::canonicalize(p).ok();
+        let sysroot = canon(ctxtx.tcx.sess.opts.sysroot.path());
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for cnum in ctxtx.tcx.crates(()) {
+            let dep_name = ctxtx.tcx.crate_name(*cnum).to_string();
+            if !matches!(dep_name.as_str(), "std" | "core" | "alloc") {
+                continue;
+            }
+            if !seen_names.insert(dep_name.clone()) {
+                let span = ctxtx.tcx.def_span(rustc_hir::def_id::CRATE_DEF_ID);
+                return Err((
+                    vec![vir::messages::error(
+                        &crate::spans::err_air_span(span),
+                        format!(
+                            "-V alloc-check trusts a crate named `{dep_name}` only if it is the toolchain's; this crate depends on more than one crate named `{dep_name}`"
+                        ),
+                    )],
+                    None,
+                ));
+            }
+            let source = ctxtx.tcx.used_crate_source(*cnum);
+            let paths: Vec<_> = [&source.rlib, &source.rmeta, &source.dylib]
+                .into_iter()
+                .filter_map(|p| p.as_ref())
+                .collect();
+            let trusted = !paths.is_empty()
+                && paths.iter().all(|p| match (canon(p), &sysroot) {
+                    (Some(p), Some(root)) => p.starts_with(root),
+                    _ => false,
+                });
+            if !trusted {
+                let span = ctxtx.tcx.def_span(rustc_hir::def_id::CRATE_DEF_ID);
+                return Err((
+                    vec![vir::messages::error(
+                        &crate::spans::err_air_span(span),
+                        format!(
+                            "-V alloc-check trusts a crate named `{dep_name}` only if it is the toolchain's (from the sysroot); this crate depends on another crate named `{dep_name}`"
+                        ),
+                    )],
+                    None,
+                ));
+            }
+        }
     }
     let mut vir: KrateX = KrateX {
         functions: Vec::new(),

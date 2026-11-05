@@ -118,6 +118,8 @@ for all functions (it would only be needed for functions with tracked data in pr
 struct CompilerCallbacksEraseMacro {
     pub do_compile: bool,
     pub override_stability: bool,
+    /// the SVH of the compiled crate
+    pub crate_hash: Option<u128>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
@@ -142,8 +144,12 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &rustc_interface::interface::Compiler,
-        _tcx: TyCtxt<'tcx>,
+        tcx: TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
+        // (only a crate that others can link with has an SVH: rustc computes it only then)
+        if tcx.needs_metadata() && tcx.needs_hir_hash() {
+            self.crate_hash = Some(tcx.crate_hash(rustc_hir::def_id::LOCAL_CRATE).as_u128());
+        }
         if self.do_compile {
             rustc_driver::Compilation::Continue
         } else {
@@ -169,10 +175,11 @@ pub(crate) fn run_with_erase_macro_compile(
     mut rustc_args: Vec<String>,
     do_compile: bool,
     vstd: Vstd,
-) -> Result<(), ()> {
+) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
         override_stability: matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore),
+        crate_hash: None,
     };
     rustc_args.extend(["--cfg", "verus_only", "--cfg", "verus_keep_ghost"].map(|s| s.to_string()));
     if matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore) {
@@ -198,7 +205,8 @@ pub(crate) fn run_with_erase_macro_compile(
     for a in allow {
         rustc_args.extend(["-A", a].map(|s| s.to_string()));
     }
-    run_compiler(rustc_args, true, true, &mut callbacks)
+    run_compiler(rustc_args, true, true, &mut callbacks)?;
+    Ok(callbacks.crate_hash)
 }
 
 pub struct VerusRoot {
@@ -336,13 +344,24 @@ pub fn run(
         );
     }
 
+    let mut verifier = verifier;
+    let do_compile = verifier.compile || verifier.via_cargo_args.is_some();
     let compile_status =
         if !verifier.compile && (verifier.args.no_erasure_check || verifier.args.no_lifetime) {
-            Ok(())
+            Ok(None)
         } else {
-            let do_compile = verifier.compile || verifier.via_cargo_args.is_some();
             run_with_erase_macro_compile(rustc_args, do_compile, verifier.args.vstd)
         };
+    // -V alloc-check: the .vir is marked as checked only once the crate it describes was built
+    let compile_status = match compile_status {
+        Ok(Some(crate_hash)) if do_compile => {
+            verifier.finish_alloc_checked_export(crate_hash).map_err(|err| {
+                eprintln!("error: {}", err.note);
+            })
+        }
+        Ok(_) => Ok(()),
+        Err(()) => Err(()),
+    };
 
     let time2 = Instant::now();
 

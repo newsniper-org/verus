@@ -19,6 +19,14 @@ pub struct ExRange<Idx>(Range<Idx>);
 #[verifier::reject_recursive_types_in_ground_variants(Idx)]
 pub struct ExRangeInclusive<Idx>(RangeInclusive<Idx>);
 
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExIpv4Addr(core::net::Ipv4Addr);
+
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExIpv6Addr(core::net::Ipv6Addr);
+
 pub struct RangeInclusiveView<Idx> {
     pub start: Idx,
     pub end: Idx,
@@ -775,6 +783,9 @@ std_step_alloc_free!(i64, axiom_std_step_alloc_free_i64);
 std_step_alloc_free!(i128, axiom_std_step_alloc_free_i128);
 std_step_alloc_free!(isize, axiom_std_step_alloc_free_isize);
 std_step_alloc_free!(char, axiom_std_step_alloc_free_char);
+// (their `Step` is arithmetic on the address as `u32`/`u128`)
+std_step_alloc_free!(core::net::Ipv4Addr, axiom_std_step_alloc_free_ipv4addr);
+std_step_alloc_free!(core::net::Ipv6Addr, axiom_std_step_alloc_free_ipv6addr);
 
 verus! {
 
@@ -822,6 +833,8 @@ pub broadcast group group_range_axioms {
     axiom_std_step_alloc_free_i128,
     axiom_std_step_alloc_free_isize,
     axiom_std_step_alloc_free_char,
+    axiom_std_step_alloc_free_ipv4addr,
+    axiom_std_step_alloc_free_ipv6addr,
 }
 
 } // verus!

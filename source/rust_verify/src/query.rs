@@ -622,10 +622,7 @@ impl<'tcx> Query<'tcx> {
         vir_crates.push(krate);
         let unpruned_crate = vir::ast_simplify::merge_krates(vir_crates, &merged_traits)
             .map_err(|e| self.emit_error(e))?;
-        if self.args.alloc_check {
-            vir::alloc_check::check_merged_krate(&unpruned_crate)
-                .map_err(|e| self.emit_error(e))?;
-        }
+
         let (krate, _) = vir::prune::prune_krate_for_module_or_krate(
             &unpruned_crate,
             &self.crate_id,
@@ -635,6 +632,16 @@ impl<'tcx> Query<'tcx> {
             false,
             false,
         );
+        if self.args.alloc_check {
+            // (checked on the whole merged crate: an imported impl can matter here without being
+            // in the pruned crate. Restricting it to the traits the pruned crate mentions is not
+            // sound: an imported function's body, which may dispatch through further traits (e.g.
+            // via the bounds of an impl it uses), is not available here.)
+            vir::alloc_check::check_merged_krate(&unpruned_crate)
+                .map_err(|e| self.emit_error(e))?;
+            check_impls_outside_vir(&pre_crate.ctxt, &unpruned_crate)
+                .map_err(|e| self.emit_error(e))?;
+        }
 
         // Demote external traits
         let krate = vir::traits::demote_external_traits(
@@ -718,4 +725,94 @@ pub fn get_global_query<'tcx>(_tcx: TyCtxt<'tcx>) -> Option<Rc<Query<'tcx>>> {
         }
         None => None,
     })
+}
+
+/// -V alloc-check: the merged crate only shows the impls that Verus translated, but rustc uses
+/// every impl in the program. An impl that Verus does not see (one outside `verus!` that Verus
+/// does not import, or one in a dependency whose .vir is not imported) is unchecked, so it is
+/// rejected if it
+/// - implements `vstd::alloc_check::AllocFreeDrop` (the drop rule trusts that bound), or
+/// - defines a method whose trait declaration has an `allocates` bound (callers rely on the
+///   bound for every implementation).
+/// (No impl in the toolchain can implement these traits. The traits that vstd specifies are not
+/// among them: vstd's bounds on their declarations constrain only std's own implementations.)
+fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> {
+    let tcx = ctxt.tcx;
+    let bounded_decls: HashSet<&Path> = krate
+        .functions
+        .iter()
+        .filter(|f| {
+            f.x.allocates.is_some()
+                && matches!(f.x.kind, vir::ast::FunctionKind::TraitMethodDecl { .. })
+        })
+        .map(|f| &f.x.name.path)
+        .collect();
+    // (vstd's bounds on the method declarations of the traits it specifies, std's, are
+    // per-implementation cost terms, constrained only for std's own types: see
+    // `vstd::std_specs::iter::iter_adapter_cost`; other `external_trait_specification`s may not
+    // have bounds, see `check_merged_krate`)
+    let vstd_specified: HashSet<&Path> = krate
+        .traits
+        .iter()
+        .filter(|t| t.x.proxy.as_ref().is_some_and(|px| px.x.is_vstd_path()))
+        .map(|t| &t.x.name)
+        .collect();
+    let mut traits_of_interest: HashSet<Path> = krate
+        .functions
+        .iter()
+        .filter(|f| bounded_decls.contains(&f.x.name.path))
+        .filter_map(|f| match &f.x.kind {
+            vir::ast::FunctionKind::TraitMethodDecl { trait_path, .. } => Some(trait_path.clone()),
+            _ => None,
+        })
+        .filter(|p| !vstd_specified.contains(p))
+        .collect();
+    let afd_path = krate
+        .traits
+        .iter()
+        .map(|t| &t.x.name)
+        .find(|p| {
+            vir::ast_util::path_as_friendly_rust_name(p) == "vstd::alloc_check::AllocFreeDrop"
+        })
+        .cloned();
+    if let Some(p) = &afd_path {
+        traits_of_interest.insert(p.clone());
+    }
+    if traits_of_interest.is_empty() {
+        return Ok(());
+    }
+    let vir_funs: HashSet<&Path> = krate.functions.iter().map(|f| &f.x.name.path).collect();
+    let vir_impls: HashSet<&Path> = krate.trait_impls.iter().map(|i| &i.x.impl_path).collect();
+    for trait_def_id in tcx.all_traits_including_private() {
+        let trait_path = ctxt.def_id_to_vir_path(trait_def_id);
+        if !traits_of_interest.contains(&trait_path) {
+            continue;
+        }
+        let is_afd = afd_path.as_ref() == Some(&trait_path);
+        for impl_def_id in tcx.all_impls(trait_def_id) {
+            let span = tcx.def_span(impl_def_id);
+            let unchecked = if is_afd {
+                !vir_impls.contains(&ctxt.def_id_to_vir_path(impl_def_id))
+            } else {
+                tcx.associated_items(impl_def_id).in_definition_order().any(|item| {
+                    item.trait_item_def_id().is_some_and(|t| {
+                        bounded_decls.contains(&ctxt.def_id_to_vir_path(t))
+                            && !vir_funs.contains(&ctxt.def_id_to_vir_path(item.def_id))
+                    })
+                })
+            };
+            if unchecked {
+                let msg = if is_afd {
+                    "-V alloc-check: this `AllocFreeDrop` impl is not checked by Verus (every impl of it must be one that Verus checks)".to_string()
+                } else {
+                    format!(
+                        "-V alloc-check: this impl defines a method of `{}` whose declaration has an `allocates` bound, but Verus does not check this impl",
+                        vir::ast_util::path_as_friendly_rust_name(&trait_path)
+                    )
+                };
+                return Err(vir::messages::error(&crate::spans::err_air_span(span), msg));
+            }
+        }
+    }
+    Ok(())
 }
