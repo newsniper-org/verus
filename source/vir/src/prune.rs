@@ -478,6 +478,22 @@ fn traverse_reachable(ctxt: &Ctxt, state: &mut State) {
             if let FunctionKind::TraitMethodImpl { method, .. } = &function.x.kind {
                 reach_function(ctxt, state, method);
             }
+            // -V alloc-check guards the `call_allocates` axiom of a std function with `&mut`
+            // parameters by `vstd::alloc_check::AllocFreeDrop` (see alloc_check.rs)
+            if function.x.proxy.is_some()
+                && function.x.params.iter().any(|p| {
+                    let mut t = &p.x.typ;
+                    while let TypX::Decorate(_, _, inner) = &**t {
+                        t = inner;
+                    }
+                    matches!(&**t, TypX::MutRef(_))
+                })
+            {
+                let afd = crate::path!(crate::ast::CrateId::Vstd => "alloc_check", "AllocFreeDrop");
+                if ctxt.trait_map.contains_key(&afd) {
+                    reach_bound_trait(ctxt, state, &afd);
+                }
+            }
             if let FunctionKind::ForeignTraitMethodImpl { method, .. } = &function.x.kind {
                 reach_function(ctxt, state, method);
             }

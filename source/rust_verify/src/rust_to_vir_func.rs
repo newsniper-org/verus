@@ -304,6 +304,7 @@ fn handle_autospec<'tcx>(
                     exec_allows_no_decreases_clause: false,
                     alloc_check_skip_drops: false,
                     alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
+                    alloc_unmodeled_bounds: false,
                     tracked_swap: false,
                     tracked_take_option: false,
                     is_async: false,
@@ -1518,6 +1519,30 @@ fn create_reveal_group<'tcx>(
     err_span(span, "`reveal_group` must have block body")
 }
 
+/// Does `def_id` (or its parent impl/trait) have a bound on an auto trait (`Send`, `Sync`,
+/// `Unpin`)? Those bounds are not translated to VIR (see `check_generic_bound`).
+fn has_auto_trait_bounds<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, def_id: DefId) -> bool {
+    let auto = |d: DefId| {
+        Some(d) == tcx.lang_items().unpin_trait()
+            || Some(d) == tcx.lang_items().sync_trait()
+            || Some(d) == tcx.get_diagnostic_item(rustc_span::sym::Send)
+    };
+    // only the bounds written on the item and its parents (an auto-trait supertrait implied by
+    // another written bound is guarded through that bound)
+    let mut cur = Some(def_id);
+    while let Some(d) = cur {
+        let preds = tcx.clauses_of(d);
+        if preds.clauses.iter().any(|(clause, _)| match clause.kind().skip_binder() {
+            rustc_middle::ty::ClauseKind::Trait(t) => auto(t.trait_ref.def_id),
+            _ => false,
+        }) {
+            return true;
+        }
+        cur = preds.parent;
+    }
+    false
+}
+
 fn make_attributes<'tcx>(
     ctxt: &Context<'tcx>,
     def_id: DefId,
@@ -1575,6 +1600,7 @@ fn make_attributes<'tcx>(
         },
         alloc_check_skip_drops: vattrs.alloc_check_skip_drops,
         alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
+        alloc_unmodeled_bounds: has_auto_trait_bounds(ctxt.tcx, def_id),
         tracked_swap: vattrs.tracked_swap,
         tracked_take_option: vattrs.tracked_take_option,
         is_async: is_async,
@@ -1713,6 +1739,17 @@ pub(crate) fn check_item_fn<'tcx>(
         .is_some_and(|name| name.starts_with(VERUS_SPEC));
 
     let vattrs = ctxt.get_verifier_attrs(attrs)?;
+    // `alloc_check_skip_drops` turns off the drop rule for a function, which is only sound for the
+    // few vstd functions that merely move a value of a generic type (it is trusted, like
+    // `external_body`), so it is only accepted while verifying vstd itself
+    if vattrs.alloc_check_skip_drops
+        && !matches!(
+            ctxt.cmd_line_args.vstd,
+            crate::config::Vstd::IsVstd | crate::config::Vstd::IsCore
+        )
+    {
+        return err_span(sig.span, "`#[verifier::alloc_check_skip_drops]` is only allowed in vstd");
+    }
     let mode = match &sig.sig {
         FnOrConstSigEnum::Fn(..) => get_mode(Mode::Exec, attrs),
         FnOrConstSigEnum::ConstVar(..) => get_mode(Mode::Spec, attrs),

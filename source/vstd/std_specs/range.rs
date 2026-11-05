@@ -118,6 +118,10 @@ pub uninterp spec fn spec_range_next<A>(a: Range<A>) -> (Range<A>, Option<A>);
 /// integers only; implementing `StepSpecImpl` alone does not establish it.
 pub uninterp spec fn obeys_range_step_spec<A>() -> bool;
 
+/// -V alloc-check: `A` is a std `Step` type (the primitive integers, `char`), whose `Step`,
+/// `PartialOrd` and `Clone` methods allocate nothing
+pub uninterp spec fn std_step_alloc_free<A>() -> bool;
+
 /// Range::contains method is valid and safe to use only when cmp operations are implemented to satisfy
 /// obeys_partial_cmp_spec. Specifically, the comparison must be deterministic, and `lt` (less than)
 /// and `le` (less than or equal to) must define total orders.
@@ -145,14 +149,18 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
 ) -> (ret: bool) where Idx: PartialOrd<U>, U: ?Sized + PartialOrd<Idx>
     ensures
         <RangeInclusive::<Idx> as ContainsSpec<Idx, U>>::obeys_contains() ==> ret
-            == r.contains_spec(i),
-// `start <= item && item <= end`
+            == r.contains_spec(
+            i,
+        ),
+// rustc 1.99.1 `RangeBounds::contains` with `RangeInclusive::end_bound`:
+// `start <= item && (if exhausted { item < start } else { item <= end })`
 
     allocates
-        call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + call_allocates(
-            <U as PartialOrd<Idx>>::le,
-            (i, &r@.end),
-        ),
+        call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
+            call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
+        } else {
+            call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+        },
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty ](
@@ -177,9 +185,23 @@ pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx
         0,
 ;
 
+// `Range::next` runs `A`'s `PartialOrd::lt`, `Clone::clone` and `Step::forward_unchecked`;
+// they allocate nothing for the std `Step` types (the primitive integers), which is what
+// `obeys_range_step_spec` establishes (a user `Step` type, possible with `step_trait`, may
+// allocate in them).
 pub broadcast axiom fn axiom_next_cost_range<A: core::iter::Step>(i: &Range<A>)
+    requires
+        std_step_alloc_free::<A>(),
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_range<A: core::iter::Step>()
+    requires
+        std_step_alloc_free::<A>(),
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Range<A>>(),
 ;
 
 impl<A: core::iter::Step> super::iter::IteratorSpecImpl for Range<A> {
@@ -227,8 +249,18 @@ pub open spec fn spec_range_inclusive_len<A: core::iter::Step>(r: &RangeInclusiv
 }
 
 pub broadcast axiom fn axiom_next_cost_range_inclusive<A: core::iter::Step>(i: &RangeInclusive<A>)
+    requires
+        std_step_alloc_free::<A>(),
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_range_inclusive<A: core::iter::Step>()
+    requires
+        std_step_alloc_free::<A>(),
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<RangeInclusive<A>>(),
 ;
 
 impl<A: core::iter::Step> super::iter::IteratorSpecImpl for RangeInclusive<A> {
@@ -268,10 +300,9 @@ pub assume_specification<A: core::iter::Step>[ <Range<A> as Iterator>::next ](
         obeys_range_step_spec::<A>() ==> (*final(range), r) == spec_range_next(
             *old(range),
         ),
-// (`Step` is implemented only by std for the primitive integers and `char`)
+// (its cost is the trait method's `iter_next_cost(range)`, which is 0 for the std `Step` types
+// by `axiom_next_cost_range`)
 
-    allocates
-        0,
 ;
 
 #[verifier::external_type_specification]
@@ -720,11 +751,38 @@ step_specs!(i64, axiom_spec_range_next_i64, axiom_i64_obeys_range_step_spec);
 step_specs!(i128, axiom_spec_range_next_i128, axiom_i128_obeys_range_step_spec);
 step_specs!(isize, axiom_spec_range_next_isize, axiom_isize_obeys_range_step_spec);
 
+macro_rules! std_step_alloc_free {
+    ($t: ty, $axiom: ident) => {
+        verus! {
+        pub broadcast axiom fn $axiom()
+            ensures
+                #[trigger] std_step_alloc_free::<$t>(),
+        ;
+        }
+    };
+}
+
+std_step_alloc_free!(u8, axiom_std_step_alloc_free_u8);
+std_step_alloc_free!(u16, axiom_std_step_alloc_free_u16);
+std_step_alloc_free!(u32, axiom_std_step_alloc_free_u32);
+std_step_alloc_free!(u64, axiom_std_step_alloc_free_u64);
+std_step_alloc_free!(u128, axiom_std_step_alloc_free_u128);
+std_step_alloc_free!(usize, axiom_std_step_alloc_free_usize);
+std_step_alloc_free!(i8, axiom_std_step_alloc_free_i8);
+std_step_alloc_free!(i16, axiom_std_step_alloc_free_i16);
+std_step_alloc_free!(i32, axiom_std_step_alloc_free_i32);
+std_step_alloc_free!(i64, axiom_std_step_alloc_free_i64);
+std_step_alloc_free!(i128, axiom_std_step_alloc_free_i128);
+std_step_alloc_free!(isize, axiom_std_step_alloc_free_isize);
+std_step_alloc_free!(char, axiom_std_step_alloc_free_char);
+
 verus! {
 
 pub broadcast group group_range_axioms {
     axiom_next_cost_range_inclusive,
+    axiom_aux_alloc_free_range_inclusive,
     axiom_next_cost_range,
+    axiom_aux_alloc_free_range,
     axiom_range_inclusive_out_of_order,
     axiom_range_inclusive_empty_contains,
     axiom_u8_obeys_range_step_spec,
@@ -751,6 +809,19 @@ pub broadcast group group_range_axioms {
     axiom_spec_range_next_i64,
     axiom_spec_range_next_i128,
     axiom_spec_range_next_isize,
+    axiom_std_step_alloc_free_u8,
+    axiom_std_step_alloc_free_u16,
+    axiom_std_step_alloc_free_u32,
+    axiom_std_step_alloc_free_u64,
+    axiom_std_step_alloc_free_u128,
+    axiom_std_step_alloc_free_usize,
+    axiom_std_step_alloc_free_i8,
+    axiom_std_step_alloc_free_i16,
+    axiom_std_step_alloc_free_i32,
+    axiom_std_step_alloc_free_i64,
+    axiom_std_step_alloc_free_i128,
+    axiom_std_step_alloc_free_isize,
+    axiom_std_step_alloc_free_char,
 }
 
 } // verus!

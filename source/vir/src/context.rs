@@ -84,6 +84,10 @@ pub struct GlobalCtx {
     /// the impl's span and whether it is bounded by `allocates 0`. Computed before pruning,
     /// since `Drop::drop` is never called explicitly and would otherwise be pruned away.
     pub(crate) drop_impl_alloc_zero: Arc<HashMap<Dt, (Span, bool)>>,
+    pub(crate) copy_datatypes: Arc<std::collections::HashSet<Dt>>,
+    /// -V alloc-check: datatypes of the whole crate (not pruned per module, so a type's
+    /// private fields are still there for the drop rule)
+    pub(crate) alloc_datatypes: Arc<HashMap<Dt, crate::ast::Datatype>>,
     pub axiom_usage_info: bool,
     pub no_bv_simplify: bool,
     pub report_long_running: bool,
@@ -362,40 +366,26 @@ impl GlobalCtx {
         let chosen_triggers: std::cell::RefCell<Vec<ChosenTriggers>> =
             std::cell::RefCell::new(Vec::new());
 
-        let mut drop_impl_alloc_zero: HashMap<Dt, (Span, bool)> = HashMap::new();
-        if alloc_check {
-            for f in krate.functions.iter() {
-                if !f.x.attrs.is_drop {
-                    continue;
-                }
-                // `Drop` is a foreign trait, so its impl methods may have been demoted to static
-                // functions; identify the datatype from the `&mut self` parameter instead.
-                let self_dt = f.x.params.first().and_then(|p| {
-                    let mut t = &p.x.typ;
-                    loop {
-                        match &**t {
-                            TypX::MutRef(inner) | TypX::Decorate(_, _, inner) => t = inner,
-                            TypX::Datatype(dt, _, _) => return Some(dt.clone()),
-                            _ => return None,
-                        }
-                    }
-                });
-                if let Some(dt) = self_dt {
-                    let zero =
-                        f.x.allocates
-                            .as_ref()
-                            .is_some_and(|e| crate::alloc_check::is_literal_zero(e));
-                    drop_impl_alloc_zero.insert(dt, (f.span.clone(), zero));
-                }
-            }
-        }
+        let drop_impl_alloc_zero =
+            if alloc_check { crate::alloc_check::drop_impl_table(krate) } else { HashMap::new() };
         // Always checked: vstd's `axiom_fmt_allocates_*` rely on it
         crate::alloc_check::check_fmt_impl_bounds(krate)?;
+        let copy_datatypes = crate::alloc_check::copy_datatypes(krate);
+        let alloc_datatypes: HashMap<Dt, crate::ast::Datatype> = if alloc_check {
+            krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect()
+        } else {
+            HashMap::new()
+        };
         if alloc_check {
             crate::alloc_check::check_imported_bounds_were_checked(krate)?;
+            crate::alloc_check::check_unverified_impls_of_bounded_decls(krate)?;
         }
         if alloc_check {
-            crate::alloc_check::check_alloc_free_drop_impls(krate, &drop_impl_alloc_zero)?;
+            crate::alloc_check::check_alloc_free_drop_impls(
+                krate,
+                &drop_impl_alloc_zero,
+                &copy_datatypes,
+            )?;
         }
 
         let datatypes: HashMap<Path, (TypPositives, Variants)> = krate
@@ -819,6 +809,8 @@ impl GlobalCtx {
             alloc_check,
             alloc_check_strict,
             drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
+            copy_datatypes: Arc::new(copy_datatypes),
+            alloc_datatypes: Arc::new(alloc_datatypes),
             axiom_usage_info,
             no_bv_simplify,
             report_long_running,
@@ -854,6 +846,8 @@ impl GlobalCtx {
             alloc_check: self.alloc_check,
             alloc_check_strict: self.alloc_check_strict,
             drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
+            copy_datatypes: self.copy_datatypes.clone(),
+            alloc_datatypes: self.alloc_datatypes.clone(),
             axiom_usage_info: self.axiom_usage_info,
             no_bv_simplify: self.no_bv_simplify,
             report_long_running: self.report_long_running,

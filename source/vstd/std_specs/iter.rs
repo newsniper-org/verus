@@ -1100,6 +1100,12 @@ pub trait ExIterStep: Clone + PartialOrd + Sized {
  * Collect our broadcast definitions
  ********************************************************************************/
 
+/// The `Iterator`/`DoubleEndedIterator` methods of `I` other than `next`/`next_back` that the std
+/// adapters call (`nth`, `nth_back`, `find`, `try_fold`, `try_rfold`, `len`, ...) allocate nothing.
+/// (A user iterator may override them with code that allocates; vstd establishes this for the std
+/// iterators and adapters.)
+pub uninterp spec fn iter_aux_alloc_free<I: ?Sized>() -> bool;
+
 /// Every `next` of an iterator of type `I`, in any state, allocates nothing
 pub open spec fn iter_alloc_free<I: ?Sized>() -> bool {
     forall|i: &I| #[trigger] iter_next_cost(i) == 0
@@ -1116,6 +1122,7 @@ pub open spec fn iter_back_alloc_free<I: ?Sized>() -> bool {
 
 pub broadcast axiom fn axiom_rev_next_cost<I>(r: &Rev<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_back_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_cost(r) == 0,
@@ -1123,6 +1130,7 @@ pub broadcast axiom fn axiom_rev_next_cost<I>(r: &Rev<I>)
 
 pub broadcast axiom fn axiom_rev_next_back_cost<I>(r: &Rev<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_back_cost(r) == 0,
@@ -1130,6 +1138,7 @@ pub broadcast axiom fn axiom_rev_next_back_cost<I>(r: &Rev<I>)
 
 pub broadcast axiom fn axiom_skip_next_cost<I>(s: &Skip<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_cost(s) == 0,
@@ -1137,6 +1146,7 @@ pub broadcast axiom fn axiom_skip_next_cost<I>(s: &Skip<I>)
 
 pub broadcast axiom fn axiom_take_next_cost<I>(t: &Take<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_cost(t) == 0,
@@ -1144,6 +1154,8 @@ pub broadcast axiom fn axiom_take_next_cost<I>(t: &Take<I>)
 
 pub broadcast axiom fn axiom_zip_next_cost<A, B>(z: &Zip<A, B>)
     requires
+        iter_aux_alloc_free::<A>(),
+        iter_aux_alloc_free::<B>(),
         iter_alloc_free::<A>(),
         iter_alloc_free::<B>(),
     ensures
@@ -1152,6 +1164,7 @@ pub broadcast axiom fn axiom_zip_next_cost<A, B>(z: &Zip<A, B>)
 
 pub broadcast axiom fn axiom_skip_next_back_cost<I>(s: &Skip<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_back_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_back_cost(s) == 0,
@@ -1159,6 +1172,7 @@ pub broadcast axiom fn axiom_skip_next_back_cost<I>(s: &Skip<I>)
 
 pub broadcast axiom fn axiom_take_next_back_cost<I>(t: &Take<I>)
     requires
+        iter_aux_alloc_free::<I>(),
         iter_back_alloc_free::<I>(),
     ensures
         #[trigger] iter_next_back_cost(t) == 0,
@@ -1173,6 +1187,7 @@ pub broadcast axiom fn axiom_map_next_cost<I: Iterator, F: FnOnce<(I::Item,)>>(
     m: &core::iter::Map<I, F>,
 )
     requires
+        iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
         forall|x: I::Item| call_allocates(map_fun(*m), (x,)) == 0,
     ensures
@@ -1183,14 +1198,68 @@ pub broadcast axiom fn axiom_filter_next_cost<I: Iterator, P: for<'a> FnOnce<(&'
     f: &core::iter::Filter<I, P>,
 )
     requires
+        iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
         forall|x: &I::Item| call_allocates(filter_fun(*f), (x,)) == 0,
     ensures
         #[trigger] iter_next_cost(f) == 0,
 ;
 
+// The std adapters' other methods call the inner iterators' (and the closures'); they allocate
+// nothing when those do not.
+pub broadcast axiom fn axiom_aux_alloc_free_rev<I>()
+    requires
+        iter_aux_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_aux_alloc_free::<Rev<I>>(),
+;
+
+pub broadcast axiom fn axiom_aux_alloc_free_skip<I>()
+    requires
+        iter_aux_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_aux_alloc_free::<Skip<I>>(),
+;
+
+pub broadcast axiom fn axiom_aux_alloc_free_take<I>()
+    requires
+        iter_aux_alloc_free::<I>(),
+    ensures
+        #[trigger] iter_aux_alloc_free::<Take<I>>(),
+;
+
+pub broadcast axiom fn axiom_aux_alloc_free_zip<A, B>()
+    requires
+        iter_aux_alloc_free::<A>(),
+        iter_aux_alloc_free::<B>(),
+    ensures
+        #[trigger] iter_aux_alloc_free::<Zip<A, B>>(),
+;
+
+pub broadcast axiom fn axiom_aux_alloc_free_map<I: Iterator, F: FnOnce<(I::Item,)>>()
+    requires
+        iter_aux_alloc_free::<I>(),
+        forall|m: core::iter::Map<I, F>, x: I::Item| #[trigger] call_allocates(map_fun(m), (x,)) == 0,
+    ensures
+        #[trigger] iter_aux_alloc_free::<core::iter::Map<I, F>>(),
+;
+
+pub broadcast axiom fn axiom_aux_alloc_free_filter<I: Iterator, P: for<'a> FnOnce<(&'a I::Item,)>>()
+    requires
+        iter_aux_alloc_free::<I>(),
+        forall|f: core::iter::Filter<I, P>, x: &I::Item| #[trigger] call_allocates(filter_fun(f), (x,)) == 0,
+    ensures
+        #[trigger] iter_aux_alloc_free::<core::iter::Filter<I, P>>(),
+;
+
 pub broadcast group group_iter_axioms {
     axiom_iter_next_cost_nonneg,
+    axiom_aux_alloc_free_rev,
+    axiom_aux_alloc_free_skip,
+    axiom_aux_alloc_free_take,
+    axiom_aux_alloc_free_zip,
+    axiom_aux_alloc_free_map,
+    axiom_aux_alloc_free_filter,
     axiom_iter_next_back_cost_nonneg,
     axiom_rev_next_cost,
     axiom_rev_next_back_cost,

@@ -767,7 +767,7 @@ test_verify_one_file_with_options! {
 
         impl Tr for C {
             fn m(&self) -> u8
-                allocates 2
+                allocates 2 // FAILS
             {
                 let _b = mk();
                 3
@@ -1515,4 +1515,340 @@ test_verify_one_file_with_options! {
             x.to_string()
         }
     } => Err(err) => assert_fails(err, 1)
+}
+
+// Soundness regressions (reported 2026-11-05)
+
+// The trait declaration's bound only holds where its `requires` holds, so an impl may have a
+// larger bound outside the requires without making the axioms contradict each other.
+test_verify_one_file_with_options! {
+    #[test] alloc_check_trait_bound_outside_requires ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr {
+            fn m(x: u8)
+                requires x > 0
+                allocates 0;
+        }
+        pub struct S;
+        impl Tr for S {
+            fn m(x: u8)
+                allocates if x == 0 { 100int } else { 0int }
+            {
+            }
+        }
+        proof fn outside() {
+            assert(call_allocates(<S as Tr>::m, (0u8,)) == 100);
+        }
+        proof fn no_contradiction() {
+            assert(call_allocates(<S as Tr>::m, (0u8,)) <= 0); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
+
+// An impl's bound must be within the declaration's for every input satisfying the requires, even
+// if the body never returns.
+test_verify_one_file_with_options! {
+    #[test] alloc_check_trait_impl_bound_checked_on_entry ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr {
+            fn m(x: u8) allocates 0;
+        }
+        pub struct S;
+        impl Tr for S {
+            #[verifier::exec_allows_no_decreases_clause]
+            fn m(x: u8)
+                allocates 100
+            {
+                loop {}
+            }
+        }
+    } => Err(err) => assert_error_msgs(err, &["this `allocates` bound may exceed the trait method's `allocates` bound"])
+}
+
+// Without -V alloc-check nothing is checked, so no `call_allocates` axiom may be assumed.
+test_verify_one_file! {
+    #[test] alloc_check_off_no_call_allocates_axioms verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr {
+            fn m(x: u8) allocates 0;
+        }
+        pub struct S;
+        impl Tr for S {
+            fn m(x: u8) allocates 100 { }
+        }
+        proof fn own_bound() {
+            assert(call_allocates(<S as Tr>::m, (0u8,)) == 100); // FAILS
+        }
+        proof fn decl_bound() {
+            assert(call_allocates(<S as Tr>::m, (0u8,)) <= 0); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_unverified_impl_own_bound_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr {
+            fn m(x: u8) allocates 0;
+        }
+        pub struct S;
+        impl Tr for S {
+            #[verifier::external_body]
+            fn m(x: u8) allocates 100 { }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "without a verified body it cannot state its own bound")
+}
+
+// An opaque type may hide a field whose `Drop` allocates
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_opaque_type_rejected ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        #[verifier::external_body]
+        pub struct Hide {
+            b: Bad,
+        }
+
+        fn p(h: Hide)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_opaque_copy_type_ok ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::external_body]
+        #[derive(Clone, Copy)]
+        pub struct C {
+            x: u8,
+        }
+
+        fn p(c: C)
+            allocates 0
+        {
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_skip_drops_only_in_vstd ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        #[verifier::alloc_check_skip_drops]
+        fn p()
+            allocates 0
+        {
+            let b = Bad { x: 0 };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::alloc_check_skip_drops]` is only allowed in vstd")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_strict_trait_impl ["vstd", "-V alloc-check-strict"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr {
+            fn m(&self) no_unwind allocates 0;
+        }
+        pub struct S;
+        impl Tr for S {
+            fn m(&self) { }
+        }
+        fn g<T: Tr>(t: &T)
+            no_unwind
+            allocates 0
+        {
+            t.m()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_bool_then_charges_closure ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + verus_code_str! {
+        fn then_ok(b: bool) -> Option<Box<u8>>
+            allocates if b { 1int } else { 0int }
+        {
+            b.then(|| -> (r: Box<u8>) allocates 1 { mk(0) })
+        }
+
+        fn then_wrong(b: bool) -> Option<Box<u8>>
+            allocates 0 // FAILS
+        {
+            b.then(|| -> (r: Box<u8>) allocates 1 { mk(0) })
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
+
+// Soundness regressions from the adversarial hunt (2026-11-05)
+
+// The `call_allocates` axiom of a blanket impl only holds where its bounds hold: `S` is not `Copy`,
+// so the blanket's bound says nothing about `S`'s own impl (no contradiction), and a generic
+// caller gets no bound from the blanket either.
+test_verify_one_file_with_options! {
+    #[test] alloc_check_blanket_impl_axiom_guarded ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr { fn m(&self); }
+        impl<T: Copy> Tr for T {
+            fn m(&self) allocates 0 {}
+        }
+        pub struct S;
+        impl Tr for S {
+            fn m(&self) allocates 1 { let _b = Box::new(1u8); }
+        }
+        proof fn no_contradiction(s: S)
+            ensures false // FAILS
+        {
+            let a = call_allocates(<S as Tr>::m, (&s,));
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
+
+// `impl<T: Send>`: VIR drops auto-trait bounds, so the axiom cannot be guarded and is not emitted
+test_verify_one_file_with_options! {
+    #[test] alloc_check_auto_trait_bound_axiom_dropped ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr { fn m(&self); }
+        impl<T: Send> Tr for T {
+            fn m(&self) allocates 0 {}
+        }
+        pub fn use_it<T: Tr>(t: &T) allocates 0 {
+            t.m()
+        }
+    } => Err(err) => assert_error_msgs(err, &["postcondition not satisfied"])
+}
+
+// Without -V alloc-check, no closure bound is assumed either (and a negative bound is clamped)
+test_verify_one_file! {
+    #[test] alloc_check_off_no_closure_axiom verus_code! {
+        use vstd::prelude::*;
+        fn f()
+            ensures false // FAILS
+        {
+            let c = |n: u8| -> (r: u8) allocates n - 1 { n };
+            assert(call_allocates(c, (0u8,)) >= 0);
+        }
+    } => Err(err) => assert_fails(err, 1)
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_allocated_in_closure_spec_rejected ["vstd", "-V alloc-check"] => ALLOC_LEAF.to_string() + verus_code_str! {
+        fn f() allocates 1 {
+            let _a = mk(1);
+            let c = || -> (r: u8) ensures allocated() == 0 allocates 0 { 0 };
+            let _x = c();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`allocated()` cannot be used in a closure's `requires`, `ensures` or `allocates`")
+}
+
+// A private field in another module is still seen by the drop rule
+test_verify_one_file_with_options! {
+    #[test] alloc_check_drop_private_field_other_module ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        pub mod m {
+            use vstd::prelude::*;
+            pub struct Hide { b: super::Bad }
+        }
+        fn p(h: m::Hide)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not bounded by `allocates 0`")
+}
+
+// A `Copy` impl for one instantiation says nothing about another
+test_verify_one_file_with_options! {
+    #[test] alloc_check_copy_exemption_per_instantiation ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        pub trait Tr { type A; }
+        pub struct K1;
+        pub struct K2;
+        impl Tr for K1 { type A = u8; }
+        impl Tr for K2 { type A = Bad; }
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(T)]
+        pub struct W<T: Tr> { a: T::A }
+        impl Clone for W<K1> {
+            #[verifier::external_body]
+            fn clone(&self) -> Self { W { a: self.a } }
+        }
+        impl Copy for W<K1> {}
+        fn p(w: W<K2>)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_assume_external_rejected ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        fn ext() -> u8 { let b = Box::new(3u8); *b }
+        verus! {
+        #[verifier(assume(externals_available_without_declaration))]
+        fn f() -> u8
+            allocates 0
+        {
+            ext()
+        }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "only allowed by `externals_available_without_declaration`")
+}
+
+// A std function used as a value may drop values behind its `&mut` parameters
+test_verify_one_file_with_options! {
+    #[test] alloc_check_std_fn_item_drops ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
+        fn p(o: Option<&mut Vec<Bad>>)
+            allocates 0
+        {
+            let _ = o.map(Vec::<Bad>::clear);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not bounded by `allocates 0`")
+}
+
+// A call through a std operator trait (no impl with a bound) used to crash
+test_verify_one_file_with_options! {
+    #[test] alloc_check_std_ops_trait_call_no_crash ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn g<T: core::ops::Add<Output = T> + Copy>(a: T) -> T
+            requires call_requires(T::add, (a, a))
+            allocates 0
+        {
+            a + a
+        }
+    } => Err(err) => assert_error_msgs(err, &["postcondition not satisfied"])
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_non_regular_type_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::mem::ManuallyDrop;
+        struct P<T> { v: T, next: Option<Box<P<(T, T)>>> }
+        fn f(p: ManuallyDrop<P<u8>>) allocates 0 {}
+    } => Err(err) => assert_vir_error_msg(err, "nested too deeply")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_std_iterators_still_bounded ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::collections::HashMap;
+        fn c(r: &mut core::ops::Range<char>)
+            allocates 0
+        {
+            broadcast use vstd::std_specs::range::group_range_axioms;
+            let _x = r.next();
+        }
+        fn u(r: &mut core::ops::Range<u8>)
+            allocates 0
+        {
+            broadcast use vstd::std_specs::range::group_range_axioms;
+            let _x = r.next();
+        }
+        fn h(m: &HashMap<u64, u64>, k: &u64) -> bool
+            allocates 0
+        {
+            broadcast use vstd::std_specs::hash::group_hash_axioms;
+            m.contains_key(k)
+        }
+        fn hs(m: &HashMap<String, u64>, k: &str) -> bool
+            allocates 0
+        {
+            broadcast use vstd::std_specs::hash::group_hash_axioms;
+            m.contains_key(k)
+        }
+    } => Ok(())
 }

@@ -2118,6 +2118,14 @@ pub(crate) fn expr_to_stm_opt(
                 }
             }
         }
+        ExprX::Call { target: CallTarget::AssumeExternal, .. } if state.alloc_counter.is_some() => {
+            // a call allowed by `externals_available_without_declaration` has no specification,
+            // so nothing bounds what it allocates
+            Err(error(
+                &expr.span,
+                "cannot bound the allocations of this call: the callee has no specification (it is only allowed by `externals_available_without_declaration`)",
+            ))
+        }
         ExprX::Call { target: CallTarget::AssumeExternal, args, post_args, body } => {
             let (mut stms, all_obligations, exps, body) = get_call_args(
                 ctx,

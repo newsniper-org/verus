@@ -108,4 +108,20 @@ impl<T: AllocFreeDrop> AllocFreeDrop for alloc::vec::Vec<T> {
 
 }
 
+// (`Global` is behind the unstable `allocator_api`, which vstd only enables when verifying)
+#[cfg(all(feature = "alloc", verus_keep_ghost))]
+impl AllocFreeDrop for alloc::alloc::Global {
+
+}
+
+#[cfg(feature = "alloc")]
+impl AllocFreeDrop for alloc::string::String {
+
+}
+
+#[cfg(feature = "std")]
+impl AllocFreeDrop for std::hash::RandomState {
+
+}
+
 } // verus!

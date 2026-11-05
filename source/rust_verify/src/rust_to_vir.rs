@@ -529,6 +529,27 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
     imported: &Vec<Krate>,
     crate_items: &CrateItems,
 ) -> Result<PreCrate<'tcx>, (Vec<VirErr>, Option<QueryError>)> {
+    // -V alloc-check trusts std, core, alloc and vstd by crate (their `Drop` impls and opaque
+    // types), so a crate being verified must not take one of those names
+    if ctxtx.cmd_line_args.alloc_check {
+        let name = ctxtx.tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
+        let allowed = match name.as_str() {
+            "vstd" => matches!(ctxtx.cmd_line_args.vstd, crate::config::Vstd::IsVstd),
+            "core" => matches!(ctxtx.cmd_line_args.vstd, crate::config::Vstd::IsCore),
+            "std" | "alloc" => false,
+            _ => true,
+        };
+        if !allowed {
+            let span = ctxtx.tcx.def_span(rustc_hir::def_id::CRATE_DEF_ID);
+            return Err((
+                vec![vir::messages::error(
+                    &crate::spans::err_air_span(span),
+                    format!("a crate named `{name}` cannot be verified with -V alloc-check"),
+                )],
+                None,
+            ));
+        }
+    }
     let mut vir: KrateX = KrateX {
         functions: Vec::new(),
         reveal_groups: Vec::new(),

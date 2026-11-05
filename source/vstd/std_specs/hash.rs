@@ -289,6 +289,12 @@ pub broadcast axiom fn axiom_next_cost_hash_keys<'a, K, V>(i: &Keys<'a, K, V>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_hash_keys<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Keys<'a, K, V>>(),
+;
+
 impl<'a, K, V> super::iter::IteratorSpecImpl for Keys<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -327,6 +333,12 @@ pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>)
 pub broadcast axiom fn axiom_next_cost_hash_values<'a, K, V>(i: &Values<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_hash_values<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Values<'a, K, V>>(),
 ;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for Values<'a, K, V> {
@@ -369,6 +381,12 @@ pub uninterp spec fn into_iter<'a, Key, Value>(i: hash_map::Iter<'a, Key, Value>
 pub broadcast axiom fn axiom_next_cost_hash_map_iter<'a, K, V>(i: &hash_map::Iter<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_hash_map_iter<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<hash_map::Iter<'a, K, V>>(),
 ;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for hash_map::Iter<'a, K, V> {
@@ -749,7 +767,7 @@ pub assume_specification<
             k,
         ),
     allocates
-        hash_ops_cost(m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -808,7 +826,7 @@ pub assume_specification<
             None => !contains_borrowed_key(m@, k),
         },
     allocates
-        hash_ops_cost(m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -874,7 +892,7 @@ pub assume_specification<
             }
         },
     allocates
-        hash_ops_cost(&*m),
+        hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(&*m),
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::clear ](
@@ -936,6 +954,12 @@ pub uninterp spec fn into_iter_hash_keys<'a, Key>(i: hash_set::Iter::<'a, Key>) 
 pub broadcast axiom fn axiom_next_cost_hash_set_iter<'a, K>(i: &hash_set::Iter<'a, K>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_hash_set_iter<'a, K>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<hash_set::Iter<'a, K>>(),
 ;
 
 impl<'a, K> super::iter::IteratorSpecImpl for hash_set::Iter::<'a, K> {
@@ -1120,7 +1144,7 @@ pub assume_specification<
         obeys_key_model::<Key>() && builds_valid_hashers::<S>() ==> result
             == set_contains_borrowed_key(m@, k),
     allocates
-        hash_ops_cost(m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -1170,7 +1194,7 @@ pub assume_specification<
             None => !set_contains_borrowed_key(m@, k),
         },
     allocates
-        hash_ops_cost(m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(m),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -1222,7 +1246,7 @@ pub assume_specification<
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
     allocates
-        hash_ops_cost(&*m),
+        hash_lookup_cost::<Q, HashSet<Key, S, A>>(&*m),
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
@@ -1576,6 +1600,52 @@ pub broadcast axiom fn axiom_hash_ops_cost_nonneg<M: ?Sized>(m: &M)
 /// Hashing a `K` with an `S` builder, and comparing `K`s, allocates nothing
 pub uninterp spec fn hash_alloc_free<K: ?Sized, S: ?Sized>() -> bool;
 
+/// The allocation bound of a lookup by a borrowed key `&Q` in the table `m` (`contains_key`,
+/// `get`, `remove`, ...): std borrows each candidate key as `&Q` (`K::borrow`), hashes the `Q`
+/// with the table's hasher and compares `Q`s, all of which may be user code. It is 0 when `Q`
+/// is the key type itself (`Borrow<K> for K` is the identity) and hashing and comparing keys
+/// allocates nothing, and for `String` keys looked up by `&str` with the std hasher.
+pub uninterp spec fn hash_lookup_cost<Q: ?Sized, M: ?Sized>(m: &M) -> int;
+
+pub broadcast axiom fn axiom_hash_lookup_cost_nonneg<Q: ?Sized, M: ?Sized>(m: &M)
+    ensures
+        #[trigger] hash_lookup_cost::<Q, M>(m) >= 0,
+;
+
+pub broadcast axiom fn axiom_hash_lookup_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_lookup_cost::<K, HashMap<K, V, S, A>>(m) == 0,
+;
+
+pub broadcast axiom fn axiom_hash_lookup_cost_set<K, S, A: Allocator>(m: &HashSet<K, S, A>)
+    requires
+        hash_alloc_free::<K, S>(),
+    ensures
+        #[trigger] hash_lookup_cost::<K, HashSet<K, S, A>>(m) == 0,
+;
+
+// `String: Borrow<str>` returns a view of its bytes, and `String` hashes and compares as its
+// `str` does, so a `&str` lookup costs what a `String` one does
+pub broadcast axiom fn axiom_hash_lookup_cost_map_str<V, S, A: Allocator>(
+    m: &HashMap<alloc::string::String, V, S, A>,
+)
+    requires
+        hash_alloc_free::<alloc::string::String, S>(),
+    ensures
+        #[trigger] hash_lookup_cost::<str, HashMap<alloc::string::String, V, S, A>>(m) == 0,
+;
+
+pub broadcast axiom fn axiom_hash_lookup_cost_set_str<S, A: Allocator>(
+    m: &HashSet<alloc::string::String, S, A>,
+)
+    requires
+        hash_alloc_free::<alloc::string::String, S>(),
+    ensures
+        #[trigger] hash_lookup_cost::<str, HashSet<alloc::string::String, S, A>>(m) == 0,
+;
+
 pub broadcast axiom fn axiom_hash_ops_cost_map<K, V, S, A: Allocator>(m: &HashMap<K, V, S, A>)
     requires
         hash_alloc_free::<K, S>(),
@@ -1635,6 +1705,11 @@ def_hash_free!(alloc::string::String, axiom_hash_free_string);
 
 pub broadcast group group_hash_axioms {
     axiom_hash_ops_cost_nonneg,
+    axiom_hash_lookup_cost_nonneg,
+    axiom_hash_lookup_cost_map,
+    axiom_hash_lookup_cost_set,
+    axiom_hash_lookup_cost_map_str,
+    axiom_hash_lookup_cost_set_str,
     axiom_hash_ops_cost_map,
     axiom_hash_ops_cost_set,
     axiom_hash_free_u8,
@@ -1653,9 +1728,13 @@ pub broadcast group group_hash_axioms {
     axiom_hash_free_char,
     axiom_hash_free_string,
     axiom_next_cost_hash_set_iter,
+    axiom_aux_alloc_free_hash_set_iter,
     axiom_next_cost_hash_map_iter,
+    axiom_aux_alloc_free_hash_map_iter,
     axiom_next_cost_hash_values,
+    axiom_aux_alloc_free_hash_values,
     axiom_next_cost_hash_keys,
+    axiom_aux_alloc_free_hash_keys,
     axiom_box_key_removed,
     axiom_contains_deref_key,
     axiom_contains_box,

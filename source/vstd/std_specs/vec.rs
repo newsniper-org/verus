@@ -475,6 +475,12 @@ pub broadcast axiom fn axiom_next_cost_vec_into_iter<T, A: Allocator>(i: &IntoIt
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_vec_into_iter<T, A: Allocator>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<IntoIter<T, A>>(),
+;
+
 pub broadcast axiom fn axiom_next_back_cost_vec_into_iter<T, A: Allocator>(i: &IntoIter<T, A>)
     ensures
         #[trigger] iter_next_back_cost(i) == 0,
@@ -603,6 +609,7 @@ pub broadcast axiom fn axiom_vec_decreases_to_view<T>(v: Vec<T>)
 
 pub broadcast group group_vec_axioms {
     axiom_next_cost_vec_into_iter,
+    axiom_aux_alloc_free_vec_into_iter,
     axiom_next_back_cost_vec_into_iter,
     axiom_spec_len,
     axiom_spec_capacity,

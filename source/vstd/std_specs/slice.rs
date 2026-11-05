@@ -346,9 +346,12 @@ pub broadcast proof fn lemma_seq_contains_allocates_zero<T: PartialEq<T>>(s: Seq
 
 pub broadcast group group_std_slice_alloc_axioms {
     axiom_next_cost_chunks,
+    axiom_aux_alloc_free_chunks,
     axiom_next_cost_slice_iter_mut,
+    axiom_aux_alloc_free_slice_iter_mut,
     axiom_next_back_cost_slice_iter_mut,
     axiom_next_cost_slice_iter,
+    axiom_aux_alloc_free_slice_iter,
     axiom_next_back_cost_slice_iter,
     lemma_seq_ne_allocates_zero,
     lemma_seq_contains_allocates_zero,
@@ -576,6 +579,12 @@ pub broadcast axiom fn axiom_next_cost_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_slice_iter<'a, T: 'a>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Iter<'a, T>>(),
+;
+
 pub broadcast axiom fn axiom_next_back_cost_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
     ensures
         #[trigger] iter_next_back_cost(i) == 0,
@@ -630,6 +639,12 @@ pub struct ExIterMut<'a, T: 'a>(IterMut<'a, T>);
 pub broadcast axiom fn axiom_next_cost_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_slice_iter_mut<'a, T: 'a>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<IterMut<'a, T>>(),
 ;
 
 pub broadcast axiom fn axiom_next_back_cost_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
@@ -838,6 +853,12 @@ pub uninterp spec fn after_chunks_elts<'a, T: 'a>(i: Chunks<'a, T>) -> Seq<&'a [
 pub broadcast axiom fn axiom_next_cost_chunks<'a, T: 'a>(i: &Chunks<'a, T>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_chunks<'a, T: 'a>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Chunks<'a, T>>(),
 ;
 
 impl<'a, T: 'a> super::iter::IteratorSpecImpl for Chunks<'a, T> {

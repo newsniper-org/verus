@@ -423,7 +423,61 @@ pub fn func_decl_to_sst(
             .fndef_axioms
             .as_ref()
             .expect("expected FnDef axioms to have been generated in ast_simplify");
+        // The axioms quantify over the function's type parameters (binders added below), so
+        // they must only apply where the function's own type bounds hold: otherwise a generic or
+        // blanket impl's axiom (`impl<T: Copy> Tr for T`) would also describe another impl of the
+        // same trait method for a type that does not meet the bounds (`impl Tr for S`, accepted
+        // by coherence because S is not Copy), and the two axioms could contradict each other.
+        // (A trait method declaration's axioms only give upper bounds that every impl is checked
+        // against, so they cannot contradict an impl's; they stay unguarded so that a call
+        // through `dyn Tr`, whose `Self: Tr` bound is not provable, can still use them.)
+        let is_decl = matches!(function.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. });
+        let bound_guards = if is_decl {
+            vec![]
+        } else {
+            crate::traits::trait_bounds_to_ast(ctx, &function.span, &function.x.typ_bounds)
+        };
+        // `trait_bounds_to_ast` drops bounds on traits Verus does not know; a `call_allocates`
+        // axiom guarded by fewer bounds than the impl has could still overlap another impl, so
+        // such an axiom is not emitted at all (calls are then charged a symbolic, unbounded cost)
+        // (only an impl's axiom can overlap another's; a free function or inherent method has its
+        // own FnDef, so a bound missing from the guard cannot make its axiom contradict anything)
+        let is_trait_impl =
+            matches!(function.x.kind, crate::ast::FunctionKind::TraitMethodImpl { .. });
+        let all_bounds_guarded = is_decl
+            || !is_trait_impl
+            || !function.x.attrs.alloc_unmodeled_bounds
+                && function.x.typ_bounds.iter().all(|b| match &**b {
+                    crate::ast::GenericBoundX::Trait(crate::ast::TraitId::Path(path), _) => {
+                        ctx.trait_map.contains_key(path)
+                    }
+                    _ => true,
+                });
+        // A std function (`assume_specification`) that takes `&mut C<T>` may drop `T` values
+        // inside (`Vec::clear`, `truncate`, ...), which its `allocates` does not count: a direct
+        // call is covered by the drop rule at the call site, but a use as a value (`f = Vec::clear`
+        // passed to a generic `F`) is not, so its `call_allocates` axiom only applies when those
+        // type parameters are `AllocFreeDrop` (and is dropped if that trait is not available).
+        let (drop_guards, drop_guards_ok) =
+            crate::alloc_check::proxy_mut_ref_drop_guards(ctx, function);
         for fndef_axiom in fndef_axioms.iter() {
+            if !all_bounds_guarded && crate::alloc_check::mentions_call_allocates(fndef_axiom) {
+                continue;
+            }
+            if !drop_guards_ok && crate::alloc_check::mentions_call_allocates(fndef_axiom) {
+                continue;
+            }
+            // (only the alloc-check axioms are guarded; the requires/ensures FnDef axioms are as
+            // upstream has them)
+            let fndef_axiom = &if ctx.global.alloc_check
+                && crate::alloc_check::mentions_call_allocates(fndef_axiom)
+            {
+                let mut guards = bound_guards.clone();
+                guards.extend(drop_guards.iter().cloned());
+                crate::alloc_check::guard_forall_body(fndef_axiom, &guards)
+            } else {
+                fndef_axiom.clone()
+            };
             let mut state = State::new(diagnostics);
             let exp = expr_to_pure_exp_skip_checks(ctx, &mut state, fndef_axiom)?;
             let exp = state.finalize_exp(ctx, &exp)?;
@@ -965,8 +1019,10 @@ pub fn func_def_to_sst(
     // `call_allocates == impl bound` per impl and `call_allocates <= trait bound` for the trait.
     if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
         crate::alloc_check::check_closures_with_bounds(ctx, function)?;
+        crate::alloc_check::check_allocated_not_in_closure_specs(function)?;
     }
     let mut alloc_init: Option<crate::sst::Stm> = None;
+    let mut alloc_entry_check: Option<crate::sst::Stm> = None;
     let own_bound = function.x.allocates.clone();
     let inherited_bound = match &lo_inheritance {
         Some(lo) => lo.function.x.allocates.clone(),
@@ -982,7 +1038,10 @@ pub fn func_def_to_sst(
         }
         let span = &own_bound.as_ref().or(inherited_bound.as_ref()).unwrap().span;
         if ctx.global.alloc_check_strict
-            && !matches!(function.x.unwind_spec_or_default(), crate::ast::UnwindSpec::NoUnwind)
+            && !matches!(
+                specs_function.x.unwind_spec_or_default(),
+                crate::ast::UnwindSpec::NoUnwind
+            )
         {
             return Err(crate::messages::error(
                 span,
@@ -1031,7 +1090,25 @@ pub fn func_def_to_sst(
             if let Some(inherited) = &inherited {
                 enss.push(exp_pre(&le(current.clone(), inherited.clone())));
                 if let Some(own) = &own {
-                    enss.push(exp_pre(&le(own.clone(), inherited.clone())));
+                    // The FnDef axioms state `call_allocates == own` for this impl and
+                    // `requires ==> call_allocates <= inherited` for the trait method, so
+                    // `own <= inherited` must hold for every input satisfying the requires,
+                    // not just at the returns this body happens to reach (a body that never
+                    // returns would otherwise leave the two axioms contradicting each other).
+                    // Check it on entry, where only the requires are known.
+                    let msg = crate::messages::error(
+                        &own.span,
+                        "this `allocates` bound may exceed the trait method's `allocates` bound",
+                    )
+                    .secondary_label(&inherited.span, "the trait method's bound");
+                    alloc_entry_check = Some(Spanned::new(
+                        own.span.clone(),
+                        StmX::Assert(
+                            state.next_assert_id(),
+                            Some(msg),
+                            le(own.clone(), inherited.clone()),
+                        ),
+                    ));
                 }
             }
         }
@@ -1041,6 +1118,9 @@ pub fn func_def_to_sst(
     let mut stm = expr_to_one_stm_with_post(ctx, &mut state, &body, &function.span)?;
     if let Some(init) = alloc_init {
         stm = stms_to_one_stm(&body.span, vec![init, stm]);
+    }
+    if let Some(check) = alloc_entry_check {
+        stm = stms_to_one_stm(&body.span, vec![check, stm]);
     }
 
     // Add atomic spec related statements

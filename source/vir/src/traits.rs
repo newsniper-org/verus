@@ -737,6 +737,10 @@ pub fn inherit_default_bodies(
                     attrs: Arc::new(crate::ast::FunctionAttrsX {
                         // the copy's `allocates` bound comes from the default method
                         alloc_checked_crate: default_function.x.attrs.alloc_checked_crate,
+                        // the impl's own bounds may include auto-trait bounds (`impl<T: Send>`)
+                        // that VIR drops; for a generic impl, assume so
+                        alloc_unmodeled_bounds: !trait_impl.x.typ_params.is_empty()
+                            || default_function.x.attrs.alloc_unmodeled_bounds,
                         ..crate::ast::FunctionAttrsX::default()
                     }),
                     body: None,

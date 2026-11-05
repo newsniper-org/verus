@@ -622,6 +622,10 @@ impl<'tcx> Query<'tcx> {
         vir_crates.push(krate);
         let unpruned_crate = vir::ast_simplify::merge_krates(vir_crates, &merged_traits)
             .map_err(|e| self.emit_error(e))?;
+        if self.args.alloc_check {
+            vir::alloc_check::check_merged_krate(&unpruned_crate)
+                .map_err(|e| self.emit_error(e))?;
+        }
         let (krate, _) = vir::prune::prune_krate_for_module_or_krate(
             &unpruned_crate,
             &self.crate_id,

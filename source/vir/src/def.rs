@@ -617,6 +617,14 @@ pub fn prefix_closure_type(i: usize) -> Path {
     internal_path(format!("{}{}", PREFIX_CLOSURE_TYPE, i))
 }
 
+/// Is `path` the internal datatype that stands for an anonymous closure type
+/// (see `prefix_closure_type`)?
+pub fn is_closure_type_path(path: &Path) -> bool {
+    path.krate == crate::ast::CrateId::Internal
+        && path.segments.len() == 1
+        && path.segments[0].name().is_some_and(|n| n.starts_with(PREFIX_CLOSURE_TYPE))
+}
+
 pub fn prefix_tuple_variant(i: usize) -> Ident {
     Arc::new(format!("{}{}", PREFIX_TUPLE_TYPE, i))
 }

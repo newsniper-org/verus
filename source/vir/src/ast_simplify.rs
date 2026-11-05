@@ -671,6 +671,8 @@ fn simplify_one_expr(
                 ExprX::Var(closure_var_ident.clone()),
             );
 
+            // (without -V alloc-check no bound is checked, so none may be assumed)
+            let checked_allocates = if ctx.alloc_check { allocates.clone() } else { None };
             let external_spec_expr = exec_closure_spec(
                 state,
                 &expr.span,
@@ -680,7 +682,7 @@ fn simplify_one_expr(
                 requires,
                 ensures,
                 mask_spec,
-                allocates,
+                &checked_allocates,
                 proof_fn_modes.is_some(),
             )?;
             let external_spec = Some((closure_var_ident, external_spec_expr));
@@ -1159,13 +1161,22 @@ fn exec_closure_spec_allocates(
         };
         decls.push(Spanned::new(span.clone(), decl));
     }
-    let bound_body = SpannedTyped::new(
+    let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+    // compared as `int`, and clamped at 0 like a function's bound: `call_allocates` is never
+    // negative, so an unclamped negative bound would contradict that
+    let raw_bound = SpannedTyped::new(
         &bound.span,
-        &bound.typ,
+        &int_typ,
         ExprX::Block(Arc::new(decls), Some(bound.clone())),
     );
+    let zero = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+    );
+    let nonneg = crate::ast_util::mk_ineq(span, &zero, &raw_bound, crate::ast::InequalityOp::Le);
+    let bound_body = SpannedTyped::new(span, &int_typ, ExprX::If(nonneg, raw_bound, Some(zero)));
 
-    let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
     let alloc_call = wrap_in_trigger(&SpannedTyped::new(
         span,
         &int_typ,
@@ -1180,7 +1191,6 @@ fn exec_closure_spec_allocates(
             body: None,
         },
     ));
-    // the bound may have any integer type; compare as `int`
     let quant_body = mk_eq(span, &alloc_call, &bound_body);
 
     let bool_typ = Arc::new(TypX::Bool);
@@ -1278,6 +1288,7 @@ fn add_fndef_axioms_to_function(
     state: &mut State,
     function: &Function,
     fn_once_trait_in_scope: bool,
+    alloc_check: bool,
 ) -> Result<(Function, Vec<TraitImpl>, Option<AssocTypeImpl>), VirErr> {
     state.reset_for_function();
 
@@ -1412,8 +1423,11 @@ fn add_fndef_axioms_to_function(
     }
 
     // `call_allocates(f, args)` (-V alloc-check): equal to f's `allocates` bound, clamped at 0
-    // (a negative bound must not offset other allocations)
-    if let Some(alloc_expr) = &function.x.allocates {
+    // (a negative bound must not offset other allocations).
+    // Without -V alloc-check no bound is checked, so none may be assumed either: a trait
+    // declaration's bound and an impl's own bound would otherwise be two unchecked axioms that
+    // can contradict each other.
+    if let (true, Some(alloc_expr)) = (alloc_check, &function.x.allocates) {
         let span = &function.span;
         let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
         let tuple_typ = tuple_var.typ.clone();
@@ -1435,7 +1449,7 @@ fn add_fndef_axioms_to_function(
         let bound = SpannedTyped::new(
             &alloc_expr.span,
             &int_typ,
-            ExprX::Block(Arc::new(decls), Some(alloc_expr.clone())),
+            ExprX::Block(Arc::new(decls.clone()), Some(alloc_expr.clone())),
         );
         let zero = SpannedTyped::new(
             span,
@@ -1459,15 +1473,31 @@ fn add_fndef_axioms_to_function(
                 body: None,
             },
         );
-        // For a trait method declaration, its bound is an upper bound for every impl (each impl is
-        // checked against it); for anything else, `call_allocates` is exactly its own bound.
+        // For a trait method declaration, its bound is an upper bound for every impl; for anything
+        // else, `call_allocates` is exactly its own bound.
+        // The declaration's bound is only an upper bound where the declaration's `requires` holds:
+        // each impl is checked against it (on entry, so also when the impl does not return) only
+        // under that precondition, and outside it an impl's own bound may be larger. Guarding the
+        // axiom keeps the two axioms consistent (an impl's own-bound equation is unguarded).
         let rel = if let FunctionKind::TraitMethodDecl { .. } = &function.x.kind {
-            crate::ast_util::mk_ineq(
+            let le = crate::ast_util::mk_ineq(
                 span,
                 &wrap_in_trigger(&alloc_call),
                 &clamped,
                 crate::ast::InequalityOp::Le,
-            )
+            );
+            if function.x.require.is_empty() {
+                le
+            } else {
+                let bool_typ = Arc::new(TypX::Bool);
+                let reqs = crate::ast_util::conjoin(span, &function.x.require);
+                let reqs = SpannedTyped::new(
+                    span,
+                    &bool_typ,
+                    ExprX::Block(Arc::new(decls.clone()), Some(reqs)),
+                );
+                crate::ast_util::mk_implies(span, &reqs, &le)
+            }
         } else {
             crate::ast_util::mk_eq(span, &wrap_in_trigger(&alloc_call), &clamped)
         };
@@ -1759,11 +1789,49 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
     // -V alloc-check: calls through a trait method are charged with `call_allocates`, so every
     // function with an `allocates` bound (and the trait method it implements) needs FnDef axioms
     if ctx.alloc_check {
+        let trait_method_decls: HashSet<Fun> = functions
+            .iter()
+            .filter(|f| matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. }))
+            .map(|f| f.x.name.clone())
+            .collect();
+        let bounded_decls: HashSet<Fun> = functions
+            .iter()
+            .filter(|f| {
+                matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. }) && f.x.allocates.is_some()
+            })
+            .map(|f| f.x.name.clone())
+            .collect();
         for f in functions.iter() {
             if f.x.allocates.is_some() {
                 state.fndef_typs.insert(f.x.name.clone());
                 if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
                     state.fndef_typs.insert(method.clone());
+                }
+            }
+            // A checked function (or a closure with a bound) charges each call through a trait
+            // method with `call_allocates(T::m, args)`, which needs the method's FnDef type
+            // (and its axioms) even when no impl of the method has an `allocates` bound
+            // (`String + &str`, `map[&k]`).
+            if let Some(body) = &f.x.body {
+                // (an impl without its own bound is checked against its declaration's)
+                let mut checked = f.x.allocates.is_some()
+                    || matches!(&f.x.kind, FunctionKind::TraitMethodImpl { method, .. }
+                        if bounded_decls.contains(method));
+                let mut called: Vec<Fun> = Vec::new();
+                let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(body, &mut |_, e| {
+                    match &e.x {
+                        ExprX::NonSpecClosure { allocates: Some(_), .. } => checked = true,
+                        ExprX::Call { target: CallTarget::Fun(_, name, ..), .. }
+                            if trait_method_decls.contains(name) =>
+                        {
+                            called.push(name.clone())
+                        }
+                        _ => {}
+                    }
+                    Ok(())
+                });
+                if checked {
+                    state.fndef_typs.extend(called);
                 }
             }
         }
@@ -1778,8 +1846,13 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
     let mut new_functions: Vec<Function> = Vec::with_capacity(functions.len());
     for f in functions.iter() {
         if need_fndef_axiom(&state.fndef_typs, f) {
-            let (f2, tis, ai) =
-                add_fndef_axioms_to_function(&fndef_funs, &mut state, f, fn_once_trait_in_scope)?;
+            let (f2, tis, ai) = add_fndef_axioms_to_function(
+                &fndef_funs,
+                &mut state,
+                f,
+                fn_once_trait_in_scope,
+                ctx.alloc_check,
+            )?;
             trait_impls.extend(tis);
             if let Some(ai) = ai {
                 assoc_type_impls.push(ai);

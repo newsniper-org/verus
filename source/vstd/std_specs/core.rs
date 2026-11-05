@@ -219,7 +219,13 @@ pub assume_specification<T, F: FnOnce() -> T>[ bool::then ](b: bool, f: F) -> (r
             ret.is_some() && f.ensures((), ret.unwrap())
         } else {
             ret.is_none()
-        }, allocates 0
+        },
+    allocates
+        if b {
+            call_allocates(f, ())
+        } else {
+            0
+        },
 ;
 
 pub assume_specification<T> [core::hint::must_use] (value: T) -> (ret: T)

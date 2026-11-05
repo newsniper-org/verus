@@ -79,6 +79,12 @@ pub broadcast axiom fn axiom_next_cost_btree_keys<'a, K, V>(i: &Keys<'a, K, V>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_btree_keys<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Keys<'a, K, V>>(),
+;
+
 impl<'a, K, V> super::iter::IteratorSpecImpl for Keys<'a, K, V> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -117,6 +123,12 @@ pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>)
 pub broadcast axiom fn axiom_next_cost_btree_values<'a, K, V>(i: &Values<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_btree_values<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<Values<'a, K, V>>(),
 ;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for Values<'a, K, V> {
@@ -159,6 +171,12 @@ pub uninterp spec fn into_iter<'a, Key, Value>(i: btree_map::Iter<'a, Key, Value
 pub broadcast axiom fn axiom_next_cost_btree_map_iter<'a, K, V>(i: &btree_map::Iter<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_btree_map_iter<'a, K, V>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<btree_map::Iter<'a, K, V>>(),
 ;
 
 impl<'a, K, V> super::iter::IteratorSpecImpl for btree_map::Iter<'a, K, V> {
@@ -1064,6 +1082,12 @@ pub broadcast axiom fn axiom_next_cost_btree_set_iter<'a, T>(i: &btree_set::Iter
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
+pub broadcast axiom fn axiom_aux_alloc_free_btree_set_iter<'a, T>()
+    ensures
+        #[trigger] super::iter::iter_aux_alloc_free::<btree_set::Iter<'a, T>>(),
+;
+
 impl<'a, T> super::iter::IteratorSpecImpl for btree_set::Iter::<'a, T> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
         true
@@ -1316,9 +1340,13 @@ pub broadcast axiom fn axiom_btree_set_decreases<Key, A: Allocator + Clone>(m: B
 
 pub broadcast group group_btree_axioms {
     axiom_next_cost_btree_set_iter,
+    axiom_aux_alloc_free_btree_set_iter,
     axiom_next_cost_btree_map_iter,
+    axiom_aux_alloc_free_btree_map_iter,
     axiom_next_cost_btree_values,
+    axiom_aux_alloc_free_btree_values,
     axiom_next_cost_btree_keys,
+    axiom_aux_alloc_free_btree_keys,
     axiom_key_obeys_cmp_spec_meaning,
     axiom_increasing_seq_meaning,
     axiom_box_key_removed,

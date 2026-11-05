@@ -27,6 +27,76 @@ fn is_trusted_std_crate(krate: &CrateId) -> bool {
     }
 }
 
+/// std datatypes that have their own `Drop` impl and whose drop is trusted to only drop their
+/// contents (their type arguments) and free memory. Any other std type with a `Drop` impl (e.g.
+/// `BufWriter`, whose drop flushes and may allocate) is rejected.
+const TRUSTED_STD_DROPS: &[&str] = &[
+    "alloc::vec::Vec",
+    "alloc::vec::into_iter::IntoIter",
+    "alloc::collections::vec_deque::VecDeque",
+    "alloc::collections::vec_deque::into_iter::IntoIter",
+    "alloc::collections::linked_list::LinkedList",
+    "alloc::collections::binary_heap::BinaryHeap",
+    "alloc::collections::btree::map::BTreeMap",
+    "alloc::collections::btree::map::IntoIter",
+    "alloc::collections::btree::set::BTreeSet",
+    "alloc::rc::Weak",
+    "alloc::sync::Weak",
+    "core::cell::Ref",
+    "core::cell::RefMut",
+];
+
+/// std datatypes without a `Drop` of their own whose drop glue only drops their type arguments
+/// (and frees memory): their hidden fields are trusted even when a user crate (not vstd) declares
+/// them with `external_type_specification`. Other std types are trusted only as vstd declares them.
+const TRUSTED_STD_OPAQUE: &[&str] = &[
+    "core::cell::Cell",
+    "core::cell::RefCell",
+    "core::cell::UnsafeCell",
+    "core::cell::OnceCell",
+    "core::mem::manually_drop::ManuallyDrop",
+    "core::marker::PhantomData",
+    "alloc::string::String",
+    "std::sync::poison::mutex::Mutex",
+    "std::sync::poison::rwlock::RwLock",
+    "std::collections::hash::map::HashMap",
+    "std::collections::hash::set::HashSet",
+    "std::collections::hash::map::IntoIter",
+    "std::collections::hash::set::IntoIter",
+];
+
+/// std datatypes whose last type parameter is an allocator. Only the global allocator is
+/// supported: a user allocator's `deallocate` (run by the drop glue) and `clone` (run by the
+/// container's `clone`) are unbounded user code.
+const STD_ALLOCATOR_PARAM_TYPES: &[&str] = &[
+    "alloc::vec::Vec",
+    "alloc::vec::into_iter::IntoIter",
+    "alloc::collections::vec_deque::VecDeque",
+    "alloc::collections::vec_deque::into_iter::IntoIter",
+    "alloc::collections::linked_list::LinkedList",
+    "alloc::collections::binary_heap::BinaryHeap",
+    "alloc::collections::btree::map::BTreeMap",
+    "alloc::collections::btree::set::BTreeSet",
+    "alloc::rc::Rc",
+    "alloc::rc::Weak",
+    "alloc::sync::Arc",
+    "alloc::sync::Weak",
+];
+
+/// vstd opaque types whose drop glue may drop values not visible in their type arguments
+/// (`JoinHandle` holds a joined thread's result, which may be an erased panic payload)
+const UNTRUSTED_VSTD_OPAQUE: &[&str] = &["vstd::thread::JoinHandle"];
+
+fn is_global_allocator(typ: &Typ) -> bool {
+    match &**typ {
+        TypX::Datatype(Dt::Path(path), _, _) => {
+            crate::ast_util::path_as_friendly_rust_name(path) == "alloc::alloc::Global"
+        }
+        TypX::Decorate(_, _, t) => is_global_allocator(t),
+        _ => false,
+    }
+}
+
 pub(crate) fn is_literal_zero(e: &crate::ast::Expr) -> bool {
     match &e.x {
         ExprX::Const(Constant::Int(i)) => *i == num_bigint::BigInt::from(0),
@@ -57,6 +127,12 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
                 }
             }
         }
+        // a const generic parameter is a value, with no drop glue
+        if let GenericBoundX::ConstTyp(t, _) = &**bound {
+            if let TypX::TypParam(x) = &**t {
+                params.insert(x.clone());
+            }
+        }
     }
     params
 }
@@ -64,23 +140,83 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
 struct DropGlueCheck<'a> {
     datatypes: &'a HashMap<Dt, Datatype>,
     drop_table: &'a HashMap<Dt, (Span, bool)>,
+    /// Datatypes with a `Copy` impl (they have no drop glue)
+    copy_datatypes: &'a HashSet<Dt>,
     alloc_free_params: HashSet<Ident>,
     /// Types already checked, keyed by their debug form (TypX is not Eq)
     visited: HashSet<String>,
+    /// Datatypes currently being expanded, with how many times each is on the stack: a
+    /// non-regular type (`struct N<T>(Option<Box<N<(T, T)>>>)`) keeps re-entering the same
+    /// datatype with ever new arguments, so its field types never repeat; it is rejected
+    on_stack: HashMap<Dt, (Vec<Typ>, usize)>,
+    /// Current nesting depth of the walk (bounded so that the verifier's stack cannot overflow)
+    depth: usize,
 }
+
+/// Maximum nesting depth of the drop-glue walk
+const MAX_DROP_GLUE_DEPTH: usize = 512;
+
+/// How often one datatype may be re-entered (with different arguments) while expanding itself
+const MAX_DROP_GLUE_REENTRY: usize = 8;
+/// Maximum size (number of type nodes) of a type the drop rule examines
+const MAX_DROP_GLUE_TYP_SIZE: usize = 4096;
 
 impl<'a> DropGlueCheck<'a> {
     fn new(
         datatypes: &'a HashMap<Dt, Datatype>,
         drop_table: &'a HashMap<Dt, (Span, bool)>,
+        copy_datatypes: &'a HashSet<Dt>,
         bounds: &GenericBounds,
     ) -> Self {
         DropGlueCheck {
             datatypes,
             drop_table,
+            copy_datatypes,
             alloc_free_params: alloc_free_typ_params(bounds),
             visited: HashSet::new(),
+            on_stack: HashMap::new(),
+            depth: 0,
         }
+    }
+
+    /// Does `dt`'s definition reach `dt` again through its fields (only such a datatype can
+    /// expand forever, e.g. non-regularly; `Option<Option<..>>` re-enters `Option` only through
+    /// its arguments)?
+    fn is_recursive_datatype(&self, dt: &Dt) -> bool {
+        let mut seen: HashSet<Dt> = HashSet::new();
+        let mut work: Vec<Dt> = vec![dt.clone()];
+        while let Some(d) = work.pop() {
+            let Some(datatype) = self.datatypes.get(&d) else { continue };
+            for variant in datatype.x.variants.iter() {
+                for field in variant.fields.iter() {
+                    let found_self =
+                        crate::ast_visitor::typ_visitor_check::<(), _>(&field.a.0, &mut |t| {
+                            if let TypX::Datatype(d2 @ Dt::Path(_), _, _) = &**t {
+                                if d2 == dt {
+                                    return Err(());
+                                }
+                                if seen.insert(d2.clone()) {
+                                    work.push(d2.clone());
+                                }
+                            }
+                            Ok(())
+                        })
+                        .is_err();
+                    if found_self {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// (the type itself is not printed: it may be huge)
+    fn too_deep(span: &Span) -> VirErr {
+        error(
+            span,
+            "cannot bound the allocations of dropping a value here: its drop glue is nested too deeply to check (is a type non-regular?)",
+        )
     }
 
     fn unsupported(&self, span: &Span, typ: &Typ, why: &str) -> VirErr {
@@ -115,13 +251,80 @@ impl<'a> DropGlueCheck<'a> {
             )
             .secondary_span(drop_span)),
             None => match dt {
-                Dt::Path(path) if is_trusted_std_crate(&path.krate) => Ok(()),
+                Dt::Path(path)
+                    if is_trusted_std_crate(&path.krate)
+                        && datatype.x.proxy.is_some()
+                        && TRUSTED_STD_DROPS
+                            .contains(&crate::ast_util::path_as_friendly_rust_name(path).as_str()) =>
+                {
+                    Ok(())
+                }
+                Dt::Path(path) if is_trusted_std_crate(&path.krate) => Err(self.unsupported(
+                    span,
+                    typ,
+                    "its std `Drop` implementation is not known to be free of allocations",
+                )),
                 _ => Err(self.unsupported(span, typ, "its `Drop` implementation is not visible")),
             },
         }
     }
 
     fn check(&mut self, span: &Span, typ: &Typ) -> Result<(), VirErr> {
+        let head = match &**typ {
+            TypX::Datatype(dt @ Dt::Path(_), _, _) if self.is_recursive_datatype(dt) => {
+                Some(dt.clone())
+            }
+            _ => None,
+        };
+        if self.depth >= MAX_DROP_GLUE_DEPTH {
+            return Err(Self::too_deep(span));
+        }
+        // Re-entering a recursive datatype with a type that is part of the enclosing instance
+        // (`List<List<u8>>` inside `List<List<List<u8>>>`) shrinks and is fine; re-entering it with
+        // a type that is not (`N<(T, T)>` inside `N<T>`) is how a non-regular type grows
+        let mut grew = false;
+        if let Some(dt) = &head {
+            let (stack, growth) = self.on_stack.entry(dt.clone()).or_insert((vec![], 0));
+            if let Some(enclosing) = stack.last() {
+                let is_part = crate::ast_visitor::typ_visitor_check::<(), _>(enclosing, &mut |t| {
+                    if crate::ast_util::types_equal(t, typ) { Err(()) } else { Ok(()) }
+                })
+                .is_err();
+                if !is_part {
+                    if *growth >= MAX_DROP_GLUE_REENTRY {
+                        return Err(Self::too_deep(span));
+                    }
+                    *growth += 1;
+                    grew = true;
+                }
+            }
+            stack.push(typ.clone());
+        }
+        self.depth += 1;
+        let r = self.check_inner(span, typ);
+        self.depth -= 1;
+        if let Some(dt) = &head {
+            let (stack, growth) = self.on_stack.get_mut(dt).unwrap();
+            stack.pop();
+            if grew {
+                *growth -= 1;
+            }
+        }
+        r
+    }
+
+    fn check_inner(&mut self, span: &Span, typ: &Typ) -> Result<(), VirErr> {
+        // (a non-regular type can also grow exponentially, `N<(T, T)>`, so bound the size of
+        // what is printed as a key as well as the depth)
+        let mut size = 0usize;
+        let too_big = crate::ast_visitor::typ_visitor_check::<(), _>(typ, &mut |_| {
+            size += 1;
+            if size > MAX_DROP_GLUE_TYP_SIZE { Err(()) } else { Ok(()) }
+        })
+        .is_err();
+        if too_big {
+            return Err(Self::too_deep(span));
+        }
         if !self.visited.insert(format!("{:?}", typ)) {
             return Ok(());
         }
@@ -144,7 +347,16 @@ impl<'a> DropGlueCheck<'a> {
             // Ghost and tracked values do not exist at run time
             TypX::Decorate(TypDecoration::Ghost | TypDecoration::Tracked, _, _) => Ok(()),
             // Dropping these drops the contents (for Rc/Arc, when the last reference goes away)
-            TypX::Decorate(TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc, _, t) => {
+            TypX::Decorate(TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc, arg, t) => {
+                if let Some(arg) = arg {
+                    if !is_global_allocator(&arg.allocator_typ) {
+                        return Err(self.unsupported(
+                            span,
+                            typ,
+                            "custom allocators (`allocator_api`) are not supported yet: only the global allocator is (a custom allocator's `deallocate` and `clone` would need bounds)",
+                        ));
+                    }
+                }
                 self.check(span, t)
             }
             TypX::Boxed(t) => self.check(span, t),
@@ -162,14 +374,64 @@ impl<'a> DropGlueCheck<'a> {
                 }
                 Ok(())
             }
+            // A closure type is also represented as an (opaque) internal datatype; its drop glue
+            // drops its captures, which are collected like for `TypX::AnonymousClosure` below
+            TypX::Datatype(Dt::Path(path), _, _) if crate::def::is_closure_type_path(path) => {
+                Ok(())
+            }
             TypX::Datatype(dt, args, _) => {
                 let Some(datatype) = self.datatypes.get(dt) else {
                     return Err(self.unsupported(span, typ, "its definition is not visible"));
                 };
                 let datatype = datatype.clone();
+                if let Dt::Path(path) = dt {
+                    let name = crate::ast_util::path_as_friendly_rust_name(path);
+                    // a type argument for a parameter bounded by `Allocator` (`HashMap<K, V, S, A>`)
+                    let allocator_param_not_global =
+                        datatype.x.typ_params.iter().zip(args.iter()).any(|((x, _), a)| {
+                            datatype.x.typ_bounds.iter().any(|b| match &**b {
+                                GenericBoundX::Trait(TraitId::Path(tp), targs) => {
+                                    crate::ast_util::path_as_friendly_rust_name(tp)
+                                        == "core::alloc::Allocator"
+                                        && targs.first().is_some_and(
+                                            |t| matches!(&**t, TypX::TypParam(y) if y == x),
+                                        )
+                                }
+                                _ => false,
+                            }) && !is_global_allocator(a)
+                        });
+                    if allocator_param_not_global
+                        || STD_ALLOCATOR_PARAM_TYPES.contains(&name.as_str())
+                            && !args.last().is_some_and(is_global_allocator)
+                    {
+                        return Err(self.unsupported(
+                            span,
+                            typ,
+                            "custom allocators (`allocator_api`) are not supported yet: only the global allocator is (a custom allocator's `deallocate` and `clone` would need bounds)",
+                        ));
+                    }
+                }
                 self.check_datatype_drop(span, typ, dt, &datatype)?;
                 let has_visible_fields = datatype.x.variants.iter().any(|v| !v.fields.is_empty());
-                let trusted_std = matches!(dt, Dt::Path(p) if is_trusted_std_crate(&p.krate));
+                let dt_name = match dt {
+                    Dt::Path(p) => crate::ast_util::path_as_friendly_rust_name(p),
+                    Dt::Tuple(_) => String::new(),
+                };
+                // A std type's contents are trusted to be its type arguments only if vstd (the
+                // audited trusted base) declares it; a user's own `external_type_specification`
+                // of a std type (`LineWriter`, `io::Error`) may hide fields with allocating drops
+                // (a std type is only known through an `external_type_specification`; one with no
+                // proxy at all comes from a crate that merely calls itself std/core/alloc)
+                let trusted_std = matches!(dt, Dt::Path(p) if is_trusted_std_crate(&p.krate))
+                    && datatype.x.proxy.as_ref().is_some_and(|px| {
+                        px.x.is_vstd_path()
+                            || TRUSTED_STD_OPAQUE.contains(&dt_name.as_str())
+                            || TRUSTED_STD_DROPS.contains(&dt_name.as_str())
+                    });
+                // A datatype whose fields are hidden: `external_body`, or one whose variants were
+                // removed by pruning because its fields are not visible from here
+                let opaque = datatype.x.variants.is_empty()
+                    || matches!(datatype.x.transparency, crate::ast::DatatypeTransparency::Never);
                 if has_visible_fields {
                     let substs: HashMap<Ident, Typ> = datatype
                         .x
@@ -184,7 +446,23 @@ impl<'a> DropGlueCheck<'a> {
                             self.check(span, &field_typ)?;
                         }
                     }
-                } else if !trusted_std && datatype.x.destructor {
+                } else if !trusted_std
+                    && (datatype.x.destructor
+                        || (opaque
+                            && !(matches!(dt, Dt::Path(p) if p.is_vstd_path())
+                                && datatype
+                                    .x
+                                    .proxy
+                                    .as_ref()
+                                    .map_or(true, |px| px.x.is_vstd_path())
+                                && !UNTRUSTED_VSTD_OPAQUE.contains(&dt_name.as_str()))
+                            && !self.copy_datatypes.contains(dt)))
+                {
+                    // An opaque (`external_body`) type hides its fields, so its drop glue may run
+                    // a `Drop::drop` of a field type even if it has no `Drop` impl of its own.
+                    // Only a `Copy` type is known to have no drop glue. (vstd's opaque types are
+                    // part of the trusted base, like std's: their contents are their type
+                    // arguments, checked below.)
                     return Err(self.unsupported(span, typ, "its fields are not visible"));
                 }
                 // An opaque container (e.g. Vec<T>) drops values of its type arguments
@@ -226,8 +504,9 @@ impl<'a> DropGlueCheck<'a> {
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
 pub(crate) fn check_drop_glue(ctx: &Ctx, function: &Function) -> Result<(), VirErr> {
     let mut checker = DropGlueCheck::new(
-        &ctx.datatype_map,
+        &ctx.global.alloc_datatypes,
         &ctx.global.drop_impl_alloc_zero,
+        &ctx.global.copy_datatypes,
         &function.x.typ_bounds,
     );
     for param in function.x.params.iter() {
@@ -254,6 +533,31 @@ fn collect_expr_typs(ctx: &Ctx, expr: &crate::ast::Expr) -> Result<Vec<(Span, Ty
         &mut (),
         &mut |_, _, e| {
             typs.borrow_mut().push((e.span.clone(), e.typ.clone()));
+            // A std function used as a value (`opt.map(Vec::clear)`, `let f = Vec::truncate`) may
+            // be called later by code that only sees an `F`; like a direct call, it may drop
+            // values behind its `&mut` parameters, so their referent types count as droppable.
+            let mut t = &e.typ;
+            while let TypX::Decorate(_, _, inner) = &**t {
+                t = inner;
+            }
+            if let TypX::FnDef(fun, typ_args, _) = &**t {
+                if let Some(g) = ctx.func_map.get(fun) {
+                    if g.x.proxy.is_some() {
+                        let substs: HashMap<Ident, Typ> =
+                            g.x.typ_params.iter().cloned().zip(typ_args.iter().cloned()).collect();
+                        for p in g.x.params.iter() {
+                            let pt = crate::sst_util::subst_typ(&substs, &p.x.typ);
+                            let mut pt_inner = &pt;
+                            while let TypX::Decorate(_, _, inner) = &**pt_inner {
+                                pt_inner = inner;
+                            }
+                            if let TypX::MutRef(inner) = &**pt_inner {
+                                typs.borrow_mut().push((e.span.clone(), inner.clone()));
+                            }
+                        }
+                    }
+                }
+            }
             // A std function (one given a specification, which says nothing about drops) that
             // receives `&mut C` may drop values inside `C` (`Vec::clear`, `truncate`,
             // `HashMap::clear`, ...), so the referent's type counts as droppable.
@@ -322,8 +626,9 @@ pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Resu
             ));
         }
         let mut checker = DropGlueCheck::new(
-            &ctx.datatype_map,
+            &ctx.global.alloc_datatypes,
             &ctx.global.drop_impl_alloc_zero,
+            &ctx.global.copy_datatypes,
             &function.x.typ_bounds,
         );
         for (span, typ) in collect_expr_typs(ctx, &closure)? {
@@ -339,6 +644,7 @@ pub(crate) fn check_closures_with_bounds(ctx: &Ctx, function: &Function) -> Resu
 pub(crate) fn check_alloc_free_drop_impls(
     krate: &Krate,
     drop_table: &HashMap<Dt, (Span, bool)>,
+    copy_datatypes: &HashSet<Dt>,
 ) -> Result<(), VirErr> {
     let datatypes: HashMap<Dt, Datatype> =
         krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect();
@@ -347,7 +653,8 @@ pub(crate) fn check_alloc_free_drop_impls(
             continue;
         }
         let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
-        let mut checker = DropGlueCheck::new(&datatypes, drop_table, &imp.x.typ_bounds);
+        let mut checker =
+            DropGlueCheck::new(&datatypes, drop_table, copy_datatypes, &imp.x.typ_bounds);
         checker.check(&imp.span, self_typ).map_err(|e| {
             e.help(
                 "an `AllocFreeDrop` impl is only accepted when dropping the type cannot allocate",
@@ -390,6 +697,74 @@ pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), Vi
         }
     }
     Ok(())
+}
+
+/// An impl's own `allocates` bound becomes the axiom `call_allocates == own`, while its trait
+/// method declaration's bound becomes `requires ==> call_allocates <= decl`. For a verified impl,
+/// `own <= decl` is checked on entry (under the requires); an impl without a verified body
+/// (`external_body`, `assume_specification`) is never checked, so its own bound could contradict
+/// the declaration's and make `false` provable. Such an impl must not state its own bound: it then
+/// has the declaration's bound, which is trusted like the rest of its specification. (A literal
+/// `allocates 0` is allowed: both bounds are clamped at 0, so it cannot exceed the declaration's.)
+pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(), VirErr> {
+    let decl_has_bound: HashSet<&crate::ast::Fun> =
+        krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
+    for f in krate.functions.iter() {
+        let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
+        let Some(own) = &f.x.allocates else { continue };
+        if !decl_has_bound.contains(method) {
+            continue;
+        }
+        // `call_allocates == 0` cannot contradict `call_allocates <= decl`: both bounds are
+        // clamped at 0
+        if is_literal_zero(own) {
+            continue;
+        }
+        if f.x.attrs.is_external_body || f.x.proxy.is_some() {
+            return Err(error(
+                &f.span,
+                format!(
+                    "`{}` implements a trait method that has an `allocates` bound, so without a verified body it cannot state its own bound (remove it to use the trait method's bound)",
+                    crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Datatypes that implement `Copy` (and so have no drop glue)
+pub(crate) fn copy_datatypes(krate: &Krate) -> HashSet<Dt> {
+    let mut set = HashSet::new();
+    for imp in krate.trait_impls.iter() {
+        if !is_copy_trait(&imp.x.trait_path) {
+            continue;
+        }
+        // Only an impl for every instantiation (`impl<A: Copy, ..> Copy for W<A, ..>`, as
+        // `derive(Copy)` produces) shows that every `W<..>` is free of drop glue: an impl for
+        // one instantiation says nothing about the others, and rustc only accepts a generic
+        // impl if the fields are `Copy` whenever the bounds hold. (Values of the type arguments
+        // are checked separately.)
+        let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
+        let TypX::Datatype(dt, args, _) = &**self_typ else { continue };
+        let mut params: HashSet<Ident> = HashSet::new();
+        let fully_generic = args.iter().all(|a| match &**a {
+            TypX::TypParam(x) => params.insert(x.clone()),
+            _ => false,
+        });
+        let only_copy_bounds = imp.x.typ_bounds.iter().all(|b| match &**b {
+            GenericBoundX::Trait(TraitId::Path(path), targs) => {
+                is_copy_trait(path)
+                    && targs.first().is_some_and(|t| matches!(&**t, TypX::TypParam(_)))
+            }
+            GenericBoundX::Trait(TraitId::Sizedness(_), _) => true,
+            _ => false,
+        });
+        if fully_generic && only_copy_bounds {
+            set.insert(dt.clone());
+        }
+    }
+    set
 }
 
 const FMT_TRAITS: [&str; 9] = [
@@ -566,4 +941,200 @@ mod tests {
         assert_eq!(fmt_template_counts(b"\xc0\xc0\x00", 1), None);
         assert_eq!(fmt_template_counts(b"\xc0\x00\x00", 1), None);
     }
+}
+
+/// Does `expr` mention `call_allocates` (the `ClosureAlloc` builtin)?
+pub(crate) fn mentions_call_allocates(expr: &crate::ast::Expr) -> bool {
+    let mut found = false;
+    let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(expr, &mut |_scope, e| {
+        if let ExprX::Call {
+            target:
+                crate::ast::CallTarget::BuiltinSpecFun(crate::ast::BuiltinSpecFun::ClosureAlloc, ..),
+            ..
+        } = &e.x
+        {
+            found = true;
+        }
+        Ok(())
+    });
+    found
+}
+
+/// `forall xs. body` => `forall xs. (g1 && ... && gn) ==> body` (unchanged if there are no guards)
+pub(crate) fn guard_forall_body(
+    expr: &crate::ast::Expr,
+    guards: &Vec<crate::ast::Expr>,
+) -> crate::ast::Expr {
+    if guards.is_empty() {
+        return expr.clone();
+    }
+    match &expr.x {
+        ExprX::Quant(quant, binders, body) => {
+            let guard = crate::ast_util::conjoin(&expr.span, guards);
+            let body = crate::ast_util::mk_implies(&expr.span, &guard, body);
+            expr.new_x(ExprX::Quant(*quant, binders.clone(), body))
+        }
+        _ => panic!("fndef_axiom should be forall"),
+    }
+}
+
+/// `allocated()` is the current function's counter. In a closure's `requires`/`ensures`/
+/// `allocates` it would be read against the enclosing function's counter (where the closure's
+/// specification is assumed), not the closure's own, so it is rejected there.
+pub(crate) fn check_allocated_not_in_closure_specs(function: &Function) -> Result<(), VirErr> {
+    let Some(body) = &function.x.body else { return Ok(()) };
+    let mut specs: Vec<crate::ast::Expr> = Vec::new();
+    crate::ast_visitor::expr_visitor_check::<VirErr, _>(body, &mut |_scope, e| {
+        if let ExprX::NonSpecClosure { requires, ensures, allocates, .. } = &e.x {
+            specs.extend(requires.iter().cloned());
+            specs.extend(ensures.iter().cloned());
+            specs.extend(allocates.iter().cloned());
+        }
+        Ok(())
+    })?;
+    for spec in specs.iter() {
+        crate::ast_visitor::expr_visitor_check::<VirErr, _>(spec, &mut |_scope, e| {
+            if let ExprX::Call {
+                target:
+                    crate::ast::CallTarget::BuiltinSpecFun(crate::ast::BuiltinSpecFun::Allocated, ..),
+                ..
+            } = &e.x
+            {
+                return Err(error(
+                    &e.span,
+                    "`allocated()` cannot be used in a closure's `requires`, `ensures` or `allocates`",
+                ));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// For each datatype with a (visible) `Drop` impl: the impl's span and whether its `drop` is
+/// bounded by `allocates 0`
+pub(crate) fn drop_impl_table(krate: &Krate) -> HashMap<Dt, (Span, bool)> {
+    let mut table: HashMap<Dt, (Span, bool)> = HashMap::new();
+    for f in krate.functions.iter() {
+        if !f.x.attrs.is_drop {
+            continue;
+        }
+        // `Drop` is a foreign trait, so its impl methods may have been demoted to static
+        // functions; identify the datatype from the `&mut self` parameter instead.
+        let self_dt = f.x.params.first().and_then(|p| {
+            let mut t = &p.x.typ;
+            loop {
+                match &**t {
+                    TypX::MutRef(inner) | TypX::Decorate(_, _, inner) => t = inner,
+                    TypX::Datatype(dt, _, _) => return Some(dt.clone()),
+                    _ => return None,
+                }
+            }
+        });
+        if let Some(dt) = self_dt {
+            // `allocates 0` counts only if it was checked (or is trusted by design): a `drop` from
+            // a crate verified without -V alloc-check may say `allocates 0` and still allocate
+            let zero = f.x.allocates.as_ref().is_some_and(|e| is_literal_zero(e))
+                && (f.x.attrs.alloc_checked_crate
+                    || f.x.attrs.is_external_body
+                    || f.x.proxy.is_some());
+            table.insert(dt, (f.span.clone(), zero));
+        }
+    }
+    table
+}
+
+/// -V alloc-check checks that need the whole merged crate, before it is pruned to what this
+/// crate reaches: an impl from an imported crate can be reached through another crate's
+/// generic function (`use_it::<T>` instantiated here) without appearing in the pruned crate.
+/// - every impl of a trait method whose declaration has an `allocates` bound must come from a
+///   crate verified with -V alloc-check (or be `external_body`/`assume_specification`, trusted);
+/// - every `impl AllocFreeDrop` must pass the drop rule.
+pub fn check_merged_krate(krate: &Krate) -> Result<(), VirErr> {
+    let decl_has_bound: HashSet<&crate::ast::Fun> =
+        krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
+    for f in krate.functions.iter() {
+        if f.x.attrs.is_external_body || f.x.proxy.is_some() || f.x.attrs.alloc_checked_crate {
+            continue;
+        }
+        if let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+            if decl_has_bound.contains(method) {
+                return Err(error(
+                    &f.span,
+                    format!(
+                        "`{}` implements a trait method with an `allocates` bound, but its crate was not verified with -V alloc-check, so the bound was not checked",
+                        crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                    ),
+                ));
+            }
+        }
+    }
+    let table = drop_impl_table(krate);
+    let copies = copy_datatypes(krate);
+    check_alloc_free_drop_impls(krate, &table, &copies)
+}
+
+/// For a std function (with a proxy `assume_specification`) that has `&mut` parameters: the type
+/// parameters mentioned in their referent types, as `AllocFreeDrop` bound expressions. The
+/// second result is false if such bounds are needed but `AllocFreeDrop` is not available.
+pub(crate) fn proxy_mut_ref_drop_guards(
+    ctx: &Ctx,
+    function: &Function,
+) -> (Vec<crate::ast::Expr>, bool) {
+    // (a trait method declaration's axiom is only an upper bound that each impl is checked
+    // against; the concern here is a concrete std function whose spec ignores the drops it does)
+    if function.x.proxy.is_none()
+        || matches!(function.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
+    {
+        return (vec![], true);
+    }
+    // (const generic parameters are values, not types with drop glue)
+    let const_params: HashSet<Ident> = function
+        .x
+        .typ_bounds
+        .iter()
+        .filter_map(|b| match &**b {
+            GenericBoundX::ConstTyp(t, _) => match &**t {
+                TypX::TypParam(x) => Some(x.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let mut params: Vec<Ident> = Vec::new();
+    for p in function.x.params.iter() {
+        let mut t = &p.x.typ;
+        while let TypX::Decorate(_, _, inner) = &**t {
+            t = inner;
+        }
+        if let TypX::MutRef(inner) = &**t {
+            let _ = crate::ast_visitor::typ_visitor_check::<(), _>(inner, &mut |ty| {
+                if let TypX::TypParam(x) = &**ty {
+                    if !params.contains(x) && !const_params.contains(x) {
+                        params.push(x.clone());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    if params.is_empty() {
+        return (vec![], true);
+    }
+    let afd = crate::path!(CrateId::Vstd => "alloc_check", "AllocFreeDrop");
+    if !ctx.trait_map.contains_key(&afd) {
+        return (vec![], false);
+    }
+    let bool_typ = std::sync::Arc::new(TypX::Bool);
+    let guards = params
+        .into_iter()
+        .map(|x| {
+            let op = crate::ast::NullaryOpr::TraitBound(
+                TraitId::Path(afd.clone()),
+                std::sync::Arc::new(vec![std::sync::Arc::new(TypX::TypParam(x))]),
+            );
+            crate::ast::SpannedTyped::new(&function.span, &bool_typ, ExprX::NullaryOpr(op))
+        })
+        .collect();
+    (guards, true)
 }
