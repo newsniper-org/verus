@@ -97,12 +97,15 @@ pub(crate) fn fn_call_to_vir<'tcx>(
             return mk_one_vir_arg(bctx, expr.span, &args);
         }
         Some(RustItem::CloneClone) => {
-            // Special case `clone` for standard Rc and Arc types (with the global allocator),
-            // shared references, and unit, where cloning is the identity operation in the SMT
-            // encoding (and allocates nothing).
+            // Special case `clone` for standard Rc and Arc types, shared references, and unit,
+            // where cloning is the identity operation in the SMT encoding (and allocates
+            // nothing). In exec code, an Rc or Arc with an allocator other than the global one
+            // is excluded: its clone also clones the allocator, which is a call that may
+            // allocate, so it goes through the `Clone` specification. Ghost code is not
+            // executed, so there the clone is the identity for every allocator.
             let arg_typ = node_substs[0].expect_ty();
 
-            if is_type_std_rc_or_arc_or_ref(bctx.ctxt.tcx, arg_typ)
+            if is_type_std_rc_or_arc_or_ref(bctx.ctxt.tcx, arg_typ, bctx.in_ghost)
                 || matches!(arg_typ.kind(), TyKind::Tuple(ts) if ts.is_empty())
             {
                 let arg = mk_one_vir_arg(bctx, expr.span, &args)?;

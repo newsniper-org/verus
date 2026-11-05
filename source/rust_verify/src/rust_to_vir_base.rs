@@ -1392,9 +1392,12 @@ pub(crate) fn mid_ty_const_to_vir<'tcx>(
     }
 }
 
+/// (`any_allocator`: also an `Rc`/`Arc` with an allocator other than the global one, whose
+/// `clone` is an identity only where it is not executed, i.e. in ghost code)
 pub(crate) fn is_type_std_rc_or_arc_or_ref<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
+    any_allocator: bool,
 ) -> bool {
     match ty.kind() {
         TyKind::Adt(AdtDef(adt_def_data), args) => {
@@ -1403,7 +1406,8 @@ pub(crate) fn is_type_std_rc_or_arc_or_ref<'tcx>(
                 // Only with the global allocator: `Rc<T, A>::clone` also clones the allocator `A`,
                 // which is a call (and may allocate) for any other `A`, so it goes through the
                 // `Clone` specification instead
-                return args.types().nth(1).map_or(true, |a| is_global_allocator_ty(tcx, a));
+                return any_allocator
+                    || args.types().nth(1).map_or(true, |a| is_global_allocator_ty(tcx, a));
             }
         }
         TyKind::Ref(_, _, Mutability::Not) => {

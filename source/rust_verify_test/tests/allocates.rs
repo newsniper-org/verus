@@ -2741,9 +2741,10 @@ fn alloc_check_imported_drop() {
 }
 
 test_verify_one_file! {
-    // `Rc::clone` is an identity in the encoding only with the global allocator; with another
-    // allocator it is a call of vstd's `Clone` specification (which charges
-    // `allocator_clone_cost::<A>()` and still gives `res == *r`)
+    // In exec code, `Rc::clone` is an identity in the encoding only with the global allocator;
+    // with another allocator it is a call of vstd's `Clone` specification (which charges
+    // `allocator_clone_cost::<A>()` and still gives `res == *r`). In ghost code it is an
+    // identity for every allocator.
     #[test] rc_clone_custom_allocator_goes_through_spec code! {
         use vstd::prelude::*;
         use std::rc::Rc;
@@ -2760,6 +2761,13 @@ test_verify_one_file! {
         fn my_method(r: &Rc<u8, MyA>) { let c = r.clone(); assert(c == *r); }
         fn my_ufcs(r: &Rc<u8, MyA>) { let c = Rc::clone(r); assert(c == *r); }
         fn global_method(r: &Rc<u8>) { let c = r.clone(); assert(c == *r); }
+        // ghost code is not executed: there the clone is the identity for every allocator
+        fn in_proof_block(r: &Rc<u8, MyA>) { proof { let c = r.clone(); assert(c == *r); } }
+        fn ghost_var(r: &Rc<u8, MyA>) { let ghost c = r.clone(); assert(c == *r); }
+        spec fn spec_clone(r: Rc<u8, MyA>) -> Rc<u8, MyA> { r.clone() }
+        proof fn use_spec(r: Rc<u8, MyA>) ensures spec_clone(r) == r { }
+        proof fn proof_ufcs(r: &Rc<u8, MyA>) { let c = Rc::clone(r); assert(c == *r); }
+        proof fn tracked_clone(tracked r: &Rc<u8, MyA>) { let tracked c = r.clone(); }
         }
     } => Ok(())
 }
