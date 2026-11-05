@@ -76,7 +76,7 @@ const TRUSTED_STD_OPAQUE: &[&str] = &[
     "core::cell::Cell",
     "core::cell::RefCell",
     "core::cell::UnsafeCell",
-    "core::cell::OnceCell",
+    "core::cell::once::OnceCell",
     "core::mem::manually_drop::ManuallyDrop",
     "core::marker::PhantomData",
     "alloc::string::String",

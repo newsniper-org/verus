@@ -87,6 +87,9 @@ struct Ctxt {
     fun_revealed_broadcast_map: HashMap<Fun, ReachBroadcastFunction>,
     assert_by_compute: bool,
     assert_by_compute_seq_funs: Vec<Fun>,
+    // -V alloc-check: the `Drop::drop` functions with an `allocates` bound of each datatype (the
+    // drop rule needs them, but nothing calls them)
+    drop_fns: HashMap<Dt, Vec<Fun>>,
 }
 
 #[derive(Default)]
@@ -675,6 +678,11 @@ fn traverse_reachable(ctxt: &Ctxt, state: &mut State) {
                         && is_visible_to_or_true(visibility, &ctxt.module)
                     {
                         reach_function(ctxt, state, fun);
+                    }
+                    if let Some(funs) = ctxt.drop_fns.get(dt) {
+                        for fun in funs {
+                            reach_function(ctxt, state, fun);
+                        }
                     }
                 }
                 ReachedType::SpecFn(arity) => {
@@ -1319,7 +1327,28 @@ pub fn prune_krate_for_module_or_krate(
         }
         assoc_type_impl_map.get_mut(&key).unwrap().push(a.clone());
     }
+    let mut drop_fns: HashMap<Dt, Vec<Fun>> = HashMap::new();
+    for f in krate.functions.iter() {
+        if !f.x.attrs.is_drop || f.x.allocates.is_none() {
+            continue;
+        }
+        let mut t = match f.x.params.first() {
+            Some(p) => &p.x.typ,
+            None => continue,
+        };
+        loop {
+            match &**t {
+                TypX::MutRef(inner) | TypX::Decorate(_, _, inner) => t = inner,
+                TypX::Datatype(dt, _, _) => {
+                    drop_fns.entry(dt.clone()).or_default().push(f.x.name.clone());
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
     let ctxt = Ctxt {
+        drop_fns,
         module: module.clone(),
         function_map,
         reveal_group_map,

@@ -238,7 +238,6 @@ Known limitations, all of which make Verus reject programs (they are not unsound
 * custom allocators;
 * `dyn` values and opaque `impl Trait` values being dropped;
 * projected types in drop glue (for example `Cow`);
-* a drop declared in another crate is not visible;
 * a closure that captures one field of a struct is checked as if it captured the whole struct;
 * unchecked implementations of bounded trait methods anywhere in the program.
 

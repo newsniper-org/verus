@@ -2672,3 +2672,70 @@ test_verify_one_file_with_options! {
         fn drop_handle(h: Handle) allocates 0 { consume(h) }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    // std's `OnceCell` (core::cell::once::OnceCell) only drops its contents
+    #[test] alloc_check_once_cell_drop_ok ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use core::cell::OnceCell;
+        #[verifier::external_type_specification]
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(T)]
+        pub struct ExOnceCell<T>(OnceCell<T>);
+        fn drop_once(c: OnceCell<u8>) allocates 0 { }
+    } => Ok(())
+}
+
+// A `Drop::drop` verified with -V alloc-check in an imported crate is visible to the drop rule
+// (it is kept by pruning even though nothing calls it); one from a crate verified without it is
+// not trusted
+#[test]
+fn alloc_check_imported_drop() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("a.rs"),
+        format!(
+            "{pre}verus!{{ pub struct D {{ pub x: u8 }} impl Drop for D {{ fn drop(&mut self) opens_invariants none no_unwind allocates 0 {{ }} }} pub struct P {{ pub d: D }} }}\n"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("c.rs"),
+        format!("{pre}verus!{{ pub fn f(d: a::D) allocates 0 {{ }} pub fn g(p: a::P) allocates 0 {{ }} }}\n"),
+    )
+    .expect("write");
+    for (checked, expect_ok) in [(true, true), (false, false)] {
+        let mut args = vec!["--crate-type=lib", "a.rs", "--export", "a.vir", "--compile"];
+        if checked {
+            args.extend_from_slice(&["-V", "alloc-check"]);
+        }
+        let a = run_verus_raw(&args, dir);
+        assert!(a.status.success(), "a:\n{}", String::from_utf8_lossy(&a.stderr));
+        let c = run_verus_raw(
+            &[
+                "--crate-type=lib",
+                "c.rs",
+                "-V",
+                "alloc-check",
+                "--import",
+                "a=a.vir",
+                "--extern",
+                "a=liba.rlib",
+            ],
+            dir,
+        );
+        let stderr = String::from_utf8_lossy(&c.stderr);
+        assert_eq!(c.status.success(), expect_ok, "a checked: {}:\n{}", checked, stderr);
+        if !expect_ok {
+            assert!(
+                stderr.contains(
+                    "has an `allocates` bound, but its crate was not verified with -V alloc-check"
+                ),
+                "unexpected:\n{}",
+                stderr
+            );
+        }
+    }
+}

@@ -550,11 +550,13 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
             ));
         }
         // and a dependency may only be trusted as std/core/alloc if it is the toolchain's: the
-        // only crate of that name, loaded from the sysroot (a second one, from wherever, is not
-        // the toolchain's; the sysroot path alone can be chosen with `--sysroot`). (vstd is
+        // only crate of that name, loaded from the toolchain's own sysroot (a second one, from
+        // wherever, is not the toolchain's). (vstd is
         // checked when its .vir is imported: it must have been built as vstd.)
         let canon = |p: &std::path::Path| std::fs::canonicalize(p).ok();
-        let sysroot = canon(ctxtx.tcx.sess.opts.sysroot.path());
+        // (the default sysroot is the toolchain whose rustc Verus is linked with; a `--sysroot`
+        // given on the command line is not trusted)
+        let sysroot = canon(&ctxtx.tcx.sess.opts.sysroot.default);
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for cnum in ctxtx.tcx.crates(()) {
             let dep_name = ctxtx.tcx.crate_name(*cnum).to_string();
@@ -589,7 +591,7 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
                     vec![vir::messages::error(
                         &crate::spans::err_air_span(span),
                         format!(
-                            "-V alloc-check trusts a crate named `{dep_name}` only if it is the toolchain's (from the sysroot); this crate depends on another crate named `{dep_name}`"
+                            "-V alloc-check trusts a crate named `{dep_name}` only if it is the toolchain's (from the sysroot of the rustc that Verus uses, not one given with `--sysroot`); this crate depends on another crate named `{dep_name}`"
                         ),
                     )],
                     None,

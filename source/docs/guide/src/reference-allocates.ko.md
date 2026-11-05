@@ -236,7 +236,6 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * 사용자 정의 할당기
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop
 * drop glue 안의 projection 타입(예: `Cow`)
-* 다른 crate에 선언된 drop이 보이지 않는 경우
 * 구조체의 필드 하나만 캡처하는 클로저를 구조체 전체를 캡처한 것처럼 검사하는 점
 * 프로그램 어디에든 상한 있는 trait 메서드의 검사되지 않은 구현이 있는 경우
 
