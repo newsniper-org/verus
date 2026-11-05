@@ -97,8 +97,9 @@ pub(crate) fn fn_call_to_vir<'tcx>(
             return mk_one_vir_arg(bctx, expr.span, &args);
         }
         Some(RustItem::CloneClone) => {
-            // Special case `clone` for standard Rc and Arc types, shared references, and unit,
-            // where cloning is the identity operation in the SMT encoding.
+            // Special case `clone` for standard Rc and Arc types (with the global allocator),
+            // shared references, and unit, where cloning is the identity operation in the SMT
+            // encoding (and allocates nothing).
             let arg_typ = node_substs[0].expect_ty();
 
             if is_type_std_rc_or_arc_or_ref(bctx.ctxt.tcx, arg_typ)

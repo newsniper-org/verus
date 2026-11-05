@@ -1397,10 +1397,13 @@ pub(crate) fn is_type_std_rc_or_arc_or_ref<'tcx>(
     ty: rustc_middle::ty::Ty<'tcx>,
 ) -> bool {
     match ty.kind() {
-        TyKind::Adt(AdtDef(adt_def_data), _args) => {
+        TyKind::Adt(AdtDef(adt_def_data), args) => {
             let did = adt_def_data.did;
             if let Some(RustItem::Rc | RustItem::Arc) = verus_items::get_rust_item(tcx, did) {
-                return true;
+                // Only with the global allocator: `Rc<T, A>::clone` also clones the allocator `A`,
+                // which is a call (and may allocate) for any other `A`, so it goes through the
+                // `Clone` specification instead
+                return args.types().nth(1).map_or(true, |a| is_global_allocator_ty(tcx, a));
             }
         }
         TyKind::Ref(_, _, Mutability::Not) => {
@@ -1409,6 +1412,19 @@ pub(crate) fn is_type_std_rc_or_arc_or_ref<'tcx>(
         _ => {}
     }
     false
+}
+
+/// Is `ty` std's global allocator `alloc::alloc::Global`?
+fn is_global_allocator_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: rustc_middle::ty::Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, _) => {
+            let did = adt.did();
+            tcx.crate_name(did.krate).as_str() == "alloc"
+                && tcx.def_path_str(did).ends_with("::Global")
+                && tcx.item_name(did).as_str() == "Global"
+        }
+        _ => false,
+    }
 }
 
 // TODO remove if unused

@@ -2739,3 +2739,27 @@ fn alloc_check_imported_drop() {
         }
     }
 }
+
+test_verify_one_file! {
+    // `Rc::clone` is an identity in the encoding only with the global allocator; with another
+    // allocator it is a call of vstd's `Clone` specification (which charges
+    // `allocator_clone_cost::<A>()` and still gives `res == *r`)
+    #[test] rc_clone_custom_allocator_goes_through_spec code! {
+        use vstd::prelude::*;
+        use std::rc::Rc;
+        use std::alloc::{Allocator, AllocatorClone, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        impl Clone for MyA { fn clone(&self) -> Self { MyA } }
+        unsafe impl Allocator for MyA {
+            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
+            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
+        }
+        unsafe impl AllocatorClone for MyA {}
+        verus! {
+        pub struct MyA;
+        fn my_method(r: &Rc<u8, MyA>) { let c = r.clone(); assert(c == *r); }
+        fn my_ufcs(r: &Rc<u8, MyA>) { let c = Rc::clone(r); assert(c == *r); }
+        fn global_method(r: &Rc<u8>) { let c = r.clone(); assert(c == *r); }
+        }
+    } => Ok(())
+}
