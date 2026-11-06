@@ -178,6 +178,44 @@ fn loop_allocs(n: usize) -> (r: Vec<Box<usize>>)
     v
 }
 
+// std's growth policy as vstd states it (`vec_amortized_cap`, std 1.100): the verified
+// capacities are compared with the compiled program's below
+fn cap_after_push_u8() -> (c: usize)
+    ensures
+        c == 8,
+    allocates 1
+{
+    let mut v: Vec<u8> = Vec::new();
+    v.push(1);
+    v.capacity()
+}
+
+fn cap_after_pushes_u64() -> (c: usize)
+    ensures
+        c == 8,
+    allocates 2
+{
+    let mut v: Vec<u64> = Vec::new();
+    v.push(1);
+    assert(v.capacity() == 4);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    v.capacity()
+}
+
+fn cap_after_reserve_u32() -> (c: usize)
+    ensures
+        c == 10,
+    allocates 2
+{
+    let mut v: Vec<u32> = Vec::new();
+    v.push(1);
+    v.reserve(9);
+    v.capacity()
+}
+
 fn main() {
 }
 
@@ -200,6 +238,9 @@ fn run_cases() {
     measure("hash_insert_lookup", 2, || hash_insert_lookup());
     measure("closure_bounded", 1, || closure_bounded());
     measure("loop_allocs", 1 + 8, || loop_allocs(8));
+    println!("CAP-CASE cap_after_push_u8 {} 8", cap_after_push_u8());
+    println!("CAP-CASE cap_after_pushes_u64 {} 8", cap_after_pushes_u64());
+    println!("CAP-CASE cap_after_reserve_u32 {} 10", cap_after_reserve_u32());
 }
 "#;
 
@@ -227,7 +268,18 @@ fn run_at(opt_level: &str) {
     assert!(run.status.success(), "cases failed:\n{}", String::from_utf8_lossy(&run.stderr));
     let stdout = String::from_utf8_lossy(&run.stdout);
     let mut n = 0;
+    let mut caps = 0;
     for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("CAP-CASE ") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            assert_eq!(
+                parts[1], parts[2],
+                "{} (opt-level={}): capacity {}, but vstd's growth policy says {} (did std's `RawVec` growth change?)",
+                parts[0], opt_level, parts[1], parts[2]
+            );
+            caps += 1;
+            continue;
+        }
         let Some(rest) = line.strip_prefix("ALLOC-CASE ") else { continue };
         let parts: Vec<&str> = rest.split_whitespace().collect();
         let (name, observed, bound): (&str, usize, usize) =
@@ -243,6 +295,7 @@ fn run_at(opt_level: &str) {
         n += 1;
     }
     assert_eq!(n, 13, "expected 13 cases, got:\n{}", stdout);
+    assert_eq!(caps, 3, "expected 3 capacity cases, got:\n{}", stdout);
 }
 
 #[test]

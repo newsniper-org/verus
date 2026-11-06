@@ -1,6 +1,6 @@
 use super::super::prelude::*;
 
-use super::rust_1_100::{allocator_allocate_cost, allocator_clone_cost};
+use super::rust_1_100::{allocator_clone_cost, allocator_max_cost};
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::sync::Arc;
@@ -71,9 +71,7 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::
     ensures
         cloned::<T>(**b, *res),
     allocates
-        allocator_allocate_cost::<A>() + call_allocates(T::clone, (&**b,)) + allocator_clone_cost::<
-            A,
-        >(),
+        allocator_max_cost::<A>() + call_allocates(T::clone, (&**b,)) + allocator_clone_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>) -> (result: Result<

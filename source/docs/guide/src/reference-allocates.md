@@ -144,10 +144,9 @@ drop. For each of these types:
 ### Custom allocators
 
 A container with an allocator other than the global one (`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>`,
-...) charges each allocation `allocator_allocate_cost::<A>()`
-(`vstd::std_specs::rust_1_100`). Allocations are counted at the leaves: a call to the global
-or the system allocator is 1. A custom allocator gets its cost from the unsafe marker trait
-`vstd::alloc_check::BoundedAllocator`:
+...) charges each allocation the cost of the allocator call it makes. Allocations are counted at
+the leaves: a call to the global or the system allocator is 1. A custom allocator gets its costs
+from the unsafe marker trait `vstd::alloc_check::BoundedAllocator`:
 
 ```rust
 use std::alloc::{Allocator, AllocError, Global, Layout};
@@ -173,7 +172,7 @@ unsafe impl Allocator for Fwd {
 unsafe impl AllocFreeDrop for Fwd {}
 
 unsafe impl BoundedAllocator for Fwd {
-    open spec fn allocate_cost() -> int { 1 }
+    open spec fn max_cost() -> int { 1 }
 }
 
 fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
@@ -183,11 +182,51 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 }
 ```
 
-The `Allocator` declaration bounds `deallocate` by `allocates 0` and each of `allocate`,
-`allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by the allocator's cost. Verus verifies the
-impl against these bounds. The methods that the impl does not define run std's default bodies,
-and each of those calls `allocate` or `allocate_zeroed` once. An arena that hands out memory it
-already holds can have cost 0, and then using a container with it allocates nothing.
+The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
+`allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.
+`max_cost()` is an upper bound for every call. The per-call costs `allocate_cost(&self, layout)`
+(also for `allocate_zeroed`), `grow_cost(&self, ptr, old_layout, new_layout)`,
+`grow_zeroed_cost` and `shrink_cost` may depend on the allocator's value and on the arguments.
+By default `allocate_cost` is `max_cost()`, and the others are `allocate_cost` of the new layout.
+A per-call cost above `max_cost()` is cut down to it. Verus verifies the impl against these
+bounds. The methods that the impl does not define run std's default bodies, and each of those
+calls `allocate` or `allocate_zeroed` once with the new layout. So the marker may define
+`grow_cost`, `grow_zeroed_cost` or `shrink_cost` only if the impl defines `grow`, `grow_zeroed` or
+`shrink`.
+
+`Vec<T, A>` and `Box<T, A>` charge the cost of the very call they make. A `Vec::push` that grows
+is charged `grow_cost` with the vector's allocator (`spec_vec_allocator`), its buffer pointer, the
+layout of its old capacity, and the layout of the capacity that std's growth policy picks
+(`vec_amortized_cap`, the policy of std 1.100). After the growth the vector has exactly that
+capacity, and its allocator does not change. An allocator whose cost depends on its
+configuration or on the request size can therefore give exact bounds:
+
+```rust
+pub struct Chunked { pub limit: usize }
+
+unsafe impl BoundedAllocator for Chunked {
+    open spec fn max_cost() -> int { 1 }
+
+    open spec fn allocate_cost(&self, layout: Layout) -> int {
+        if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
+    }
+}
+
+fn push_fits(v: &mut Vec<u64, Chunked>)
+    requires
+        spec_vec_allocator(&*old(v)).limit == 256,
+        old(v)@.len() == 8,
+        spec_vec_capacity(&*old(v)) == 8,
+    allocates 0
+{
+    v.push(1); // grows to 16 elements, 128 bytes
+}
+```
+
+`VecDeque<T, A>`, `HashMap<K, V, S, A>`, `Rc::map` and `Arc::map` charge `allocator_max_cost::<A>()`
+instead, because vstd does not name the arguments of their allocator calls. An arena that hands
+out memory it already holds can have cost 0, and then using a container with it allocates
+nothing.
 
 * The marker impl is accepted only if the allocator's `Allocator` impl is one that Verus checks
   (inside `verus!`). Every marker impl must also be one that Verus checks.
@@ -199,8 +238,8 @@ already holds can have cost 0, and then using a container with it allocates noth
 * Cloning a container (and `split_off`) also clones its allocator, at the cost
   `allocator_clone_cost::<A>()`. That cost is 0 for the global allocator and for references.
   For other allocators it is uninterpreted.
-* The marker gives one cost per type. A bound that depends on the allocator's state cannot be
-  expressed.
+* A cost cannot depend on the allocator's mutable state (behind `&self`, which the methods take),
+  only on its value and the arguments.
 
 ## Callbacks, closures and traits
 

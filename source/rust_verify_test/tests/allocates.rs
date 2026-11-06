@@ -2695,13 +2695,46 @@ test_verify_one_file_with_options! {
         unsafe impl AllocFreeDrop for Fwd {}
 
         unsafe impl BoundedAllocator for Fwd {
-            open spec fn allocate_cost() -> int { 1 }
+            open spec fn max_cost() -> int { 1 }
         }
 
         fn push_one_fwd(v: &mut Vec<u64, Fwd>, x: u64)
             allocates 1
         {
             v.push(x);
+        }
+
+        use vstd::std_specs::rust_1_100::spec_layout_size;
+        use vstd::std_specs::vec::{spec_vec_allocator, spec_vec_capacity};
+
+        pub struct Chunked { pub limit: usize }
+
+        unsafe impl Allocator for Chunked {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                if layout.size() <= self.limit { Err(AllocError) } else { Global.allocate(layout) }
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
+        }
+
+        unsafe impl AllocFreeDrop for Chunked {}
+
+        unsafe impl BoundedAllocator for Chunked {
+            open spec fn max_cost() -> int { 1 }
+
+            open spec fn allocate_cost(&self, layout: Layout) -> int {
+                if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
+            }
+        }
+
+        fn push_fits(v: &mut Vec<u64, Chunked>)
+            requires
+                spec_vec_allocator(&*old(v)).limit == 256,
+                old(v)@.len() == 8,
+                spec_vec_capacity(&*old(v)) == 8,
+            allocates 0
+        {
+            v.push(1); // grows to 16 elements, 128 bytes
         }
     } => Ok(())
 }

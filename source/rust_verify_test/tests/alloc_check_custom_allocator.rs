@@ -12,7 +12,7 @@ use common::*;
 const ALLOCATORS: &str = verus_code_str! {
     use vstd::prelude::*;
     use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
-    use vstd::std_specs::rust_1_100::allocator_allocate_cost;
+    use vstd::std_specs::rust_1_100::allocator_max_cost;
     use std::alloc::{Allocator, AllocError, Global, Layout};
     use std::ptr::NonNull;
 
@@ -35,7 +35,7 @@ const ALLOCATORS: &str = verus_code_str! {
     unsafe impl AllocFreeDrop for Fwd {}
 
     unsafe impl BoundedAllocator for Fwd {
-        open spec fn allocate_cost() -> int { 1 }
+        open spec fn max_cost() -> int { 1 }
     }
 
     pub struct Arena;
@@ -56,7 +56,7 @@ const ALLOCATORS: &str = verus_code_str! {
     unsafe impl AllocFreeDrop for Arena {}
 
     unsafe impl BoundedAllocator for Arena {
-        open spec fn allocate_cost() -> int { 0 }
+        open spec fn max_cost() -> int { 0 }
     }
 };
 
@@ -84,7 +84,7 @@ test_verify_one_file_with_options! {
         }
 
         fn push_generic<A: Allocator + BoundedAllocator>(v: &mut Vec<u8, A>)
-            allocates allocator_allocate_cost::<A>()
+            allocates allocator_max_cost::<A>()
         {
             v.push(1);
         }
@@ -192,7 +192,7 @@ test_verify_one_file_with_options! {
         }
         unsafe impl vstd::alloc_check::AllocFreeDrop for Evil {}
         unsafe impl vstd::alloc_check::BoundedAllocator for Evil {
-            open spec fn allocate_cost() -> int { 0 }
+            open spec fn max_cost() -> int { 0 }
         }
         fn drop_it(v: Vec<u8, Evil>) allocates 0 { }
     } => Err(err) => assert_vir_error_msg(err, "needs its `core::alloc::Allocator` impl to be checked by Verus")
@@ -214,7 +214,7 @@ test_verify_one_file_with_options! {
         }
         unsafe impl vstd::alloc_check::AllocFreeDrop for Two {}
         unsafe impl vstd::alloc_check::BoundedAllocator for Two {
-            open spec fn allocate_cost() -> int { 1 }
+            open spec fn max_cost() -> int { 1 }
         }
     } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
 }
@@ -240,7 +240,7 @@ test_verify_one_file_with_options! {
     // a negative cost is clamped at 0 (it does not contradict the costs being nonnegative)
     #[test] negative_marker_cost_is_clamped ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
-        use vstd::std_specs::rust_1_100::allocator_allocate_cost;
+        use vstd::std_specs::rust_1_100::allocator_max_cost;
         use std::alloc::{Allocator, AllocError, Layout};
         use std::ptr::NonNull;
         pub struct Neg;
@@ -252,10 +252,10 @@ test_verify_one_file_with_options! {
         }
         unsafe impl vstd::alloc_check::AllocFreeDrop for Neg {}
         unsafe impl vstd::alloc_check::BoundedAllocator for Neg {
-            open spec fn allocate_cost() -> int { -1 }
+            open spec fn max_cost() -> int { -1 }
         }
         proof fn p() {
-            assert(allocator_allocate_cost::<Neg>() == 0);
+            assert(allocator_max_cost::<Neg>() == 0);
             assert(false); // FAILS
         }
     } => Err(err) => assert_one_fails(err)
@@ -278,4 +278,135 @@ test_verify_one_file_with_options! {
             v.clone()
         }
     } => Err(err) => assert_one_fails(err)
+}
+
+/// An allocator whose cost depends on its value (`limit`) and on the requested layout: requests
+/// of at most `limit` bytes are refused without calling the global allocator (standing in for a
+/// preallocated chunk), larger ones go to the global allocator
+const CHUNKED: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
+    use vstd::std_specs::rust_1_100::spec_layout_size;
+    use vstd::std_specs::vec::{spec_vec_allocator, spec_vec_capacity};
+    use std::alloc::{Allocator, AllocError, Global, Layout};
+    use std::ptr::NonNull;
+
+    pub struct Chunked { pub limit: usize }
+
+    unsafe impl Allocator for Chunked {
+        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+            if layout.size() <= self.limit { Err(AllocError) } else { Global.allocate(layout) }
+        }
+
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
+    }
+
+    unsafe impl AllocFreeDrop for Chunked {}
+
+    unsafe impl BoundedAllocator for Chunked {
+        open spec fn max_cost() -> int { 1 }
+
+        open spec fn allocate_cost(&self, layout: Layout) -> int {
+            if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
+        }
+    }
+};
+
+test_verify_one_file_with_options! {
+    // a full vector of 8 `u64`s grows to 16 (`grow`, std's default: `allocate` of 128 bytes)
+    #[test] cost_depends_on_allocator_and_layout ["vstd", "-V alloc-check"] => CHUNKED.to_string() + verus_code_str! {
+        fn push_fits(v: &mut Vec<u64, Chunked>)
+            requires
+                spec_vec_allocator(&*old(v)).limit == 256,
+                old(v)@.len() == 8,
+                spec_vec_capacity(&*old(v)) == 8,
+            allocates 0
+        {
+            v.push(1);
+        }
+
+        fn push_twice(v: &mut Vec<u64, Chunked>)
+            requires
+                spec_vec_allocator(&*old(v)).limit == 256,
+                old(v)@.len() == 8,
+                spec_vec_capacity(&*old(v)) == 8,
+            allocates 0
+        {
+            v.push(1);
+            // capacity 16 now (std's policy), and the allocator is the same
+            v.push(2);
+        }
+
+        fn push_too_big(v: &mut Vec<u64, Chunked>)
+            requires
+                spec_vec_allocator(&*old(v)).limit == 64,
+                old(v)@.len() == 8,
+                spec_vec_capacity(&*old(v)) == 8,
+            allocates 0 // FAILS
+        {
+            v.push(1);
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] new_in_with_capacity_in_cost ["vstd", "-V alloc-check"] => CHUNKED.to_string() + verus_code_str! {
+        fn small() -> (n: usize)
+            allocates 0
+        {
+            let v: Vec<u64, Chunked> = Vec::with_capacity_in(16, Chunked { limit: 128 });
+            let b = Box::new_in(7u64, Chunked { limit: 8 });
+            v.capacity()
+        }
+
+        fn large() -> (n: usize)
+            allocates 0 // FAILS
+        {
+            let v: Vec<u64, Chunked> = Vec::with_capacity_in(17, Chunked { limit: 128 });
+            v.capacity()
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    // std's default `grow` is not verified, so its cost is the default one
+    #[test] marker_grow_cost_needs_grow ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        pub struct G;
+        unsafe impl Allocator for G {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                Global.allocate(layout)
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
+        }
+        unsafe impl vstd::alloc_check::AllocFreeDrop for G {}
+        unsafe impl vstd::alloc_check::BoundedAllocator for G {
+            open spec fn max_cost() -> int { 1 }
+            open spec fn grow_cost(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> int { 0 }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "defines `grow_cost`, but its `Allocator` impl does not define `grow`")
+}
+
+test_verify_one_file_with_options! {
+    // a cost above `max_cost` is cut down to it, so the impl must stay within `max_cost`
+    #[test] per_call_cost_cut_down_to_max ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        pub struct Two;
+        unsafe impl Allocator for Two {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                let a = Global.allocate(layout);
+                Global.allocate(layout)
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
+        }
+        unsafe impl vstd::alloc_check::AllocFreeDrop for Two {}
+        unsafe impl vstd::alloc_check::BoundedAllocator for Two {
+            open spec fn max_cost() -> int { 1 }
+            open spec fn allocate_cost(&self, layout: Layout) -> int { 2 }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
 }

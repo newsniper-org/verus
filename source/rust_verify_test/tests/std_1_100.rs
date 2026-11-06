@@ -78,11 +78,22 @@ test_verify_one_file_with_options! {
         {
             (Rc::map(r, len_of), Arc::map(a, len_of))
         }
-        fn h(b: Box<u64>) -> (r: Box<u64>)
+        // the same layout: the allocation is reused
+        fn same_layout(b: Box<u64>) -> (r: Box<u64>)
             requires *b < 1000,
-            allocates 0 // FAILS
+            allocates 0
         {
             Box::map(b, double)
+        }
+        fn widen(x: u64) -> (r: u128)
+            allocates 0
+        {
+            x as u128
+        }
+        fn h(b: Box<u64>) -> (r: Box<u128>)
+            allocates 0 // FAILS
+        {
+            Box::map(b, widen)
         }
     } => Err(err) => assert_one_fails(err)
 }

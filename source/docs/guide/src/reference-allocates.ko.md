@@ -139,9 +139,9 @@ reallocate(grow·shrink)입니다. deallocate는 세지 않습니다.
 ### 사용자 정의 할당기
 
 전역 할당기가 아닌 할당기를 쓰는 컨테이너(`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>` 등)는 할당 한 번마다
-`allocator_allocate_cost::<A>()`(`vstd::std_specs::rust_1_100`)를 청구합니다. 할당은 말단에서 셉니다.
-전역 할당기나 시스템 할당기를 한 번 호출하면 1입니다. 사용자 정의 할당기의 비용은 unsafe 표시 trait
-`vstd::alloc_check::BoundedAllocator`로 정합니다.
+그때 하는 할당기 호출의 비용을 청구합니다. 할당은 말단에서 셉니다. 전역 할당기나 시스템 할당기를 한 번
+호출하면 1입니다. 사용자 정의 할당기의 비용은 unsafe 표시 trait `vstd::alloc_check::BoundedAllocator`로
+정합니다.
 
 ```rust
 use std::alloc::{Allocator, AllocError, Global, Layout};
@@ -167,7 +167,7 @@ unsafe impl Allocator for Fwd {
 unsafe impl AllocFreeDrop for Fwd {}
 
 unsafe impl BoundedAllocator for Fwd {
-    open spec fn allocate_cost() -> int { 1 }
+    open spec fn max_cost() -> int { 1 }
 }
 
 fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
@@ -177,11 +177,47 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 }
 ```
 
-`Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로, `allocate`, `allocate_zeroed`, `grow`,
-`grow_zeroed`, `shrink` 각각의 상한을 그 할당기의 비용으로 둡니다. Verus는 impl을 이 상한에 대해 검증합니다.
-impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데, 그 본문은 각각 `allocate`나 `allocate_zeroed`를
-한 번 호출합니다. 이미 가진 메모리를 나눠 주는 arena는 비용을 0으로 둘 수 있고, 그러면 그 arena를 쓰는
-컨테이너는 아무것도 할당하지 않습니다.
+`Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
+`grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의
+상한입니다. 호출 한 번의 비용인 `allocate_cost(&self, layout)`(`allocate_zeroed`에도 씀),
+`grow_cost(&self, ptr, old_layout, new_layout)`, `grow_zeroed_cost`, `shrink_cost`는 할당기의 값과 인자에
+따라 달라도 됩니다. 기본값은 `allocate_cost`가 `max_cost()`이고, 나머지는 새 layout의 `allocate_cost`입니다.
+`max_cost()`를 넘는 호출 비용은 `max_cost()`로 깎습니다. Verus는 impl을 이 상한에 대해 검증합니다.
+impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데, 그 본문은 각각 새 layout으로 `allocate`나
+`allocate_zeroed`를 한 번 호출합니다. 그래서 표시 trait은 impl이 `grow`, `grow_zeroed`, `shrink`를 정의할
+때만 `grow_cost`, `grow_zeroed_cost`, `shrink_cost`를 정의할 수 있습니다.
+
+`Vec<T, A>`와 `Box<T, A>`는 실제로 하는 호출의 비용을 청구합니다. 성장하는 `Vec::push`에는 벡터의
+할당기(`spec_vec_allocator`), 버퍼 포인터, 이전 capacity의 layout, 그리고 std의 성장 정책이 고르는
+capacity(`vec_amortized_cap`, std 1.100의 정책)의 layout으로 계산한 `grow_cost`가 청구됩니다. 성장한 뒤
+벡터의 capacity는 정확히 그 값이고, 할당기는 바뀌지 않습니다. 그래서 설정이나 요청 크기에 따라 비용이
+달라지는 할당기도 정확한 상한을 줄 수 있습니다.
+
+```rust
+pub struct Chunked { pub limit: usize }
+
+unsafe impl BoundedAllocator for Chunked {
+    open spec fn max_cost() -> int { 1 }
+
+    open spec fn allocate_cost(&self, layout: Layout) -> int {
+        if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
+    }
+}
+
+fn push_fits(v: &mut Vec<u64, Chunked>)
+    requires
+        spec_vec_allocator(&*old(v)).limit == 256,
+        old(v)@.len() == 8,
+        spec_vec_capacity(&*old(v)) == 8,
+    allocates 0
+{
+    v.push(1); // 16개, 128바이트로 성장
+}
+```
+
+`VecDeque<T, A>`, `HashMap<K, V, S, A>`, `Rc::map`, `Arc::map`은 할당기 호출의 인자를 vstd가 이름 붙이지
+않으므로 대신 `allocator_max_cost::<A>()`를 청구합니다. 이미 가진 메모리를 나눠 주는 arena는 비용을
+0으로 둘 수 있고, 그러면 그 arena를 쓰는 컨테이너는 아무것도 할당하지 않습니다.
 
 * 할당기의 `Allocator` impl이 Verus가 검사하는 것(`verus!` 안)일 때만 표시 impl을 받습니다.
   표시 impl도 모두 Verus가 검사하는 것이어야 합니다.
@@ -191,7 +227,8 @@ impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데
   `BoundedAllocator`의 supertrait이므로, 할당기 자체를 drop할 때도 할당하면 안 됩니다.
 * 컨테이너를 clone하면(`split_off`도) 할당기도 clone하며, 그 비용은 `allocator_clone_cost::<A>()`입니다.
   전역 할당기와 참조에서는 0이고, 다른 할당기에서는 해석되지 않는 항입니다.
-* 표시 trait은 타입마다 비용 하나를 줍니다. 할당기의 상태에 따라 달라지는 상한은 표현할 수 없습니다.
+* 비용은 할당기의 값과 인자에만 의존할 수 있습니다. 메서드가 받는 `&self` 뒤의 가변 상태에는 의존할 수
+  없습니다.
 
 ## 콜백, 클로저, trait
 

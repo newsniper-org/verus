@@ -1075,18 +1075,19 @@ pub(crate) fn add_bounded_allocator_edges(
 /// Marker rule: `unsafe impl BoundedAllocator for X` is accepted only if `X`'s `Allocator` impl
 /// is one that Verus checks: its `allocate` and `deallocate` (the methods without a default) are
 /// in the crate, so they were verified against the bounds of the `Allocator` declaration
-/// (`deallocate` allocates nothing, the others at most `allocator_allocate_cost::<X>()`, which the
-/// marker defines), here or, for an imported crate, with -V alloc-check
-/// (`check_imported_bounds_were_checked`). The methods it does not define run std's default
-/// bodies, each of which calls one of `allocate`/`allocate_zeroed` once and `deallocate` at most
-/// once (std 1.100 `core/src/alloc/mod.rs`), so they stay within the same bounds.
+/// (`deallocate` allocates nothing, the others at most the costs that the marker defines), here
+/// or, for an imported crate, with -V alloc-check (`check_imported_bounds_were_checked`). The
+/// methods it does not define run std's default bodies, each of which calls one of
+/// `allocate`/`allocate_zeroed` once with the new layout and `deallocate` at most once (std 1.100
+/// `core/src/alloc/mod.rs`), so they stay within the marker's default costs, which the marker
+/// may then not replace.
 /// (vstd's impls, for the std allocators and for references, are trusted.)
 pub(crate) fn check_bounded_allocator_impls(krate: &Krate) -> Result<(), VirErr> {
     for imp in krate.trait_impls.iter() {
         if !is_bounded_allocator_trait(&imp.x.trait_path) || imp.x.impl_path.is_vstd_path() {
             continue;
         }
-        // (an impl outside `verus!` is imported without its `allocate_cost`)
+        // (an impl outside `verus!` is imported without its spec functions)
         if imp.x.auto_imported {
             return Err(error(
                 &imp.span,
@@ -1101,23 +1102,49 @@ pub(crate) fn check_bounded_allocator_impls(krate: &Krate) -> Result<(), VirErr>
                     .first()
                     .is_some_and(|t| crate::ast_util::types_equal(t, self_typ))
         });
-        let has_method = |name: &str| {
-            alloc_impl.is_some_and(|ai| {
-                krate.functions.iter().any(|f| match &f.x.kind {
-                    crate::ast::FunctionKind::TraitMethodImpl { method, impl_path, .. } => {
-                        impl_path == &ai.x.impl_path
-                            && matches!(method.path.last_segment(), crate::ast::Segment::V(x, _) if x.as_str() == name)
-                    }
-                    _ => false,
-                })
+        // (a method that an impl does not define may appear inheriting the trait's default
+        // body; that is not a definition of the impl's own)
+        let defines = |impl_path: &Path, name: &str| {
+            krate.functions.iter().any(|f| match &f.x.kind {
+                crate::ast::FunctionKind::TraitMethodImpl {
+                    method,
+                    impl_path: p,
+                    inherit_body_from: None,
+                    ..
+                } => {
+                    p == impl_path
+                        && matches!(method.path.last_segment(), crate::ast::Segment::V(x, _) if x.as_str() == name)
+                }
+                _ => false,
             })
         };
+        let has_method = |name: &str| alloc_impl.is_some_and(|ai| defines(&ai.x.impl_path, name));
         if !has_method("allocate") || !has_method("deallocate") {
             let msg = format!(
                 "-V alloc-check: `BoundedAllocator` for `{}` needs its `core::alloc::Allocator` impl to be checked by Verus (inside `verus!`, for the same type written the same way), but Verus does not see that impl's `allocate` and `deallocate`",
                 crate::ast_util::typ_to_diagnostic_str(self_typ)
             );
             return Err(error(&imp.span, msg));
+        }
+        // A cost other than the default (`allocate_cost` of the new layout) is only for a method
+        // that the `Allocator` impl defines: std's default bodies are not verified, and each makes
+        // one `allocate` or `allocate_zeroed` with the new layout
+        for (cost, method) in
+            [("grow_cost", "grow"), ("grow_zeroed_cost", "grow_zeroed"), ("shrink_cost", "shrink")]
+        {
+            if defines(&imp.x.impl_path, cost) && !has_method(method) {
+                return Err(error(
+                    &imp.span,
+                    format!(
+                        "-V alloc-check: `BoundedAllocator` for `{}` defines `{}`, but its `Allocator` impl does not define `{}` (std's default `{}` costs `allocate_cost` of the new layout, which is the default `{}`)",
+                        crate::ast_util::typ_to_diagnostic_str(self_typ),
+                        cost,
+                        method,
+                        method,
+                        cost
+                    ),
+                ));
+            }
         }
     }
     Ok(())
