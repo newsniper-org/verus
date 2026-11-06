@@ -33,12 +33,12 @@ use rustc_hir::{self as hir, BindingMode, ByRef, HirId, ItemLocalId, Node, find_
 use rustc_index::bit_set::GrowableBitSet;
 use rustc_index::{Idx, IndexSlice, IndexVec};
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
+use rustc_lint_defs as lint;
 use rustc_middle::hir::place::PlaceBase as HirPlaceBase;
 use rustc_middle::middle::region;
 use rustc_middle::mir::*;
 use rustc_middle::thir::{self, ExprId, LocalVarId, Param, ParamId, PatKind, Thir};
 use rustc_middle::ty::{self, ScalarInt, Ty, TyCtxt, TypeVisitableExt, TypingMode};
-use rustc_lint_defs as lint;
 use rustc_span::{Span, Symbol, bug, span_bug};
 
 use crate::builder::expr::as_place::PlaceBuilder;

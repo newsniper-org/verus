@@ -131,6 +131,12 @@ const STD_ALLOCATOR_PARAM_TYPES: &[&str] = &[
 /// (`JoinHandle` holds a joined thread's result, which may be an erased panic payload)
 const UNTRUSTED_VSTD_OPAQUE: &[&str] = &["vstd::thread::JoinHandle"];
 
+/// std types that vstd declares but whose drop is not trusted: dropping them runs user code.
+/// (Every other std type that vstd declares is trusted to drop only its contents, its type
+/// arguments: a type vstd adds whose `Drop` runs user code or allocates must be listed here, or
+/// be in neither of the lists above.)
+const UNTRUSTED_STD_OPAQUE: &[&str] = &["core::mem::drop_guard::DropGuard"];
+
 fn is_global_allocator(typ: &Typ) -> bool {
     match &**typ {
         TypX::Datatype(Dt::Path(path), _, _) => {
@@ -597,6 +603,7 @@ impl<'a> DropGlueCheck<'a> {
                 // (a std type is only known through an `external_type_specification`; one with no
                 // proxy at all comes from a crate that merely calls itself std/core/alloc)
                 let trusted_std = matches!(dt, Dt::Path(p) if is_trusted_std_crate(&p.krate))
+                    && !UNTRUSTED_STD_OPAQUE.contains(&dt_name.as_str())
                     && datatype.x.proxy.as_ref().is_some_and(|px| {
                         px.x.is_vstd_path()
                             || TRUSTED_STD_OPAQUE.contains(&dt_name.as_str())

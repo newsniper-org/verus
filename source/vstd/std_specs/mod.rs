@@ -41,6 +41,9 @@ pub mod smart_ptrs;
 
 pub mod nonzero;
 
+/// std items stabilized in Rust 1.100.0
+pub mod rust_1_100;
+
 // This struct is a hack that exists purely to create
 // a rustdoc page dedicated to 'assume_specification' specs
 pub struct VstdSpecsForRustStdLib;

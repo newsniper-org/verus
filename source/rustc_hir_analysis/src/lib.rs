@@ -68,8 +68,8 @@ This API is completely unstable and subject to change.
 
 extern crate rustc_abi;
 extern crate rustc_arena;
-extern crate rustc_attr_ir;
 extern crate rustc_ast;
+extern crate rustc_attr_ir;
 extern crate rustc_data_structures;
 extern crate rustc_errors;
 extern crate rustc_feature;

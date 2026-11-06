@@ -151,6 +151,8 @@ pub broadcast group group_vstd_default {
     #[cfg(all(feature = "alloc", not(verus_verify_core)))]
     std_specs::smart_ptrs::group_smart_ptrs_alloc_axioms,
     #[cfg(feature = "alloc")]
+    std_specs::rust_1_100::group_rust_1_100_axioms,
+    #[cfg(feature = "alloc")]
     std_specs::vecdeque::group_vec_dequeue_axioms,
     //
     // std_specs for alloc + std

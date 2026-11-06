@@ -1024,7 +1024,25 @@ pub(crate) fn pattern_to_vir_unadjusted<'tcx>(
             PatternX::Slice(Arc::new(patterns))
         }
         PatKind::Never => unsupported_err!(pat.span, "never patterns", pat),
-        PatKind::Deref(_) => unsupported_err!(pat.span, "deref patterns", pat),
+        PatKind::Deref(subpat) => {
+            // `deref!(p)` through a `Box`, `Rc` or `Arc` (what `box p` patterns did before Rust
+            // 1.100 removed them): these pointers are transparent in VIR, so the pattern is the
+            // inner one; other deref patterns are not supported
+            let mut t = &pat_typ;
+            loop {
+                match &**t {
+                    TypX::Decorate(TypDecoration::Ref, _, inner) | TypX::MutRef(inner) => t = inner,
+                    _ => break,
+                }
+            }
+            if matches!(
+                &**t,
+                TypX::Decorate(TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc, _, _)
+            ) {
+                return pattern_to_vir(bctx, subpat);
+            }
+            unsupported_err!(pat.span, "deref patterns through types other than Box, Rc, Arc", pat)
+        }
         PatKind::Err(_) => unsupported_err!(pat.span, "patterns that failed to type-check", pat),
         PatKind::Missing => unsupported_err!(pat.span, "missing patterns in parameters", pat),
     };

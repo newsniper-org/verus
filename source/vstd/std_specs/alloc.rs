@@ -7,7 +7,6 @@ verus! {
 // but putting this here helps Verus pick up all the trait impls for Global
 #[cfg(feature = "alloc")]
 #[verifier::external_type_specification]
-#[verifier::external_body]
 pub struct ExGlobal(alloc::alloc::Global);
 
 #[cfg(feature = "alloc")]

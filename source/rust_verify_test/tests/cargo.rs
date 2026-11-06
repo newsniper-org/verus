@@ -10,8 +10,15 @@ use tempfile::tempdir;
 use toml::{Table, Value};
 
 fn compute_test_dir(dir: &str) -> std::path::PathBuf {
+    // the directory above the cargo target directory: the test binary is in `<profile>/deps`
+    // (cargo up to 1.99) or `<profile>/build/<pkg>/<hash>/out` (cargo 1.100)
     let current_exe = std::env::current_exe().unwrap();
-    current_exe.parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().join(dir)
+    let profile_dir = current_exe
+        .ancestors()
+        .skip(1)
+        .find(|a| matches!(a.file_name().and_then(|n| n.to_str()), Some("release" | "debug")))
+        .expect("expected the test binary to be inside a release or debug directory");
+    profile_dir.ancestors().nth(2).unwrap().join(dir)
 }
 
 fn parse_toml_file(path: &std::path::Path) -> Table {

@@ -554,11 +554,11 @@ pub assume_specification<K, V>[ <BTreeMap<K, V> as core::default::Default>::defa
         m@ == Map::<K, V>::empty(),
 ;
 
-pub assume_specification<Key: Ord, Value, A: AllocatorClone>[ BTreeMap::<
-    Key,
-    Value,
-    A,
->::insert ](m: &mut BTreeMap<Key, Value, A>, k: Key, v: Value) -> (result: Option<Value>)
+pub assume_specification<Key: Ord, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, A>::insert ](
+    m: &mut BTreeMap<Key, Value, A>,
+    k: Key,
+    v: Value,
+) -> (result: Option<Value>)
     ensures
         obeys_cmp::<Key>() ==> {
             &&& final(m)@ == old(m)@.insert(k, v)
@@ -1255,12 +1255,10 @@ pub broadcast axiom fn axiom_set_box_key_to_value<Q>(m: Set<Box<Q>>, q: &Q, v: &
         ) == v),
 ;
 
-pub assume_specification<
-    'a,
-    Key: Borrow<Q> + Ord,
-    A: AllocatorClone,
-    Q: Ord + ?Sized,
->[ BTreeSet::<Key, A>::get::<Q> ](m: &'a BTreeSet<Key, A>, k: &Q) -> (result: Option<&'a Key>)
+pub assume_specification<'a, Key: Borrow<Q> + Ord, A: AllocatorClone, Q: Ord + ?Sized>[ BTreeSet::<
+    Key,
+    A,
+>::get::<Q> ](m: &'a BTreeSet<Key, A>, k: &Q) -> (result: Option<&'a Key>)
     ensures
         obeys_cmp::<Key>() ==> match result {
             Some(v) => sets_borrowed_key_to_key(m@, k, v),

@@ -738,6 +738,7 @@ pub const FEATURE_PRELUDE: &str = crate::common::code_str! {
     #![allow(unused_comparisons)]
     #![allow(noop_method_call)]
     #![feature(allocator_ext)]
+    #![allow(stable_features)]
     #![feature(proc_macro_hygiene)]
     #![feature(core_intrinsics)]
     #![feature(ptr_metadata)]

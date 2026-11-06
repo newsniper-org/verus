@@ -12,7 +12,6 @@ verus! {
 pub struct ExControlFlow<B, C>(ControlFlow<B, C>);
 
 // (`core::convert::Infallible` is an alias of the never type `!` since Rust 1.100)
-
 pub assume_specification<T, E>[ Result::<T, E>::branch ](result: Result<T, E>) -> (cf: ControlFlow<
     <Result<T, E> as Try>::Residual,
     <Result<T, E> as Try>::Output,

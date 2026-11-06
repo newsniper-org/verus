@@ -94,8 +94,14 @@ fn run_example_for_file(file_path: &str) {
     let relative_path = PathBuf::from(relative_path);
 
     // Create a temp directory under target/ for --out-dir output
-    let target_dir = std::env::current_exe().unwrap();
-    let target_dir = target_dir.parent().unwrap().parent().unwrap();
+    // (the profile directory: the test binary is in `<profile>/deps` up to cargo 1.99, in
+    // `<profile>/build/<pkg>/<hash>/out` since cargo 1.100)
+    let current_exe = std::env::current_exe().unwrap();
+    let target_dir = current_exe
+        .ancestors()
+        .skip(1)
+        .find(|a| matches!(a.file_name().and_then(|n| n.to_str()), Some("release" | "debug")))
+        .expect("expected the test binary to be inside a release or debug directory");
     let example_out_dir = target_dir
         .join("test_inputs")
         .join(format!("example-{}", relative_path.file_stem().unwrap().to_str().unwrap()));
