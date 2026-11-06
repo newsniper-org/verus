@@ -1577,9 +1577,14 @@ test_verify_one_file! {
         axiom fn false_from_False(tracked f: False)
             ensures false;
 
-        // (an uninhabited type; `std::convert::Infallible` was one until Rust 1.100 made it an
-        // alias of `!`, whose values cannot be coerced in spec code)
+        // (an uninhabited type known to Verus only as an opaque type, as
+        // `std::convert::Infallible` was until Rust 1.100 made it an alias of `!`)
+        #[verifier::external]
         pub enum Uninhabited {}
+
+        #[verifier::external_type_specification]
+        #[verifier::external_body]
+        pub struct ExUninhabited(Uninhabited);
 
         tracked enum Enum {
             GhostNvr { ghost ghost_never: Uninhabited },
@@ -1610,9 +1615,14 @@ test_verify_one_file! {
         axiom fn false_from_False(tracked f: False)
             ensures false;
 
-        // (an uninhabited type; `std::convert::Infallible` was one until Rust 1.100 made it an
-        // alias of `!`, whose values cannot be coerced in spec code)
+        // (an uninhabited type known to Verus only as an opaque type, as
+        // `std::convert::Infallible` was until Rust 1.100 made it an alias of `!`)
+        #[verifier::external]
         pub enum Uninhabited {}
+
+        #[verifier::external_type_specification]
+        #[verifier::external_body]
+        pub struct ExUninhabited(Uninhabited);
 
         tracked enum Enum {
             GhostNvr { ghost ghost_never: Uninhabited },
