@@ -162,9 +162,8 @@ pub fn verify_files_vstd_all_diags(
 
     let files: Vec<(String, String)> = files.into_iter().collect();
 
-    let deps_dir = test_exe_path();
-    let deps_dir = deps_dir.parent().unwrap();
-    let target_dir = deps_dir.parent().unwrap();
+    let target_dir = test_profile_dir();
+    let target_dir = target_dir.as_path();
 
     let (test_binary, test_name) = {
         let mut args = std::env::args();
@@ -300,6 +299,30 @@ fn test_exe_path() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::current_exe().unwrap())
 }
 
+/// The profile directory (`release` or `debug`) that contains the test binary: the cargo target
+/// directory's `<profile>/deps` up to cargo 1.99, `<profile>/build/<pkg>/<hash>/out` since the
+/// build-dir layout of cargo 1.100.
+fn test_profile_dir() -> std::path::PathBuf {
+    let exe = test_exe_path();
+    exe.ancestors()
+        .skip(1)
+        .find(|a| matches!(a.file_name().and_then(|n| n.to_str()), Some("release" | "debug")))
+        .expect("expected the test binary to be inside a release or debug directory")
+        .to_path_buf()
+}
+
+/// `target-verus/<profile>` next to the cargo target directory of the test binary
+fn verus_target_profile_dir() -> std::path::PathBuf {
+    let profile_dir = test_profile_dir();
+    let profile = profile_dir.file_name().unwrap().to_str().unwrap().to_string();
+    profile_dir
+        .ancestors()
+        .nth(2)
+        .expect("expected the profile directory to have two parents")
+        .join("target-verus")
+        .join(profile)
+}
+
 pub fn run_verus(
     options: &[&str],
     test_dir: &std::path::Path,
@@ -324,18 +347,7 @@ pub fn run_verus(
     #[cfg(target_os = "windows")]
     let (pre, dl, exe) = ("", "dll", ".exe");
 
-    let current_exe = test_exe_path();
-    let deps_path = current_exe.parent().unwrap();
-    let target_path = deps_path.parent().unwrap();
-    let profile = target_path.file_name().unwrap().to_str().unwrap();
-    let verus_target_path = target_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-        .join("target-verus")
-        .join(profile);
+    let verus_target_path = verus_target_profile_dir();
 
     let verus_target_path_str = verus_target_path.to_str().unwrap();
 
@@ -569,16 +581,7 @@ pub fn run_verus_raw(args: &[&str], dir: &std::path::Path) -> std::process::Outp
     }
     let exe = if cfg!(target_os = "windows") { ".exe" } else { "" };
 
-    let current_exe = test_exe_path();
-    let deps_path = current_exe.parent().unwrap();
-    let target_path = deps_path.parent().unwrap();
-    let profile = target_path.file_name().unwrap().to_str().unwrap();
-    let verus_target_path = target_path
-        .ancestors()
-        .nth(2)
-        .expect("expected path to have at least two parents")
-        .join("target-verus")
-        .join(profile);
+    let verus_target_path = verus_target_profile_dir();
     let bin = verus_target_path.join(format!("rust_verify{exe}"));
 
     let z3 = std::env::var("VERUS_Z3_PATH")
@@ -627,18 +630,7 @@ pub fn run_cargo_verus_with_target(
 
     // Compute the path to the cargo-verus executable,
     // following the pattern from run_verus
-    let current_exe = test_exe_path();
-    let deps_path = current_exe.parent().unwrap();
-    let target_path = deps_path.parent().unwrap();
-    let profile = target_path.file_name().unwrap().to_str().unwrap();
-    let verus_target_path = target_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-        .join("target-verus")
-        .join(profile);
+    let verus_target_path = verus_target_profile_dir();
     let bin = verus_target_path.join(format!("cargo-verus{exe}"));
 
     let mut child = std::process::Command::new(bin);
@@ -745,9 +737,8 @@ pub const FEATURE_PRELUDE: &str = crate::common::code_str! {
     #![allow(non_upper_case_globals)]
     #![allow(unused_comparisons)]
     #![allow(noop_method_call)]
-    #![feature(allocator_api)]
+    #![feature(allocator_ext)]
     #![feature(proc_macro_hygiene)]
-    #![feature(never_type)]
     #![feature(core_intrinsics)]
     #![feature(ptr_metadata)]
     #![feature(sized_hierarchy)]

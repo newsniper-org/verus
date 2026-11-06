@@ -146,8 +146,12 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
-        // (only a crate that others can link with has an SVH: rustc computes it only then)
-        if tcx.needs_metadata() && tcx.needs_hir_hash() {
+        // (only a crate that others can link with has an SVH: rustc computes it only then; and
+        // with -V alloc-check, which makes it the HIR-based one, known at this point)
+        if tcx.sess.opts.unstable_opts.metadata_crate_hash == false
+            && tcx.needs_metadata()
+            && tcx.needs_hir_hash()
+        {
             self.crate_hash = Some(tcx.crate_hash(rustc_hir::def_id::LOCAL_CRATE).as_u128());
         }
         if self.do_compile {
