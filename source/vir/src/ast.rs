@@ -858,7 +858,9 @@ pub enum HeaderExprX {
     /// This function will not unwind if the given condition holds (function of arguments)
     NoUnwindWhen(Expr),
     /// `allocates e`: upper bound on the number of allocations (exec functions)
-    Allocates(Expr),
+    /// `allocates n` (with `deallocates_when(n, c)`: and the condition `c` under which the
+    /// function may deallocate)
+    Allocates(Expr, Option<Expr>),
     /// The visibility used in, e.g., `open(crate)`
     OpenVisibilityQualifier(Visibility),
 }
@@ -1628,6 +1630,10 @@ pub struct FunctionAttrsX {
     pub exec_allows_no_decreases_clause: bool,
     /// `-V alloc-check`: skip the drop rule for this function (vstd only)
     pub alloc_check_skip_drops: bool,
+    /// `-V alloc-check`: `#[verifier::fip]` (fully in-place, FP²): the function never deallocates
+    /// memory on a normal return (its calls are checked here; its implicit drops in the compiled
+    /// program, by rust_verify on the MIR)
+    pub fip: bool,
     /// The crate defining this function was verified with -V alloc-check, so its `allocates`
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,
@@ -1792,6 +1798,10 @@ pub struct FunctionX {
     /// `allocates e`: upper bound on the number of allocation-source calls performed by an exec
     /// function on a normal return (checked only when allocation checking is enabled)
     pub allocates: Option<Expr>,
+    /// -V alloc-check: for a function without a verified body, the condition (at entry) under
+    /// which it may deallocate memory on a normal return (`allocates deallocates_when(n, c)`);
+    /// `#[verifier::fip]` callers must show that it is false
+    pub deallocates: Option<Expr>,
     /// Allows the item to be a const declaration or static
     pub item_kind: ItemKind,
     /// Various attributes

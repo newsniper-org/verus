@@ -120,6 +120,9 @@ pub(crate) struct State<'a> {
 
     /// `-V alloc-check`: the ghost local counting allocation-source calls in this function
     pub(crate) alloc_counter: Option<VarIdent>,
+    /// `-V alloc-check`: the body of a `#[verifier::fip]` function (whose calls must not
+    /// deallocate)
+    pub(crate) fip: bool,
 
     /// Function arguments to be used in the construction of the update
     /// predicate for the atomic update by the atomic function call.
@@ -267,6 +270,7 @@ impl<'a> State<'a> {
             loop_result_dests: HashMap::new(),
             mask: None,
             alloc_counter: None,
+            fip: false,
             au_pred_args: Vec::new(),
             au_var_exp_to_resolve: None,
             au_var_exp: None,
@@ -1502,6 +1506,12 @@ fn stm_call(
     } else {
         None
     };
+    let fip_stm = if state.fip && fun.x.mode == Mode::Exec {
+        let target = (name.clone(), typs.clone(), resolved_method.clone());
+        fip_call_check(ctx, state, span, &target, &small_args)?
+    } else {
+        None
+    };
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -1515,6 +1525,9 @@ fn stm_call(
         body,
     };
 
+    if let Some(stm) = fip_stm {
+        stms.push(stm);
+    }
     stms.push(Spanned::new(span.clone(), call));
     if let Some(counter) = state.alloc_counter.clone() {
         if fun.x.mode == Mode::Exec {
@@ -1631,6 +1644,65 @@ fn fmt_arguments_allocates_assume(
         ExpX::Call(CallFun::Fun(fmt_allocates, None), Arc::new(vec![]), Arc::new(vec![result])),
     );
     Some(crate::sst_util::sst_equal(span, &total, &sum))
+}
+
+/// `-V alloc-check`, in a `#[verifier::fip]` function: the call must not deallocate. A
+/// `#[verifier::fip]` callee never does; a callee with a `deallocates_when` condition does only
+/// when the condition holds, which must be shown false here; any other callee may.
+fn fip_call_check(
+    ctx: &Ctx,
+    state: &mut State,
+    span: &Span,
+    (target, target_typs, resolved): &(Fun, Typs, Option<(Fun, Typs)>),
+    args: &Exps,
+) -> Result<Option<Stm>, VirErr> {
+    let target_fun = get_function(ctx, span, target)?;
+    // (a trait method call resolved to an impl is checked against that impl)
+    let (callee, callee_typs) = match resolved {
+        Some((r, ts)) => (get_function(ctx, span, r)?, ts.clone()),
+        None => (target_fun.clone(), target_typs.clone()),
+    };
+    if callee.x.attrs.fip {
+        return Ok(None);
+    }
+    let not_fip = |why: &str| {
+        error(
+            span,
+            format!(
+                "this call may deallocate memory, which a `#[verifier::fip]` function must not do: `{}` {}",
+                crate::ast_util::fun_as_friendly_rust_name(&callee.x.name),
+                why
+            ),
+        )
+    };
+    if matches!(callee.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. }) {
+        return Err(not_fip(
+            "is a trait method whose implementation is not known here (a generic call)",
+        ));
+    }
+    if callee.x.deallocates.is_none() {
+        return Err(not_fip("is not `#[verifier::fip]` and has no `deallocates_when` condition")
+            .help("make the callee `#[verifier::fip]`"));
+    }
+    let bool_typ = Arc::new(TypX::Bool);
+    let cond = SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExpX::Call(
+            CallFun::InternalFun(InternalFun::DeallocCond(callee.x.name.clone())),
+            callee_typs,
+            args.clone(),
+        ),
+    );
+    let not_cond = SpannedTyped::new(span, &bool_typ, ExpX::Unary(UnaryOp::Not, cond));
+    let msg = error(
+        span,
+        format!(
+            "this call may deallocate memory, which a `#[verifier::fip]` function must not do (the `deallocates_when` condition of `{}`)",
+            crate::ast_util::fun_as_friendly_rust_name(&callee.x.name)
+        ),
+    );
+    Ok(Some(Spanned::new(span.clone(), StmX::Assert(state.next_assert_id(), Some(msg), not_cond))))
 }
 
 /// `-V alloc-check`: after an exec call, add the callee's `allocates` bound (applied to the
@@ -5028,6 +5100,8 @@ fn exec_closure_body_stms(
     // with an `allocates` bound gets a counter of its own, checked against the bound at every
     // return; a closure without one is not checked.
     let outer_alloc_counter = state.alloc_counter.take();
+    // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function)
+    let outer_fip = std::mem::replace(&mut state.fip, false);
     let result = exec_closure_body_stms_inner(
         ctx,
         state,
@@ -5042,6 +5116,7 @@ fn exec_closure_body_stms(
         &mut typ_inv_vars,
     );
     state.alloc_counter = outer_alloc_counter;
+    state.fip = outer_fip;
     result.map(|stms| (stms, Arc::new(typ_inv_vars)))
 }
 

@@ -154,6 +154,11 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
         {
             self.crate_hash = Some(tcx.crate_hash(rustc_hir::def_id::LOCAL_CRATE).as_u128());
         }
+        // -V alloc-check, `#[verifier::fip]`: the drops of the compiled program (see `fip_mir`)
+        crate::fip_mir::check_fip_crate(tcx);
+        if tcx.dcx().has_errors().is_some() {
+            return rustc_driver::Compilation::Stop;
+        }
         if self.do_compile {
             rustc_driver::Compilation::Continue
         } else {
@@ -350,20 +355,34 @@ pub fn run(
 
     let mut verifier = verifier;
     let do_compile = verifier.compile || verifier.via_cargo_args.is_some();
-    let compile_status =
-        if !verifier.compile && (verifier.args.no_erasure_check || verifier.args.no_lifetime) {
-            Ok(None)
+    let compile_status = if !verifier.compile
+        && (verifier.args.no_erasure_check || verifier.args.no_lifetime)
+    {
+        // -V alloc-check: the drops of `#[verifier::fip]` functions are only checked on the
+        // compiled program's MIR, by the run that is skipped here
+        let has_fip = verifier
+            .vir_crate
+            .as_ref()
+            .is_some_and(|k| k.functions.iter().any(|f| f.x.attrs.fip && f.x.body.is_some()));
+        if has_fip {
+            eprintln!(
+                "error: `#[verifier::fip]` functions are checked on the compiled program, which --no-lifetime and --no-erasure-check skip"
+            );
+            Err(())
         } else {
-            let mut rustc_args = rustc_args;
-            if verifier.args.alloc_check {
-                // -V alloc-check records the SVH of the compiled crate in the exported .vir
-                // (see `finish_alloc_checked_export`); since Rust 1.100 the default SVH is only
-                // known once metadata is encoded, while the HIR-based one (the default before)
-                // is known during analysis and is the one written into the crate's metadata
-                rustc_args.push("-Zmetadata-crate-hash=no".to_string());
-            }
-            run_with_erase_macro_compile(rustc_args, do_compile, verifier.args.vstd)
-        };
+            Ok(None)
+        }
+    } else {
+        let mut rustc_args = rustc_args;
+        if verifier.args.alloc_check {
+            // -V alloc-check records the SVH of the compiled crate in the exported .vir
+            // (see `finish_alloc_checked_export`); since Rust 1.100 the default SVH is only
+            // known once metadata is encoded, while the HIR-based one (the default before)
+            // is known during analysis and is the one written into the crate's metadata
+            rustc_args.push("-Zmetadata-crate-hash=no".to_string());
+        }
+        run_with_erase_macro_compile(rustc_args, do_compile, verifier.args.vstd)
+    };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built
     let compile_status = match compile_status {
         Ok(Some(crate_hash)) if do_compile => {

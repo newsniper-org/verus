@@ -125,7 +125,7 @@ pub assume_specification<T>[ Option::<T>::is_some ](option: &Option<T>) -> (b: b
         b == is_some(option),
     no_unwind
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // is_none
@@ -140,7 +140,7 @@ pub assume_specification<T>[ Option::<T>::is_none ](option: &Option<T>) -> (b: b
         b == is_none(option),
     no_unwind
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // as_ref
@@ -150,7 +150,7 @@ pub assume_specification<T>[ Option::<T>::as_ref ](option: &Option<T>) -> (a: Op
         a is Some ==> option->0 == a->0,
     no_unwind
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // unwrap
@@ -169,7 +169,7 @@ pub assume_specification<T>[ Option::<T>::unwrap ](option: Option<T>) -> (t: T)
     ensures
         t == spec_unwrap(option),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // unwrap_or
@@ -206,7 +206,7 @@ pub assume_specification<T>[ Option::<T>::expect ](option: Option<T>, msg: &str)
     ensures
         t == spec_expect(option, msg),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // take
@@ -216,7 +216,7 @@ pub assume_specification<T>[ Option::<T>::take ](option: &mut Option<T>) -> (t: 
         *final(option) is None,
     no_unwind
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 // map
@@ -456,7 +456,7 @@ pub assume_specification<T>[ Option::as_mut ](option: &mut Option<T>) -> (res: O
                 && *final(res.unwrap()) == final(option).unwrap(),
         }),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub assume_specification<T>[ Option::as_slice ](option: &Option<T>) -> (res: &[T])

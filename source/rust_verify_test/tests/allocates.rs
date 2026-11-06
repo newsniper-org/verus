@@ -2736,6 +2736,22 @@ test_verify_one_file_with_options! {
         {
             v.push(1); // grows to 16 elements, 128 bytes
         }
+
+        pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
+
+        #[verifier::fip]
+        fn halve(mut b: Box<Node>) -> (r: Box<Node>) {
+            b.val = b.val / 2;
+            b
+        }
+
+        #[verifier::fip]
+        fn push_spare(v: &mut Vec<u64>)
+            requires
+                old(v)@.len() < spec_vec_capacity(&*old(v)),
+        {
+            v.push(1);
+        }
     } => Ok(())
 }
 

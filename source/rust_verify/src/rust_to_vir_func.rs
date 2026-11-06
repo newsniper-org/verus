@@ -303,6 +303,7 @@ fn handle_autospec<'tcx>(
                     exec_assume_termination: false,
                     exec_allows_no_decreases_clause: false,
                     alloc_check_skip_drops: false,
+                    fip: false,
                     alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
                     alloc_unmodeled_bounds: false,
                     tracked_swap: false,
@@ -381,6 +382,7 @@ fn finish_autospec<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        deallocates: None,
         hidden: Arc::new(vec![]),
     };
     Ok(Spanned::new(function_autospec.span.clone(), function_autospec_x))
@@ -1599,6 +1601,7 @@ fn make_attributes<'tcx>(
             vattrs.exec_allows_no_decreases_clause
         },
         alloc_check_skip_drops: vattrs.alloc_check_skip_drops,
+        fip: vattrs.fip.is_some(),
         alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
         alloc_unmodeled_bounds: has_auto_trait_bounds(ctxt.tcx, def_id),
         tracked_swap: vattrs.tracked_swap,
@@ -2493,6 +2496,46 @@ pub(crate) fn finish_function<'tcx>(
 
     crate::pre_header::sanity_check_preheader(sig.span, &header, &pre_header)?;
 
+    // -V alloc-check: `#[verifier::fip]` (fully in-place) and `deallocates_when`
+    let mut header = header;
+    if let Some(strict) = vattrs.fip {
+        if !ctxt.cmd_line_args.alloc_check {
+            return err_span(sig.span, "`#[verifier::fip]` needs -V alloc-check");
+        }
+        if strict {
+            return err_span(
+                sig.span,
+                "`#[verifier::fip(strict)]` (constant stack space) is not supported yet; use `#[verifier::fip]`",
+            );
+        }
+        if mode != Mode::Exec {
+            return err_span(sig.span, "`#[verifier::fip]` can only be used on exec functions");
+        }
+        if vattrs.external_body || vattrs.external_fn_specification {
+            return err_span(
+                sig.span,
+                "`#[verifier::fip]` needs a verified body (a specification without one can state `allocates deallocates_when(n, c)`)",
+            );
+        }
+        if header.deallocates.is_some() {
+            return err_span(
+                sig.span,
+                "a `#[verifier::fip]` function never deallocates, so it cannot state `deallocates_when`",
+            );
+        }
+        // (FP² `fip` without a bound: no allocation either)
+        if header.allocates.is_none() {
+            header.allocates =
+                Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
+        }
+    }
+    if header.deallocates.is_some() && !(vattrs.external_body || vattrs.external_fn_specification) {
+        return err_span(
+            sig.span,
+            "only a specification without a verified body (`assume_specification`, `external_body`) can state `deallocates_when`; a verified function that never deallocates is `#[verifier::fip]`",
+        );
+    }
+
     let body = if vattrs.external_body || vattrs.external_fn_specification || header.no_method_body
     {
         None
@@ -2635,6 +2678,7 @@ pub(crate) fn finish_function<'tcx>(
         atomic_update: header.atomic_update,
         unwind_spec: header.unwind_spec,
         allocates: header.allocates,
+        deallocates: header.deallocates,
         item_kind,
         attrs,
         body,
@@ -2808,6 +2852,7 @@ fn check_external_fn_specification_trait_method_decl_typs(
             atomic_update: _,
             unwind_spec,
             allocates,
+            deallocates,
             item_kind: _,
             attrs: _,
             body,
@@ -2826,6 +2871,7 @@ fn check_external_fn_specification_trait_method_decl_typs(
         unsupported_err_unless!(matches!(mask_spec, None), span, "opens_invariants");
         unsupported_err_unless!(matches!(unwind_spec, None), span, "unwind");
         unsupported_err_unless!(allocates.is_none(), span, "`allocates` clauses");
+        unsupported_err_unless!(deallocates.is_none(), span, "`deallocates_when` conditions");
         unsupported_err_unless!(body.is_none(), span, "opens_invariants");
     }
     Ok(())
@@ -3653,6 +3699,7 @@ pub(crate) fn finish_const_or_static<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        deallocates: None,
         item_kind,
         attrs,
         body: if vattrs.external_body { None } else { Some(vir_body) },
@@ -3776,6 +3823,7 @@ pub(crate) fn check_foreign_item_fn<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        deallocates: None,
         item_kind: ItemKind::Function,
         attrs: Default::default(),
         body: None,

@@ -21,7 +21,7 @@ pub assume_specification<T>[ Box::<T>::new ](t: T) -> (v: Box<T>)
     ensures
         *v == t,
     allocates
-        1,
+        deallocates_when(1int, false),
 ;
 
 pub assume_specification<T: core::default::Default>[ <Box<

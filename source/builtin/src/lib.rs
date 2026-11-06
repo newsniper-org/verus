@@ -2154,6 +2154,18 @@ pub fn allocated() -> int {
 
 /// The `allocates` bound of `f` at `args` (`-V alloc-check`). Unknown (unconstrained) when `f`
 /// has no `allocates` bound.
+/// -V alloc-check: `allocates deallocates_when(n, c)` is the bound `allocates n` of a function
+/// that may also deallocate memory (on a normal return) only when `c` holds, evaluated at entry.
+/// A function checked as `#[verifier::fip]` must show `!c` where it calls such a function. Only
+/// a function without a verified body (`assume_specification`, `external_body`) may state it: a
+/// function that Verus verifies either is `#[verifier::fip]` (it never deallocates) or may
+/// deallocate.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::deallocates_when"]
+pub fn deallocates_when<A: Integer>(_allocates: A, _deallocates: bool) -> A {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_allocates"]
 pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> int {

@@ -298,6 +298,56 @@ Each impl is checked against the declaration's bound. Consequently:
   unverified safe code could implement the trait without staying within the bound. (This is the
   same rule as for `requires`, `no_unwind` and `opens_invariants`.)
 
+## Fully in-place functions: `#[verifier::fip]`
+
+The FP² paper (Lorenzen, Leijen and Swierstra, ICFP 2023) distinguishes functions that run in
+place. In its terms, an `allocates n` bound is the heap part of `fbip(n)`: at most `n`
+allocations, with any number of deallocations. `#[verifier::fip]` is `fip(n)`: the function also
+never deallocates memory on a normal return. Without an `allocates` bound it is `fip`, which
+means no allocation either (`allocates 0`).
+
+```rust
+pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
+
+#[verifier::fip]
+fn halve(mut b: Box<Node>) -> (r: Box<Node>) {
+    b.val = b.val / 2;
+    b
+}
+
+#[verifier::fip]
+fn push_spare(v: &mut Vec<u64>)
+    requires
+        old(v)@.len() < spec_vec_capacity(&*old(v)),
+{
+    v.push(1);
+}
+```
+
+Two things are checked:
+
+* **Calls.** A callee must be `#[verifier::fip]` itself, or have a deallocation condition, which
+  the caller must show to be false. A specification without a verified body states this
+  condition as `allocates deallocates_when(n, c)`: the function allocates at most `n` and may
+  deallocate only when `c` holds (evaluated at entry). For example, `Vec::push` may deallocate
+  when it has to grow an existing buffer. Growing reallocates, which frees the old block. A
+  vector without a buffer can grow without deallocating. Calls of trait methods that do not
+  resolve to an impl (generic calls), and calls of closures, are rejected.
+* **Drops.** The compiler inserts drops that do not appear in the source. They are checked on
+  the MIR of the compiled program, after ghost code is erased and after drop elaboration. A value
+  may be dropped on a path that returns normally only if its type has no drop glue at all, or
+  implements the unsafe marker trait `vstd::alloc_check::NoDeallocDrop`. A generic type needs
+  the bound `T: NoDeallocDrop`. Moving the contents out of a `Box` frees the box. To stay in
+  place, reuse the box instead (`*b = ..`, or field updates).
+
+An `unsafe impl NoDeallocDrop for X` is accepted only if `X` is not a `Box`, its own `Drop` (if
+any) is `#[verifier::fip]`, and each of its fields has no drop glue or is `NoDeallocDrop`. Every
+impl in the program is checked, whichever crate it is in.
+
+Paths that unwind are not covered, as for `allocates`. The drop check runs in the compilation
+step of Verus, so `--no-lifetime` and `--no-erasure-check` reject `#[verifier::fip]` functions.
+`#[verifier::fip(strict)]`, which also requires constant stack space, is not supported yet.
+
 ## Libraries and other crates
 
 A bound in an imported crate is trusted only if that crate was verified with `-V alloc-check`,
@@ -328,6 +378,7 @@ allocates cannot pass the strict mode yet.
 What `-V alloc-check` trusts:
 * the bounds in vstd's specifications of std functions, and the design of vstd's bounds on std
   trait methods described above;
+* the `deallocates_when` conditions in vstd's specifications (for `#[verifier::fip]`);
 * `external_body` functions other than `drop`;
 * the toolchain's std (its trusted drops and opaque types).
 

@@ -289,6 +289,54 @@ fn total<S: Shape>(a: &S, b: &S) -> u64
   상한을 지키지 않고 그 trait을 구현할 수 있기 때문입니다. `requires`, `no_unwind`, `opens_invariants`와
   같은 규칙입니다.
 
+## 완전한 제자리 함수: `#[verifier::fip]`
+
+FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되는 함수를 구분합니다. 그 용어로
+말하면 `allocates n` 상한은 `fbip(n)`의 힙 부분입니다. 할당은 최대 `n`번이고 해제는 몇 번이든
+됩니다. `#[verifier::fip]`는 `fip(n)`입니다. 이 함수는 정상 반환할 때 메모리를 전혀 해제하지 않습니다.
+`allocates` 상한이 없으면 `fip`이고, 할당도 하지 않는다는 뜻입니다(`allocates 0`).
+
+```rust
+pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
+
+#[verifier::fip]
+fn halve(mut b: Box<Node>) -> (r: Box<Node>) {
+    b.val = b.val / 2;
+    b
+}
+
+#[verifier::fip]
+fn push_spare(v: &mut Vec<u64>)
+    requires
+        old(v)@.len() < spec_vec_capacity(&*old(v)),
+{
+    v.push(1);
+}
+```
+
+두 가지를 검사합니다.
+
+* **호출.** callee가 그 자체로 `#[verifier::fip]`이거나 해제 조건을 가져야 하고, 호출자는 그 조건이
+  거짓임을 보여야 합니다. 검증된 본문이 없는 명세는 이 조건을 `allocates deallocates_when(n, c)`로
+  적습니다. 그 함수는 최대 `n`번 할당하고, `c`가 참일 때만 해제할 수 있습니다(`c`는 진입 시점에
+  평가). 예를 들어 `Vec::push`는 기존 버퍼를 키워야 할 때 해제할 수 있습니다. 키우는 것은
+  재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 해제 없이 키울 수 있습니다.
+  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)과 클로저 호출은 거부합니다.
+* **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
+  검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
+  drop되는 값은 타입에 drop glue가 아예 없거나, unsafe 표시 trait `vstd::alloc_check::NoDeallocDrop`을
+  구현해야 합니다. 제네릭 타입에는 `T: NoDeallocDrop` bound가 필요합니다. `Box` 안의 내용을 밖으로
+  move하면 그 `Box`가 해제됩니다. 제자리에 머무르려면 대신 `Box`를 재사용하세요(`*b = ..`, 또는
+  필드 갱신).
+
+`unsafe impl NoDeallocDrop for X`는 다음 조건을 모두 만족할 때만 받습니다. `X`가 `Box`가 아니고,
+`X` 자신의 `Drop`이 있다면 그것이 `#[verifier::fip]`이며, 각 필드가 drop glue가 없거나 `NoDeallocDrop`이어야
+합니다. 프로그램 안의 모든 impl을, 어느 crate에 있든 검사합니다.
+
+`allocates`와 마찬가지로 unwind하는 경로는 다루지 않습니다. drop 검사는 Verus의 컴파일 단계에서
+돌기 때문에, `--no-lifetime`과 `--no-erasure-check`는 `#[verifier::fip]` 함수를 거부합니다.
+스택 공간 상수까지 요구하는 `#[verifier::fip(strict)]`는 아직 지원하지 않습니다.
+
 ## 라이브러리와 다른 crate
 
 import한 crate의 상한은 그 crate가 다음 조건으로 검증되었을 때만 신뢰합니다.
@@ -320,6 +368,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 
 `-V alloc-check`가 신뢰하는 것:
 * std 함수에 대한 vstd 명세의 상한, 그리고 위에서 설명한 std trait 메서드에 대한 vstd 상한의 설계
+* vstd 명세의 `deallocates_when` 조건(`#[verifier::fip]`용)
 * `drop`이 아닌 `external_body` 함수
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 

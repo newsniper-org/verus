@@ -47,6 +47,7 @@ mod expand_errors_driver;
 pub mod external;
 pub mod externs;
 pub mod file_loader;
+mod fip_mir;
 mod fn_call_to_vir;
 mod hir_hide_reveal_rewrite;
 mod import_export;

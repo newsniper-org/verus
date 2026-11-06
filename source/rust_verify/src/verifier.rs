@@ -348,7 +348,7 @@ pub struct Verifier {
     // If we've already created the log directory, this is the path to it:
     created_log_dir: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
     created_solver_log_dir: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
-    vir_crate: Option<Krate>,
+    pub(crate) vir_crate: Option<Krate>,
     crate_id: Option<CrateId>,
     air_no_span: Option<vir::messages::Span>,
     span_resolver: Option<vir::vir_observer::SpanResolver>,

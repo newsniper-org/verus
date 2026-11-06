@@ -355,7 +355,8 @@ fn gather_terms(ctxt: &mut Ctxt, ctx: &Ctx, exp: &Exp, depth: u64) -> (bool, Ter
                 CallFun::InternalFun(
                     InternalFun::CheckDecreaseHeight
                     | InternalFun::OpenInvariantMask(..)
-                    | InternalFun::AllocBound(..),
+                    | InternalFun::AllocBound(..)
+                    | InternalFun::DeallocCond(..),
                 ) => (is_pure, Arc::new(TermX::App(ctxt.other(), Arc::new(all_terms)))),
             }
         }

@@ -57,6 +57,9 @@ pub enum InternalFun {
     OpenInvariantMask(Fun, usize),
     /// The `allocates` bound of the given exec function, applied to the call's arguments
     AllocBound(Fun),
+    /// The condition under which the given exec function may deallocate (`deallocates_when`),
+    /// applied to the call's arguments
+    DeallocCond(Fun),
     /// `call_allocates(f, args)`: the `allocates` bound of a function value
     ClosureAlloc,
 }
@@ -403,6 +406,8 @@ pub struct FuncDeclSst {
     pub unwind_condition: Option<Exp>,
     /// `allocates` bound (only generated with `-V alloc-check`)
     pub alloc_bound: Option<Exp>,
+    /// `deallocates_when` condition (only generated with `-V alloc-check`)
+    pub dealloc_cond: Option<Exp>,
     pub fndef_axioms: Exps,
 }
 

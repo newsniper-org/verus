@@ -396,6 +396,9 @@ pub(crate) enum Attr {
     // -V alloc-check: do not apply the drop rule to this function's types (vstd only: for a
     // function that moves its generic arguments around and never drops them)
     AllocCheckSkipDrops,
+    // -V alloc-check: fully in-place (FP²): never deallocates (on a normal return); `strict`
+    // also requires constant stack space
+    Fip(bool),
     // Assume that external items can be used without a Verus declaration (unsound)
     ExternalsAvailableWithoutDeclaration(bool),
     // Prohibit impls from adding ensures clauses (to enable exec nontermination)
@@ -771,6 +774,12 @@ pub(crate) fn parse_attrs(
                 }
                 AttrTree::Fun(_, arg, None) if arg == "alloc_check_skip_drops" => {
                     v.push(Attr::AllocCheckSkipDrops);
+                }
+                AttrTree::Fun(_, arg, None) if arg == "fip" => v.push(Attr::Fip(false)),
+                AttrTree::Fun(_, arg, Some([AttrTree::Fun(_, s, None)]))
+                    if arg == "fip" && s == "strict" =>
+                {
+                    v.push(Attr::Fip(true))
                 }
                 AttrTree::Fun(_, arg, Some([AttrTree::Fun(_, r, None)]))
                     if arg == "assume" && r == "externals_available_without_declaration" =>
@@ -1331,6 +1340,8 @@ pub(crate) struct VerifierAttrs {
     pub(crate) assume_termination: bool,
     pub(crate) exec_allows_no_decreases_clause: bool,
     pub(crate) alloc_check_skip_drops: bool,
+    /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
+    pub(crate) fip: Option<bool>,
     pub(crate) externals_available_without_declaration: Option<bool>,
     pub(crate) unerased_proxy: bool,
     pub(crate) encoded_const: bool,
@@ -1527,6 +1538,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
         assume_termination: false,
         exec_allows_no_decreases_clause: false,
         alloc_check_skip_drops: false,
+        fip: None,
         externals_available_without_declaration: None,
         unerased_proxy: false,
         encoded_const: false,
@@ -1613,6 +1625,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
             Attr::AssumeTermination => vs.assume_termination = true,
             Attr::ExecAllowNoDecreasesClause => vs.exec_allows_no_decreases_clause = true,
             Attr::AllocCheckSkipDrops => vs.alloc_check_skip_drops = true,
+            Attr::Fip(strict) => vs.fip = Some(strict),
             Attr::ExternalsAvailableWithoutDeclaration(flag) => {
                 vs.externals_available_without_declaration = Some(flag)
             }

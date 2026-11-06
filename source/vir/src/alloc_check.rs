@@ -185,7 +185,7 @@ fn is_copy_trait(path: &Path) -> bool {
 }
 
 /// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
-/// (or `T: BoundedAllocator`, whose supertrait is `AllocFreeDrop`)
+/// (or `T: BoundedAllocator` or `T: NoDeallocDrop`, whose supertrait is `AllocFreeDrop`)
 fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     let mut params = HashSet::new();
     for bound in bounds.iter() {
@@ -193,6 +193,8 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
             if is_alloc_free_drop_trait(path)
                 || is_copy_trait(path)
                 || is_bounded_allocator_trait(path)
+                || crate::ast_util::path_as_friendly_rust_name(path)
+                    == "vstd::alloc_check::NoDeallocDrop"
             {
                 if let Some(self_typ) = args.first() {
                     if let TypX::TypParam(x) = &**self_typ {

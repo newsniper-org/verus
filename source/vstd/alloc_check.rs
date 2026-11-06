@@ -133,6 +133,117 @@ unsafe impl AllocFreeDrop for std::hash::RandomState {
 
 }
 
+/// Types whose drop glue does not deallocate memory: a `#[verifier::fip]` function (fully
+/// in-place, FP²) may drop values of them on paths that return normally.
+///
+/// A `#[verifier::fip]` function must not deallocate. Its drops are checked on the MIR of the
+/// compiled program, after drop elaboration: a value that is dropped there (rather than moved,
+/// returned or reused) must have no drop glue at all, or be of a type that implements this trait
+/// (a generic one needs the bound `T: NoDeallocDrop`). An `unsafe impl NoDeallocDrop for X` is
+/// only accepted when dropping an `X` cannot deallocate: `X` is not a `Box`, its own `Drop`
+/// (if any) is `#[verifier::fip]`, and each of its fields has no drop glue or is
+/// `NoDeallocDrop`. Every impl in the program is checked, whichever crate it is in.
+/// `AllocFreeDrop` is a supertrait: such a drop does not allocate either.
+pub unsafe trait NoDeallocDrop: AllocFreeDrop {
+
+}
+
+/// Dropping a value of type `T` may deallocate (false for a `NoDeallocDrop` type)
+pub uninterp spec fn drop_may_deallocate<T: ?Sized>() -> bool;
+
+pub broadcast axiom fn axiom_no_dealloc_drop<T: NoDeallocDrop + ?Sized>()
+    ensures
+        !#[trigger] drop_may_deallocate::<T>(),
+;
+
+pub broadcast group group_alloc_check_axioms {
+    axiom_no_dealloc_drop,
+}
+
+unsafe impl NoDeallocDrop for () {
+
+}
+
+unsafe impl NoDeallocDrop for bool {
+
+}
+
+unsafe impl NoDeallocDrop for char {
+
+}
+
+unsafe impl NoDeallocDrop for u8 {
+
+}
+
+unsafe impl NoDeallocDrop for u16 {
+
+}
+
+unsafe impl NoDeallocDrop for u32 {
+
+}
+
+unsafe impl NoDeallocDrop for u64 {
+
+}
+
+unsafe impl NoDeallocDrop for u128 {
+
+}
+
+unsafe impl NoDeallocDrop for usize {
+
+}
+
+unsafe impl NoDeallocDrop for i8 {
+
+}
+
+unsafe impl NoDeallocDrop for i16 {
+
+}
+
+unsafe impl NoDeallocDrop for i32 {
+
+}
+
+unsafe impl NoDeallocDrop for i64 {
+
+}
+
+unsafe impl NoDeallocDrop for i128 {
+
+}
+
+unsafe impl NoDeallocDrop for isize {
+
+}
+
+unsafe impl<'a, T: ?Sized> NoDeallocDrop for &'a T {
+
+}
+
+unsafe impl<'a, T: ?Sized> NoDeallocDrop for &'a mut T {
+
+}
+
+unsafe impl<T: NoDeallocDrop> NoDeallocDrop for Option<T> {
+
+}
+
+unsafe impl<T: NoDeallocDrop, E: NoDeallocDrop> NoDeallocDrop for Result<T, E> {
+
+}
+
+unsafe impl<A: NoDeallocDrop, B: NoDeallocDrop> NoDeallocDrop for (A, B) {
+
+}
+
+unsafe impl<A: NoDeallocDrop, B: NoDeallocDrop, C: NoDeallocDrop> NoDeallocDrop for (A, B, C) {
+
+}
+
 /// Allocators (`core::alloc::Allocator`) whose allocations `-V alloc-check` counts, also when a
 /// container uses them (`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>`, ...).
 ///

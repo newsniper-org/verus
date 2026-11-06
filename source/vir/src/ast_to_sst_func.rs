@@ -415,6 +415,14 @@ pub fn func_decl_to_sst(
         }
         _ => None,
     };
+    let dealloc_cond = match &function.x.deallocates {
+        Some(e) if ctx.global.alloc_check => {
+            let (_pars, exps) = req_ens_to_sst(ctx, diagnostics, function, &vec![e.clone()], true)?;
+            assert!(exps.len() == 1);
+            Some(exps[0].clone())
+        }
+        _ => None,
+    };
 
     let mut fndef_axiom_exps: Vec<Exp> = Vec::new();
     if crate::ast_simplify::need_fndef_axiom(&ctx.fndef_type_set, function) {
@@ -529,6 +537,7 @@ pub fn func_decl_to_sst(
         inv_masks: Arc::new(inv_masks),
         unwind_condition,
         alloc_bound,
+        dealloc_cond,
         fndef_axioms: Arc::new(fndef_axiom_exps),
     })
 }
@@ -1064,6 +1073,7 @@ pub fn func_def_to_sst(
         );
         alloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
         state.alloc_counter = Some(counter.clone());
+        state.fip = function.x.attrs.fip;
         let le = |a: Exp, b: Exp| {
             SpannedTyped::new(
                 &b.span.clone(),

@@ -913,8 +913,38 @@ fn verus_item_to_vir<'tcx, 'a>(
                 SpecItem::Allocates => {
                     record_spec_fn_pure_args_only(bctx, expr);
                     let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
-                    let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
-                    let header = Arc::new(HeaderExprX::Allocates(arg));
+                    internal_err_unless!(args.len() == 1, expr.span, "expected 1 argument", &args);
+                    // `allocates deallocates_when(n, c)`: the bound `n`, and the condition `c`
+                    // under which the function may deallocate
+                    let dealloc_args = match &args[0].kind {
+                        rustc_hir::ExprKind::Call(fexpr, cargs) if cargs.len() == 2 => {
+                            match &fexpr.kind {
+                                rustc_hir::ExprKind::Path(qpath) => {
+                                    match bctx.types.qpath_res(qpath, fexpr.hir_id) {
+                                        rustc_hir::def::Res::Def(_, did)
+                                            if bctx.ctxt.get_verus_item(did)
+                                                == Some(&VerusItem::BuiltinFunction(
+                                                    BuiltinFunctionItem::DeallocatesWhen,
+                                                )) =>
+                                        {
+                                            Some(cargs)
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let header = if let Some(cargs) = dealloc_args {
+                        let n = expr_to_vir_consume(bctx, &cargs[0])?;
+                        let c = expr_to_vir_consume(bctx, &cargs[1])?;
+                        Arc::new(HeaderExprX::Allocates(n, Some(c)))
+                    } else {
+                        let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
+                        Arc::new(HeaderExprX::Allocates(arg, None))
+                    };
                     mk_expr(ExprX::Header(header))
                 }
                 SpecItem::Admit => {
@@ -2291,6 +2321,12 @@ fn verus_item_to_vir<'tcx, 'a>(
 
             mk_expr(ExprX::Binary(vop, lhs, rhs))
         }
+        VerusItem::BuiltinFunction(BuiltinFunctionItem::DeallocatesWhen) => {
+            return err_span(
+                expr.span,
+                "`deallocates_when(n, c)` can only be used as a function's `allocates` bound (`allocates deallocates_when(n, c)`)",
+            );
+        }
         VerusItem::BuiltinFunction(BuiltinFunctionItem::Allocated) => {
             record_spec_fn(bctx, expr);
             assert!(args.len() == 0);
@@ -2332,6 +2368,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                 }
                 BuiltinFunctionItem::ConstrainType => unreachable!(),
                 BuiltinFunctionItem::Allocated => unreachable!(),
+                BuiltinFunctionItem::DeallocatesWhen => unreachable!(),
                 BuiltinFunctionItem::GetFutureOutputType => unreachable!(),
                 BuiltinFunctionItem::ProofWithCallee => unreachable!(),
             };

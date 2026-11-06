@@ -179,7 +179,7 @@ pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
         *final(a) == *old(b),
         *final(b) == *old(a),
     opens_invariants none
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 #[verifier::external_type_specification]
