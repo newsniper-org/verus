@@ -49,7 +49,7 @@ pub assume_specification[ u8::trailing_zeros ](i: u8) -> (r: u32)
     ensures
         r == u8_trailing_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u8_trailing_ones)]
@@ -57,7 +57,7 @@ pub assume_specification[ u8::trailing_ones ](i: u8) -> (r: u32)
     ensures
         r == u8_trailing_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u8_leading_zeros)]
@@ -65,7 +65,7 @@ pub assume_specification[ u8::leading_zeros ](i: u8) -> (r: u32)
     ensures
         r == u8_leading_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u8_leading_ones)]
@@ -73,7 +73,7 @@ pub assume_specification[ u8::leading_ones ](i: u8) -> (r: u32)
     ensures
         r == u8_leading_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub broadcast proof fn axiom_u8_trailing_zeros(i: u8)
@@ -227,7 +227,7 @@ pub assume_specification[ u16::trailing_zeros ](i: u16) -> (r: u32)
     ensures
         r == u16_trailing_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u16_trailing_ones)]
@@ -235,7 +235,7 @@ pub assume_specification[ u16::trailing_ones ](i: u16) -> (r: u32)
     ensures
         r == u16_trailing_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u16_leading_zeros)]
@@ -243,7 +243,7 @@ pub assume_specification[ u16::leading_zeros ](i: u16) -> (r: u32)
     ensures
         r == u16_leading_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u16_leading_ones)]
@@ -251,7 +251,7 @@ pub assume_specification[ u16::leading_ones ](i: u16) -> (r: u32)
     ensures
         r == u16_leading_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub broadcast proof fn axiom_u16_trailing_zeros(i: u16)
@@ -411,7 +411,7 @@ pub assume_specification[ u32::trailing_zeros ](i: u32) -> (r: u32)
     ensures
         r == u32_trailing_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u32_trailing_ones)]
@@ -419,7 +419,7 @@ pub assume_specification[ u32::trailing_ones ](i: u32) -> (r: u32)
     ensures
         r == u32_trailing_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u32_leading_zeros)]
@@ -427,7 +427,7 @@ pub assume_specification[ u32::leading_zeros ](i: u32) -> (r: u32)
     ensures
         r == u32_leading_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u32_leading_ones)]
@@ -435,7 +435,7 @@ pub assume_specification[ u32::leading_ones ](i: u32) -> (r: u32)
     ensures
         r == u32_leading_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub broadcast proof fn axiom_u32_trailing_zeros(i: u32)
@@ -596,7 +596,7 @@ pub assume_specification[ u64::trailing_zeros ](i: u64) -> (r: u32)
     ensures
         r == u64_trailing_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u64_trailing_ones)]
@@ -604,7 +604,7 @@ pub assume_specification[ u64::trailing_ones ](i: u64) -> (r: u32)
     ensures
         r == u64_trailing_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 //#[verifier::when_used_as_spec(u64_leading_zeros)]
@@ -612,7 +612,7 @@ pub assume_specification[ u64::leading_zeros ](i: u64) -> (r: u32)
     ensures
         r as int == u64_leading_zeros(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::when_used_as_spec(u64_leading_ones)]
@@ -620,7 +620,7 @@ pub assume_specification[ u64::leading_ones ](i: u64) -> (r: u32)
     ensures
         r == u64_leading_ones(i),
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub broadcast proof fn axiom_u64_trailing_zeros(i: u64)

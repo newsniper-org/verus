@@ -307,3 +307,82 @@ fn alloc_check_runtime_opt0() {
 fn alloc_check_runtime_opt3() {
     run_at("3");
 }
+
+// `#[verifier::fip(strict)]` relies on `become` (`explicit_tail_calls`) for constant stack space:
+// a verified tail-recursive function runs 10^8 levels deep, which overflows the stack unless
+// each call replaces the caller's frame, at every optimization level (an ordinary tail call is
+// not eliminated at opt-level=0, nor at opt-level=3 when a drop is pending after it)
+const TAIL_CALLS: &str = r#"
+use vstd::prelude::*;
+
+verus! {
+
+#[verifier::fip(strict)]
+fn sum(n: u64, acc: u64) -> (r: u64)
+    decreases n
+{
+    if n == 0 { acc } else { become sum(n - 1, acc.wrapping_add(n)) }
+}
+
+#[verifier::fip(strict)]
+fn even(n: u64) -> (r: bool)
+    decreases n
+{
+    if n == 0 { true } else { become odd(n - 1) }
+}
+
+#[verifier::fip(strict)]
+fn odd(n: u64) -> (r: bool)
+    decreases n
+{
+    if n == 0 { false } else { become even(n - 1) }
+}
+
+fn main() {
+}
+
+} // verus!
+
+#[verifier::external]
+fn run_cases() {
+    println!("TAIL-CASE sum {}", sum(100_000_000, 0));
+    println!("TAIL-CASE even {}", even(100_000_001));
+}
+"#;
+
+fn run_tail_calls_at(opt_level: &str) {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let entry_file = tempdir.path().join("tails.rs");
+    let cases =
+        TAIL_CALLS.replace("fn main() {\n}", "#[verifier::external] fn main() { run_cases() }");
+    // (`explicit_tail_calls` is in the prelude)
+    let code = format!("{}\n{}\n", FEATURE_PRELUDE, cases);
+    std::fs::write(&entry_file, code).expect("write source file");
+    let opt = format!("opt-level={}", opt_level);
+    let output = run_verus_raw(
+        &["-V", "alloc-check", "--compile", "-C", &opt, entry_file.to_str().unwrap()],
+        tempdir.path(),
+    );
+    assert!(
+        output.status.success(),
+        "verus failed (opt-level={opt_level}):\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let exe = tempdir.path().join(if cfg!(target_os = "windows") { "tails.exe" } else { "tails" });
+    let run = std::process::Command::new(&exe).output().expect("run compiled cases");
+    assert!(run.status.success(), "tail calls failed:\n{}", String::from_utf8_lossy(&run.stderr));
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("TAIL-CASE sum 5000000050000000"), "{}", stdout);
+    assert!(stdout.contains("TAIL-CASE even false"), "{}", stdout);
+}
+
+#[test]
+fn fip_strict_tail_calls_opt0() {
+    run_tail_calls_at("0");
+}
+
+#[test]
+fn fip_strict_tail_calls_opt3() {
+    run_tail_calls_at("3");
+}

@@ -335,7 +335,32 @@ fn push_spare(v: &mut Vec<u64>)
 
 `allocates`와 마찬가지로 unwind하는 경로는 다루지 않습니다. drop 검사는 Verus의 컴파일 단계에서
 돌기 때문에, `--no-lifetime`과 `--no-erasure-check`는 `#[verifier::fip]` 함수를 거부합니다.
-스택 공간 상수까지 요구하는 `#[verifier::fip(strict)]`는 아직 지원하지 않습니다.
+
+### 스택 공간 상수: `#[verifier::fip(strict)]`
+
+FP²의 `fip`은 스택 공간 상수도 요구합니다. `#[verifier::fip(strict)]`는 `#[verifier::fip]`에 이 조건을
+더합니다. Rust는 꼬리 위치의 호출이 호출자의 frame을 대체한다고 보장하지 않습니다. `opt-level=0`에서는
+대체하지 않고, 호출 뒤에 남은 drop이 있을 때도 대체하지 않습니다. 그래서 엄격한 함수는
+`become`(`#![feature(explicit_tail_calls)]`)으로만 재귀합니다. rustc는 `become` 호출이 frame을
+대체한다고 보장하거나, 그렇게 할 수 없으면 프로그램을 거부합니다.
+
+```rust
+#[verifier::fip(strict)]
+fn sum(n: u64, acc: u64) -> (r: u64)
+    decreases n
+{
+    if n == 0 { acc } else { become sum(n - 1, acc.wrapping_add(n)) }
+}
+```
+
+엄격한 함수의 호출은 컴파일되는 프로그램의 MIR에서, drop elaboration 뒤에 검사합니다. 그 함수의 drop이
+실행하는 소멸자도 포함합니다.
+
+* 호출 대상은 다른 엄격한 함수이거나 std나 vstd의 함수일 수 있습니다. std와 vstd의 함수는 호출자의
+  코드로 되돌아 부르지 않습니다. 그렇게 할 수 있는 호출(콜백을 통한 호출)은 위의 검사가 거부하기
+  때문입니다. 다른 crate의 함수 호출과 callee를 알 수 없는 호출(제네릭 호출, 함수 값)은 거부합니다.
+* 엄격한 함수들 사이의 호출 순환은 `become` 호출로만 이루어져야 합니다. 꼬리가 아닌 호출은 frame을
+  하나 더하므로, 그런 호출을 거치는 순환은 스택을 키웁니다.
 
 ## 라이브러리와 다른 crate
 
@@ -369,6 +394,9 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 `-V alloc-check`가 신뢰하는 것:
 * std 함수에 대한 vstd 명세의 상한, 그리고 위에서 설명한 std trait 메서드에 대한 vstd 상한의 설계
 * vstd 명세의 `deallocates_when` 조건(`#[verifier::fip]`용)
+* `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
+  `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
+  `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
 * `drop`이 아닌 `external_body` 함수
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 

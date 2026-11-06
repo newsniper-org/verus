@@ -224,9 +224,96 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] fip_strict_not_supported_yet ["vstd", "-V alloc-check"] => verus_code! {
+    // (`explicit_tail_calls` is enabled by the test prelude)
+    #[test] fip_strict_tail_recursion_accepted ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         #[verifier::fip(strict)]
-        fn f() {}
-    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip(strict)]` (constant stack space) is not supported yet")
+        fn sum(n: u64, acc: u64) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { acc } else { become sum(n - 1, acc.wrapping_add(n)) }
+        }
+        #[verifier::fip(strict)]
+        fn even(n: u64) -> (r: bool)
+            decreases n
+        {
+            if n == 0 { true } else { become odd(n - 1) }
+        }
+        #[verifier::fip(strict)]
+        fn odd(n: u64) -> (r: bool)
+            decreases n
+        {
+            if n == 0 { false } else { become even(n - 1) }
+        }
+        // non-tail calls of functions that do not lead back here are fine
+        #[verifier::fip(strict)]
+        fn caller() -> (r: u64) {
+            let a = sum(10, 0);
+            if even(4) { a } else { 0 }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_non_tail_recursion_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip(strict)]
+        fn sum(n: u64) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { 0 } else { sum(n - 1).wrapping_add(n) }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not a tail call and can lead back to `sum`")
+}
+
+test_verify_one_file_with_options! {
+    // a cycle with one non-tail call grows the stack by a frame per round
+    #[test] fip_strict_mixed_cycle_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip(strict)]
+        fn f(n: u64) -> (r: u64)
+            decreases n, 1int
+        {
+            if n == 0 { 0 } else { become g(n) }
+        }
+        #[verifier::fip(strict)]
+        fn g(n: u64) -> (r: u64)
+            requires n > 0,
+            decreases n, 0int
+        {
+            f(n - 1).wrapping_add(1)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this call of `f` is not a tail call and can lead back to `g`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_calls_non_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip]
+        fn plain(n: u64) -> (r: u64) { n }
+        #[verifier::fip(strict)]
+        fn f() -> (r: u64) { plain(1) }
+    } => Err(err) => assert_vir_error_msg(err, "it calls `plain`, which is not `#[verifier::fip(strict)]`")
+}
+
+test_verify_one_file_with_options! {
+    // a drop runs the type's destructor, which must be strict too
+    #[test] fip_strict_destructor_must_be_strict ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::{AllocFreeDrop, NoDeallocDrop};
+        pub struct Handle { pub id: u64 }
+        impl Drop for Handle {
+            #[verifier::fip]
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+            {
+            }
+        }
+        unsafe impl AllocFreeDrop for Handle {}
+        unsafe impl NoDeallocDrop for Handle {}
+        #[verifier::fip(strict)]
+        fn f(h: Handle) {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "which is not `#[verifier::fip(strict)]`")
 }

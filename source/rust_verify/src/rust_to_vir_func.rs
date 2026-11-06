@@ -2498,15 +2498,9 @@ pub(crate) fn finish_function<'tcx>(
 
     // -V alloc-check: `#[verifier::fip]` (fully in-place) and `deallocates_when`
     let mut header = header;
-    if let Some(strict) = vattrs.fip {
+    if vattrs.fip.is_some() {
         if !ctxt.cmd_line_args.alloc_check {
             return err_span(sig.span, "`#[verifier::fip]` needs -V alloc-check");
-        }
-        if strict {
-            return err_span(
-                sig.span,
-                "`#[verifier::fip(strict)]` (constant stack space) is not supported yet; use `#[verifier::fip]`",
-            );
         }
         if mode != Mode::Exec {
             return err_span(sig.span, "`#[verifier::fip]` can only be used on exec functions");

@@ -346,7 +346,33 @@ impl in the program is checked, whichever crate it is in.
 
 Paths that unwind are not covered, as for `allocates`. The drop check runs in the compilation
 step of Verus, so `--no-lifetime` and `--no-erasure-check` reject `#[verifier::fip]` functions.
-`#[verifier::fip(strict)]`, which also requires constant stack space, is not supported yet.
+
+### Constant stack space: `#[verifier::fip(strict)]`
+
+FP²'s `fip` also requires constant stack space. `#[verifier::fip(strict)]` adds this to
+`#[verifier::fip]`. Rust does not guarantee that a call in tail position replaces the caller's
+frame. It is not done at `opt-level=0`, and not when a drop is pending after the call. A strict
+function therefore recurses only through `become` (`#![feature(explicit_tail_calls)]`). rustc
+guarantees that a `become` call replaces the frame, or rejects the program.
+
+```rust
+#[verifier::fip(strict)]
+fn sum(n: u64, acc: u64) -> (r: u64)
+    decreases n
+{
+    if n == 0 { acc } else { become sum(n - 1, acc.wrapping_add(n)) }
+}
+```
+
+The calls of a strict function are checked on the MIR of the compiled program, after drop
+elaboration. This includes the destructors that its drops run.
+
+* A call may go to another strict function, or to std or vstd. Their functions do not call back
+  into the caller's code, because the calls that could do so (through callbacks) are rejected by
+  the checks above. Calls of functions of other crates, and calls whose callee is not known
+  (generic calls, function values), are rejected.
+* A cycle of calls between strict functions must consist of `become` calls only. A non-tail call
+  adds a frame, so a cycle through one grows the stack.
 
 ## Libraries and other crates
 
@@ -378,7 +404,10 @@ allocates cannot pass the strict mode yet.
 What `-V alloc-check` trusts:
 * the bounds in vstd's specifications of std functions, and the design of vstd's bounds on std
   trait methods described above;
-* the `deallocates_when` conditions in vstd's specifications (for `#[verifier::fip]`);
+* the `deallocates_when` conditions in vstd's specifications (for `#[verifier::fip]`), and, for
+  `#[verifier::fip(strict)]`, that std's and vstd's functions use bounded stack space and that
+  rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
+  `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
 * `external_body` functions other than `drop`;
 * the toolchain's std (its trusted drops and opaque types).
 

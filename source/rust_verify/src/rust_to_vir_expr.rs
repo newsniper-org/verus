@@ -4011,7 +4011,15 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
         ExprKind::Err(..) => {
             unsupported_err!(expr.span, format!("expressions that failed to type-check"))
         }
-        ExprKind::Become(..) => unsupported_err!(expr.span, format!("`become` expressions")),
+        // `become f(args)` (`explicit_tail_calls`): rustc guarantees that the call replaces the
+        // caller's frame (or rejects the program); for verification it is `return f(args)`. (Its
+        // drops of the caller's locals before the call matter only for -V alloc-check's drop
+        // rules, which do not depend on where drops happen; `#[verifier::fip]` checks them on
+        // the MIR.)
+        ExprKind::Become(call) => {
+            let call = expr_to_vir_consume(bctx, call)?;
+            mk_expr(ExprX::Return(Some(call)))
+        }
         ExprKind::UnsafeBinderCast(..) => {
             unsupported_err!(expr.span, format!("unsafe binder casts"))
         }
