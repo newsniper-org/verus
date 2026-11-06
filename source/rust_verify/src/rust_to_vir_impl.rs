@@ -827,11 +827,19 @@ pub(crate) fn collect_external_trait_impls<'tcx>(
                         if !trait_map[&trait_path].iter().any(|t| t.x.assoc_typs.contains(&name)) {
                             continue;
                         }
-                        if !crate::rust_to_vir_base::mid_ty_filter_for_external_impls(
-                            ctxt,
-                            &tcx.type_of(assoc_item.def_id).skip_binder(),
-                            external_info,
-                        ) {
+                        // (`!` is not auto-imported in an impl's trait arguments, where
+                        // `impl<T> From<!> for T` would conflict with `impl<T> From<T> for T`;
+                        // as the value of an associated type it is fine, and needed since Rust
+                        // 1.100 made `Infallible` an alias of `!`, e.g. the `Error` of the
+                        // blanket `impl<T, U: Into<T>> TryFrom<U> for T`)
+                        let assoc_ty = tcx.type_of(assoc_item.def_id).skip_binder();
+                        if !assoc_ty.is_never()
+                            && !crate::rust_to_vir_base::mid_ty_filter_for_external_impls(
+                                ctxt,
+                                &assoc_ty,
+                                external_info,
+                            )
+                        {
                             continue 'impls;
                         }
                         match translate_assoc_type(

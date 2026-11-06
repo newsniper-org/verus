@@ -1667,6 +1667,10 @@ pub(crate) fn check_generic_bound<'tcx>(
     {
         // TODO: when we have full support for auto traits, return Some, not None here
         Ok(None)
+    } else if Some(trait_def_id) == tcx.lang_items().destruct_trait() {
+        // Every type is `Destruct` outside of const contexts (since Rust 1.100, std puts
+        // `[const] Destruct` bounds on impls such as `Iterator for Range<A>`)
+        Ok(None)
     } else {
         let mut vir_args = vec![];
         for arg in args.iter() {

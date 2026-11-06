@@ -623,6 +623,10 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
     // TODO: remove the following when we have full support for auto traits:
     external_info.trait_id_set.insert(tcx.lang_items().unpin_trait().expect("lang_item"));
     external_info.trait_id_set.insert(tcx.lang_items().sync_trait().expect("lang_item"));
+    // every type is `Destruct` outside of const contexts (std's `[const] Destruct` bounds)
+    if let Some(destruct) = tcx.lang_items().destruct_trait() {
+        external_info.trait_id_set.insert(destruct);
+    }
     external_info
         .trait_id_set
         .insert(tcx.get_diagnostic_item(rustc_span::sym::Send).expect("send"));

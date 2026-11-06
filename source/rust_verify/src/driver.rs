@@ -350,6 +350,14 @@ pub fn run(
         if !verifier.compile && (verifier.args.no_erasure_check || verifier.args.no_lifetime) {
             Ok(None)
         } else {
+            let mut rustc_args = rustc_args;
+            if verifier.args.alloc_check {
+                // -V alloc-check records the SVH of the compiled crate in the exported .vir
+                // (see `finish_alloc_checked_export`); since Rust 1.100 the default SVH is only
+                // known once metadata is encoded, while the HIR-based one (the default before)
+                // is known during analysis and is the one written into the crate's metadata
+                rustc_args.push("-Zmetadata-crate-hash=no".to_string());
+            }
             run_with_erase_macro_compile(rustc_args, do_compile, verifier.args.vstd)
         };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built
