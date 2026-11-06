@@ -276,7 +276,7 @@ fn strict_edges<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Vec<StrictEdge> 
     let body = tcx.mir_drops_elaborated_and_const_checked(def_id);
     let body = body.borrow();
     let mut edges = Vec::new();
-    let mut add = |callee: DefId, tail: bool, span: Span, edges: &mut Vec<StrictEdge>| match callee
+    let add = |callee: DefId, tail: bool, span: Span, edges: &mut Vec<StrictEdge>| match callee
         .as_local()
     {
         Some(local) => {

@@ -566,6 +566,17 @@ pub fn main() {
         println!("{}", serde_json::ser::to_string_pretty(&out).expect("invalid json"));
     }
 
+    if verifier.args.fip_lint_fix
+        && status.is_ok()
+        && !verifier.encountered_vir_error
+        && verifier.count_errors == 0
+    {
+        // (the rewrites are checked by verifying again, with the same arguments but without `=fix`)
+        let rerun: Vec<String> =
+            std::env::args().skip(1).map(|a| a.replace("fip-lint=fix", "fip-lint")).collect();
+        rust_verify::fip_trmc::apply_fixes(&rerun);
+    }
+
     match status {
         Ok(()) => (),
         Err(_) => {

@@ -194,6 +194,8 @@ pub axiom fn proof_from_false<A>() -> (tracked a: A)
 pub fn unreached<A>() -> A
     requires
         false,
+    allocates
+        deallocates_when(0int, false),
 {
     panic!("unreached_external")
 }

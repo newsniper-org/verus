@@ -122,6 +122,7 @@ pub struct ArgsX {
     pub alloc_check: bool,
     pub alloc_check_strict: bool,
     pub fip_lint: bool,
+    pub fip_lint_fix: bool,
     pub no_bv_simplify: bool,
     pub observer: Option<String>,
 }
@@ -175,6 +176,7 @@ impl ArgsX {
             alloc_check: Default::default(),
             alloc_check_strict: Default::default(),
             fip_lint: Default::default(),
+            fip_lint_fix: Default::default(),
             no_bv_simplify: Default::default(),
             observer: None,
         }
@@ -460,7 +462,7 @@ pub fn parse_args_with_imports(
         ),
         (
             EXTENDED_FIP_LINT,
-            "Suggest how recursion can use constant stack space (`#[verifier::fip(strict)]`): calls in tail position that are not tail calls (`become`), and recursion modulo a constructor (TRMC). Experimental.",
+            "Suggest how recursion can use constant stack space (`#[verifier::fip(strict)]`): calls in tail position that are not tail calls (`become`), and recursion modulo a constructor (TRMC). With `=fix`, rewrite TRMC recursion into loops in the source files, keeping each rewrite only if the crate still verifies. Experimental.",
         ),
         (
             EXTENDED_NO_BV_SIMPLIFY,
@@ -878,6 +880,14 @@ pub fn parse_args_with_imports(
             || extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
         alloc_check_strict: extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
         fip_lint: extended.contains_key(EXTENDED_FIP_LINT),
+        fip_lint_fix: match extended.get(EXTENDED_FIP_LINT) {
+            None | Some(None) => false,
+            Some(Some(v)) if v == "fix" => true,
+            Some(Some(v)) => error(format!(
+                "unknown value for -V {}: {} (expected -V {} or -V {}=fix)",
+                EXTENDED_FIP_LINT, v, EXTENDED_FIP_LINT, EXTENDED_FIP_LINT
+            )),
+        },
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
         observer: match extended.get(EXTENDED_OBSERVER) {
             None => None,

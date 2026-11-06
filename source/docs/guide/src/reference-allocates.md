@@ -386,6 +386,45 @@ and suggests how to avoid it:
   value's field. This is destination-passing style, as in Leijen and Lorenzen's "Tail Recursion
   Modulo Context".
 
+For recursion modulo a constructor, the warning comes with the rewrite into a loop as a
+suggestion, which an editor (verus-analyzer) offers as a quick fix. `-V fip-lint=fix` writes the
+rewrite to the source files instead. A rewrite is kept only if the crate still verifies: after a
+successful verification, Verus writes each rewrite, verifies the crate again, and restores the
+file if that fails. So nothing about the rewrite is trusted.
+
+The rewrite works on a strongly connected component of the call graph, so mutual recursion is
+rewritten too. Every recursive call in the component must be either a tail call or the only
+recursive call inside a constructor in tail position (possibly through `Box::new` and nested
+constructors).
+
+* A single function becomes a loop in its own body.
+* Several functions share one loop in a new helper function. Its state is an enum with one
+  variant per function, which holds that function's arguments and its hole, so the functions can
+  return different types. Each function starts the loop in its own state.
+
+The rewritten code evaluates the constructor's fields and the call's arguments in the same order
+as the original. The loop invariant states two things:
+
+* If the hole's final value (`*final(hole)`) satisfies the `ensures` for the current arguments,
+  then the result satisfies the `ensures` for the original arguments.
+* With `allocates`, the allocations so far plus the bound for the current arguments stay within
+  the original bound.
+
+Each value is written into the hole with `core::mem::forget(core::mem::replace(hole, value))`.
+The replaced value is a placeholder (a variant without fields), so forgetting it leaks nothing,
+and a `#[verifier::fip]` function stays `#[verifier::fip]`. After the rewrite, the functions can be
+marked `#[verifier::fip(strict)]`. The test `fip_trmc_fix_*` rewrites recursion that overflows the
+stack 10^6 levels deep, and runs the result at `opt-level=0` and `3`.
+
+The rewrite is not offered, and the warning says why, when:
+
+* a function is not a free function (for example, it is a method);
+* a parameter is `&mut`, ghost or tracked, or is a pattern rather than a name;
+* a function has no `decreases` (it becomes the loop's), uses `returns`, or returns early with `?`;
+* the return type is not an enum with a variant without fields;
+* several functions have different generic parameters, have more than one `decreases` expression
+  each, or do not all have `allocates`.
+
 ## Libraries and other crates
 
 A bound in an imported crate is trusted only if that crate was verified with `-V alloc-check`,

@@ -386,3 +386,178 @@ fn fip_strict_tail_calls_opt0() {
 fn fip_strict_tail_calls_opt3() {
     run_tail_calls_at("3");
 }
+
+// `-V fip-lint=fix` rewrites recursion modulo a constructor into a loop (direct and mutual
+// recursion, tuple and struct constructors, different result types); the rewritten functions
+// verify as `#[verifier::fip(strict)]` and run 10^6 levels deep, which overflows the stack when
+// each level is a call
+const TRMC: &str = r#"
+use vstd::prelude::*;
+
+verus! {
+
+pub enum List { Nil, Cons(u64, Box<List>) }
+pub enum A { End, Node(u64, Box<B>) }
+pub enum B { End, Node { val: u64, next: Box<A> } }
+
+pub open spec fn len(l: List) -> nat decreases l {
+    match l { List::Nil => 0, List::Cons(_, t) => 1 + len(*t) }
+}
+pub open spec fn half(l: List) -> List decreases l {
+    match l { List::Nil => List::Nil, List::Cons(x, t) => List::Cons(x / 2, Box::new(half(*t))) }
+}
+pub open spec fn to_a(l: List) -> A decreases l {
+    match l { List::Nil => A::End, List::Cons(x, t) => A::Node(x, Box::new(to_b(*t))) }
+}
+pub open spec fn to_b(l: List) -> B decreases l {
+    match l { List::Nil => B::End, List::Cons(x, t) => B::Node { val: x, next: Box::new(to_a(*t)) } }
+}
+
+#[verifier::fip]
+fn half_rec(l: &List) -> (r: List)
+    ensures r == half(*l)
+    decreases l
+    allocates len(*l)
+{
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(x, xs) => List::Cons(*x / 2, Box::new(half_rec(xs))),
+    }
+}
+
+#[verifier::fip]
+fn to_a_rec(l: &List) -> (r: A)
+    ensures r == to_a(*l)
+    decreases l
+    allocates len(*l)
+{
+    match l {
+        List::Nil => A::End,
+        List::Cons(x, xs) => A::Node(*x, Box::new(to_b_rec(xs))),
+    }
+}
+
+#[verifier::fip]
+fn to_b_rec(l: &List) -> (r: B)
+    ensures r == to_b(*l)
+    decreases l
+    allocates len(*l)
+{
+    match l {
+        List::Nil => B::End,
+        List::Cons(x, xs) => B::Node { val: *x, next: Box::new(to_a_rec(xs)) },
+    }
+}
+
+fn main() {
+}
+
+} // verus!
+
+#[verifier::external]
+fn build(n: u64) -> List {
+    let mut l = List::Nil;
+    for i in 0..n {
+        l = List::Cons(2 * i + 1, Box::new(l));
+    }
+    l
+}
+
+#[verifier::external]
+fn sum(l: &List) -> u64 {
+    let (mut s, mut cur) = (0, l);
+    while let List::Cons(x, t) = cur {
+        s += x;
+        cur = t;
+    }
+    s
+}
+
+#[verifier::external]
+fn count_a(a: &A) -> u64 {
+    let (mut n, mut cur) = (0, a);
+    loop {
+        match cur {
+            A::End => return n,
+            A::Node(_, b) => match &**b {
+                B::End => return n + 1,
+                B::Node { next, .. } => {
+                    n += 2;
+                    cur = next;
+                }
+            },
+        }
+    }
+}
+
+#[verifier::external]
+fn run_cases() {
+    let l = build(1_000_000);
+    let h = half_rec(&l);
+    println!("TRMC-CASE half {}", sum(&h));
+    let a = to_a_rec(&l);
+    println!("TRMC-CASE to_a {}", count_a(&a));
+    // (dropping a list this long recurses in its drop glue)
+    std::mem::forget((l, h, a));
+}
+"#;
+
+fn run_trmc_fix_at(opt_level: &str) {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let entry_file = tempdir.path().join("trmc.rs");
+    let cases = TRMC.replace("fn main() {\n}", "#[verifier::external] fn main() { run_cases() }");
+    std::fs::write(&entry_file, format!("{}\n{}\n", FEATURE_PRELUDE, cases)).expect("write");
+    let output = run_verus_raw(
+        &["-V", "alloc-check", "-V", "fip-lint=fix", entry_file.to_str().unwrap()],
+        tempdir.path(),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "verus -V fip-lint=fix failed:\n{}", stderr);
+    assert!(stderr.contains("rewrote `trmc::half_rec` into a loop"), "{}", stderr);
+    assert!(
+        stderr.contains("rewrote `trmc::to_a_rec`, `trmc::to_b_rec` into a loop"),
+        "{}",
+        stderr
+    );
+    let fixed = std::fs::read_to_string(&entry_file).expect("read");
+    assert!(
+        fixed.contains("'__trmc: loop") && fixed.contains("fn to_a_rec_to_b_rec_trmc"),
+        "{}",
+        fixed
+    );
+    // the rewritten functions use constant stack space
+    let strict = fixed.replace("#[verifier::fip]", "#[verifier::fip(strict)]");
+    std::fs::write(&entry_file, strict).expect("write");
+    let opt = format!("opt-level={}", opt_level);
+    let output = run_verus_raw(
+        &["-V", "alloc-check", "--compile", "-C", &opt, entry_file.to_str().unwrap()],
+        tempdir.path(),
+    );
+    assert!(
+        output.status.success(),
+        "verus failed on the rewritten code (opt-level={opt_level}):\n{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        fixed
+    );
+    let exe = tempdir.path().join(if cfg!(target_os = "windows") { "trmc.exe" } else { "trmc" });
+    let run = std::process::Command::new(&exe).output().expect("run compiled cases");
+    assert!(
+        run.status.success(),
+        "rewritten code failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    // sum of (2i+1)/2 = i for i < 10^6
+    assert!(stdout.contains("TRMC-CASE half 499999500000"), "{}", stdout);
+    assert!(stdout.contains("TRMC-CASE to_a 1000000"), "{}", stdout);
+}
+
+#[test]
+fn fip_trmc_fix_opt0() {
+    run_trmc_fix_at("0");
+}
+
+#[test]
+fn fip_trmc_fix_opt3() {
+    run_trmc_fix_at("3");
+}

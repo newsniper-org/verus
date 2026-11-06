@@ -361,9 +361,54 @@ test_verify_one_file_with_options! {
             .map(|w| w.message.as_str())
             .filter(|m| m.starts_with("-V fip-lint"))
             .collect();
-        assert_eq!(msgs.len(), 3, "{:?}", msgs);
+        assert_eq!(msgs.len(), 4, "{:?}", msgs);
         assert!(msgs.iter().any(|m| m.contains("call of `sum` is in tail position but is not a tail call")), "{:?}", msgs);
         assert!(msgs.iter().any(|m| m.contains("call of `sum_v` is in tail position") && m.contains("a drop is pending after the call: `std::vec::Vec<u8>`")), "{:?}", msgs);
         assert!(msgs.iter().any(|m| m.contains("recursive call of `test_crate::range` is not a tail call") && m.contains("tail recursion modulo a constructor")), "{:?}", msgs);
+        // the rewrite into a loop, as a suggestion
+        let rewrite = err
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("`test_crate::range` can be rewritten into a loop"))
+            .expect("rewrite warning");
+        assert!(rewrite.rendered.contains("'__trmc: loop"), "{}", rewrite.rendered);
+        assert!(rewrite.rendered.contains("__trmc_hole = match __trmc_hole"), "{}", rewrite.rendered);
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_lint_trmc_not_rewritable ["vstd", "-V fip-lint"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum List { Nil, Cons(u64, Box<List>) }
+
+        // a second recursive call that is not in tail position
+        fn twice(n: u64) -> (r: List)
+            decreases n
+        {
+            if n == 0 {
+                List::Nil
+            } else {
+                let _ = twice(n - 1);
+                List::Cons(n, Box::new(twice(n - 1)))
+            }
+        }
+
+        // no variant without fields to hold the place of the value being built
+        pub struct Cell { pub v: u64, pub next: Option<Box<Cell>> }
+        fn cells(n: u64) -> (r: Cell)
+            decreases n
+        {
+            if n == 0 { Cell { v: 0, next: None } } else { Cell { v: n, next: Some(Box::new(cells(n - 1))) } }
+        }
+    } => Ok(err) => {
+        let msgs: Vec<&str> = err
+            .warnings
+            .iter()
+            .map(|w| w.message.as_str())
+            .filter(|m| m.contains("cannot be rewritten into a loop automatically"))
+            .collect();
+        assert_eq!(msgs.len(), 2, "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("neither a tail call nor the only recursive call inside a constructor")), "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("must be an enum with a variant without fields")), "{:?}", msgs);
     }
 }

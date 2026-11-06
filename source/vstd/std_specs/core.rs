@@ -182,6 +182,20 @@ pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+pub assume_specification<T>[ core::mem::replace::<T> ](dest: &mut T, src: T) -> (res: T)
+    ensures
+        *final(dest) == src,
+        res == *old(dest),
+    opens_invariants none
+    no_unwind  allocates deallocates_when(0int, false)
+;
+
+// `forget` never runs a destructor, so it never deallocates (what `t` owns is leaked instead)
+pub assume_specification<T>[ core::mem::forget::<T> ](t: T)
+    opens_invariants none
+    no_unwind  allocates deallocates_when(0int, false)
+;
+
 #[verifier::external_type_specification]
 pub struct ExOrdering(core::cmp::Ordering);
 

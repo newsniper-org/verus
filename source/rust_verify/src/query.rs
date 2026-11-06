@@ -646,6 +646,12 @@ impl<'tcx> Query<'tcx> {
             for msg in vir::fip_lint::lint_krate(&unpruned_crate) {
                 self.reporter.report_as(&msg.to_any(), MessageLevel::Warning);
             }
+            crate::fip_trmc::report(
+                &pre_crate.ctxt,
+                &pre_crate.fun_name_to_info,
+                &unpruned_crate,
+                self.args.fip_lint_fix,
+            );
         }
 
         // Demote external traits
