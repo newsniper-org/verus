@@ -87,7 +87,7 @@ use rustc_middle::ty::adjustment::{
     PatAdjust, PatAdjustment, PointerCoercion,
 };
 use rustc_middle::ty::{
-    AdtDef, ClauseKind, GenericArg, IntTy, TraitPredicate, TraitRef, TyCtxt, TyKind, TypingEnv,
+    AdtDef, ClauseKind, GenericArg, IntTy, TraitClause, TraitRef, TyCtxt, TyKind, TypingEnv,
     UintTy, Upcast,
 };
 use rustc_mir_build_verus::verus::BodyErasure;
@@ -641,7 +641,7 @@ pub(crate) fn patexpr_to_vir<'tcx>(
         PatExprKind::Path(qpath) => {
             let res = bctx.types.qpath_res(&qpath, pat_expr.hir_id);
             match res {
-                Res::Def(DefKind::Const { is_type_const: _ }, id) => {
+                Res::Def(DefKind::Const, id) => {
                     patexpr_unsupported_type_err(bctx, span, pat)?;
                     let node_substs = bctx.types.node_args(pat_expr.hir_id);
                     let x = const_var_to_vir(bctx, None, id, node_substs, &pat_expr.hir_id, span)?;
@@ -649,7 +649,7 @@ pub(crate) fn patexpr_to_vir<'tcx>(
 
                     Ok(PatternX::Expr(expr))
                 }
-                Res::Def(DefKind::AssocConst { is_type_const: _ }, id) => {
+                Res::Def(DefKind::AssocConst, id) => {
                     patexpr_unsupported_type_err(bctx, span, pat)?;
                     if let Some(vir_expr) =
                         int_intrinsic_constant_to_vir(&bctx.ctxt, pat.span, &pat_typ, id)
@@ -929,9 +929,6 @@ pub(crate) fn pattern_to_vir_unadjusted<'tcx>(
                 binders.push(binder);
             }
             PatternX::Constructor(Dt::Path(vir_path), variant_name, Arc::new(binders))
-        }
-        PatKind::Box(pat) => {
-            return pattern_to_vir(bctx, pat);
         }
         PatKind::Or(pats) => {
             if pats.len() == 1 {
@@ -2213,9 +2210,9 @@ pub(crate) fn expr_to_vir_with_adjustments<'tcx>(
                         .map(|trait_ref| {
                             let clause = trait_ref
                                 .map_bound(|trait_ref| {
-                                    ClauseKind::Trait(TraitPredicate {
+                                    ClauseKind::Trait(TraitClause {
                                         trait_ref: trait_ref.with_self_ty(bctx.ctxt.tcx, tyr1),
-                                        polarity: rustc_middle::ty::PredicatePolarity::Positive,
+                                        polarity: rustc_middle::ty::ClausePolarity::Positive,
                                     })
                                 })
                                 .upcast(bctx.ctxt.tcx);
@@ -2725,13 +2722,13 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                             )),
                         );
                         let clause =
-                            rustc_middle::ty::Binder::dummy(ClauseKind::Trait(TraitPredicate {
+                            rustc_middle::ty::Binder::dummy(ClauseKind::Trait(TraitClause {
                                 trait_ref: TraitRef::new(
                                     tcx,
                                     tcx.lang_items().fn_once_trait().unwrap(),
                                     [generic_arg0, generic_arg1],
                                 ),
-                                polarity: rustc_middle::ty::PredicatePolarity::Positive,
+                                polarity: rustc_middle::ty::ClausePolarity::Positive,
                             }))
                             .upcast(tcx);
                         let impl_paths = get_impl_paths_for_clauses(
@@ -3357,7 +3354,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         expr.span,
                     )?))
                 }
-                (Res::Def(DefKind::AssocConst { is_type_const: _ }, id), _) => {
+                (Res::Def(DefKind::AssocConst, id), _) => {
                     if let Some(vir_expr) =
                         int_intrinsic_constant_to_vir(&bctx.ctxt, expr.span, &expr_typ()?, id)
                     {
@@ -3383,7 +3380,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         Ok(ExprOrPlace::Expr(e))
                     }
                 }
-                (Res::Def(DefKind::Const { is_type_const: _ }, id), _) => {
+                (Res::Def(DefKind::Const, id), _) => {
                     let node_substs = bctx.types.node_args(expr.hir_id);
                     let e = const_var_to_vir(
                         bctx,

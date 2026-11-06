@@ -1,5 +1,5 @@
 #![feature(rustc_private)]
-#![feature(box_patterns)]
+#![feature(deref_patterns)]
 
 // not using this as a dependency, only necessary to make the rlib for the compiler crates
 // available to cargo
@@ -7,6 +7,7 @@ extern crate rustc_driver;
 
 extern crate rustc_arena;
 extern crate rustc_ast;
+extern crate rustc_attr_ir;
 extern crate rustc_data_structures;
 extern crate rustc_error_messages;
 extern crate rustc_errors;

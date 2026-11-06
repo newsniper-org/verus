@@ -385,7 +385,7 @@ fn stable_attr(span: Span) -> Attribute {
     Attribute::Parsed(AttributeKind::Stability {
         stability: Stability {
             level: StabilityLevel::Unstable {
-                reason: UnstableReason::Default,
+                reason: rustc_attr_ir::UnstableReason::Default,
                 issue: None,
                 implied_by: None,
                 old_name: None,
