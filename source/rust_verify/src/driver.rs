@@ -118,6 +118,8 @@ for all functions (it would only be needed for functions with tracked data in pr
 struct CompilerCallbacksEraseMacro {
     pub do_compile: bool,
     pub override_stability: bool,
+    /// `-V fip-lint`
+    pub fip_lint: bool,
     /// the SVH of the compiled crate
     pub crate_hash: Option<u128>,
 }
@@ -156,6 +158,9 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
         }
         // -V alloc-check, `#[verifier::fip]`: the drops of the compiled program (see `fip_mir`)
         crate::fip_mir::check_fip_crate(tcx);
+        if self.fip_lint {
+            crate::fip_mir::lint_tail_calls(tcx);
+        }
         if tcx.dcx().has_errors().is_some() {
             return rustc_driver::Compilation::Stop;
         }
@@ -184,9 +189,11 @@ pub(crate) fn run_with_erase_macro_compile(
     mut rustc_args: Vec<String>,
     do_compile: bool,
     vstd: Vstd,
+    fip_lint: bool,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
+        fip_lint,
         override_stability: matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore),
         crate_hash: None,
     };
@@ -381,7 +388,12 @@ pub fn run(
             // is known during analysis and is the one written into the crate's metadata
             rustc_args.push("-Zmetadata-crate-hash=no".to_string());
         }
-        run_with_erase_macro_compile(rustc_args, do_compile, verifier.args.vstd)
+        run_with_erase_macro_compile(
+            rustc_args,
+            do_compile,
+            verifier.args.vstd,
+            verifier.args.fip_lint,
+        )
     };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built
     let compile_status = match compile_status {

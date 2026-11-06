@@ -408,3 +408,147 @@ pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>) -> bool {
     check_strict_stack(tcx, &strict);
     any
 }
+
+/// `-V fip-lint`: a recursive call in tail position that is not a tail call. Rust does not
+/// guarantee that it replaces the caller's frame (it does not at opt-level=0, nor when a drop is
+/// pending after the call); `become` does. (Recursion modulo a constructor is found on VIR,
+/// `vir::fip_lint`.)
+pub(crate) fn lint_tail_calls<'tcx>(tcx: TyCtxt<'tcx>) {
+    use rustc_middle::mir::{Operand, RETURN_PLACE, Rvalue, StatementKind};
+    let fns: Vec<LocalDefId> = tcx
+        .hir_body_owners()
+        .filter(|d| {
+            matches!(
+                tcx.def_kind(*d),
+                rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+            )
+        })
+        .collect();
+    let mut graph: std::collections::HashMap<LocalDefId, Vec<LocalDefId>> =
+        std::collections::HashMap::new();
+    let mut candidates: Vec<(LocalDefId, LocalDefId, Span, Vec<String>)> = Vec::new();
+    for f in fns.iter() {
+        let typing_env = TypingEnv::post_analysis(tcx, f.to_def_id());
+        let body = tcx.mir_drops_elaborated_and_const_checked(*f);
+        let body = body.borrow();
+        let mut out = Vec::new();
+        for (_bb, data) in body.basic_blocks.iter_enumerated() {
+            if data.is_cleanup {
+                continue;
+            }
+            let term = data.terminator();
+            let (func, destination, target) = match &term.kind {
+                TerminatorKind::Call { func, destination, target, .. } => {
+                    (func, Some(*destination), *target)
+                }
+                TerminatorKind::TailCall { func, .. } => (func, None, None),
+                _ => continue,
+            };
+            let Some(callee) = resolve_callee(tcx, typing_env, func).and_then(|d| d.as_local())
+            else {
+                continue;
+            };
+            out.push(callee);
+            // Is the call in tail position: its result goes to the return place (directly, or
+            // moved there), and only drops and jumps follow it before `return`?
+            let Some(dest) = destination else { continue };
+            if !dest.projection.is_empty() {
+                continue;
+            }
+            let dest_local = dest.local;
+            let mut pending: Vec<String> = Vec::new();
+            let mut bb = target;
+            let mut is_tail = false;
+            let mut steps = 0;
+            while let Some(b) = bb {
+                steps += 1;
+                if steps > 64 {
+                    break;
+                }
+                let d = &body.basic_blocks[b];
+                let stmts_ok = d.statements.iter().all(|st| match &st.kind {
+                    StatementKind::StorageDead(_)
+                    | StatementKind::StorageLive(_)
+                    | StatementKind::Nop => true,
+                    StatementKind::Assign(assign) => {
+                        let (lhs, rhs) = &**assign;
+                        lhs.local == RETURN_PLACE
+                            && lhs.projection.is_empty()
+                            && matches!(rhs, Rvalue::Use(Operand::Move(p), ..)
+                                if p.local == dest_local && p.projection.is_empty())
+                    }
+                    _ => false,
+                });
+                if !stmts_ok {
+                    break;
+                }
+                match &d.terminator().kind {
+                    TerminatorKind::Goto { target } => bb = Some(*target),
+                    TerminatorKind::Drop { place, target, .. } => {
+                        let ty = place.ty(&body.local_decls, tcx).ty;
+                        pending.push(format!("`{}`", ty));
+                        bb = Some(*target);
+                    }
+                    TerminatorKind::Return => {
+                        is_tail = true;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            if is_tail {
+                candidates.push((*f, callee, term.source_info.span, pending));
+            }
+        }
+        graph.insert(*f, out);
+    }
+    let reaches = |from: LocalDefId, to: LocalDefId| -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut work = vec![from];
+        while let Some(f) = work.pop() {
+            if f == to {
+                return true;
+            }
+            if !seen.insert(f) {
+                continue;
+            }
+            if let Some(es) = graph.get(&f) {
+                work.extend(es.iter().copied());
+            }
+        }
+        false
+    };
+    let sig = |d: LocalDefId| {
+        tcx.erase_and_anonymize_regions(
+            tcx.fn_sig(d.to_def_id()).instantiate_identity().skip_normalization().skip_binder(),
+        )
+    };
+    for (f, callee, span, pending) in candidates {
+        if !reaches(callee, f) {
+            continue;
+        }
+        let mut msg = format!(
+            "-V fip-lint: this recursive call of `{}` is in tail position but is not a tail call, so it may not replace the frame of `{}` (Rust does not guarantee that at opt-level=0",
+            tcx.def_path_str(callee.to_def_id()),
+            tcx.def_path_str(f.to_def_id()),
+        );
+        if pending.is_empty() {
+            msg.push(')');
+        } else {
+            msg.push_str(&format!(
+                ", nor here, where a drop is pending after the call: {})",
+                pending.join(", ")
+            ));
+        }
+        msg.push_str("; `become` (`#![feature(explicit_tail_calls)]`) guarantees it");
+        if !pending.is_empty() {
+            msg.push_str(", dropping those values before the call");
+        }
+        if sig(f) != sig(callee) {
+            msg.push_str(
+                " (but `become` needs the callee to have the same signature as the caller)",
+            );
+        }
+        tcx.dcx().span_warn(span, msg);
+    }
+}

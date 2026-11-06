@@ -121,6 +121,7 @@ pub struct ArgsX {
     pub check_api_safety: bool,
     pub alloc_check: bool,
     pub alloc_check_strict: bool,
+    pub fip_lint: bool,
     pub no_bv_simplify: bool,
     pub observer: Option<String>,
 }
@@ -173,6 +174,7 @@ impl ArgsX {
             check_api_safety: Default::default(),
             alloc_check: Default::default(),
             alloc_check_strict: Default::default(),
+            fip_lint: Default::default(),
             no_bv_simplify: Default::default(),
             observer: None,
         }
@@ -422,6 +424,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_CHECK_API_SAFETY: &str = "check-api-safety";
     const EXTENDED_ALLOC_CHECK: &str = "alloc-check";
     const EXTENDED_ALLOC_CHECK_STRICT: &str = "alloc-check-strict";
+    const EXTENDED_FIP_LINT: &str = "fip-lint";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
     const EXTENDED_OBSERVER: &str = "observer";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
@@ -454,6 +457,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_ALLOC_CHECK_STRICT,
             "Like alloc-check, and also require every function with an `allocates` bound to be `no_unwind`, so that no panic path exists. Experimental.",
+        ),
+        (
+            EXTENDED_FIP_LINT,
+            "Suggest how recursion can use constant stack space (`#[verifier::fip(strict)]`): calls in tail position that are not tail calls (`become`), and recursion modulo a constructor (TRMC). Experimental.",
         ),
         (
             EXTENDED_NO_BV_SIMPLIFY,
@@ -870,6 +877,7 @@ pub fn parse_args_with_imports(
         alloc_check: extended.contains_key(EXTENDED_ALLOC_CHECK)
             || extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
         alloc_check_strict: extended.contains_key(EXTENDED_ALLOC_CHECK_STRICT),
+        fip_lint: extended.contains_key(EXTENDED_FIP_LINT),
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
         observer: match extended.get(EXTENDED_OBSERVER) {
             None => None,

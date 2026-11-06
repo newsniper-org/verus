@@ -317,3 +317,53 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "which is not `#[verifier::fip(strict)]`")
 }
+
+test_verify_one_file_with_options! {
+    // `-V fip-lint`: suggestions for recursion that grows the stack
+    #[test] fip_lint_suggestions ["vstd", "-V fip-lint"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum List { Nil, Cons(u64, Box<List>) }
+
+        // in tail position, but not a tail call
+        fn sum(n: u64, acc: u64) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { acc } else { sum(n - 1, acc.wrapping_add(n)) }
+        }
+
+        // in tail position with a drop pending after the call
+        fn sum_v(n: u64, acc: u64, v: Vec<u8>) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { acc } else { sum_v(n - 1, acc, Vec::new()) }
+        }
+
+        // recursion modulo a constructor
+        fn range(n: u64) -> (r: List)
+            decreases n
+        {
+            if n == 0 { List::Nil } else { List::Cons(n, Box::new(range(n - 1))) }
+        }
+
+        // already a tail call, and calls that are not recursive: nothing to suggest
+        fn sum2(n: u64, acc: u64) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { acc } else { become sum2(n - 1, acc.wrapping_add(n)) }
+        }
+        fn h(n: u64) -> (r: u64) {
+            sum(n, 0)
+        }
+    } => Ok(err) => {
+        let msgs: Vec<&str> = err
+            .warnings
+            .iter()
+            .map(|w| w.message.as_str())
+            .filter(|m| m.starts_with("-V fip-lint"))
+            .collect();
+        assert_eq!(msgs.len(), 3, "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("call of `sum` is in tail position but is not a tail call")), "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("call of `sum_v` is in tail position") && m.contains("a drop is pending after the call: `std::vec::Vec<u8>`")), "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("recursive call of `test_crate::range` is not a tail call") && m.contains("tail recursion modulo a constructor")), "{:?}", msgs);
+    }
+}

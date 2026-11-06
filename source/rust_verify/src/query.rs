@@ -642,6 +642,11 @@ impl<'tcx> Query<'tcx> {
             check_impls_outside_vir(&pre_crate.ctxt, &unpruned_crate)
                 .map_err(|e| self.emit_error(e))?;
         }
+        if self.args.fip_lint {
+            for msg in vir::fip_lint::lint_krate(&unpruned_crate) {
+                self.reporter.report_as(&msg.to_any(), MessageLevel::Warning);
+            }
+        }
 
         // Demote external traits
         let krate = vir::traits::demote_external_traits(

@@ -374,6 +374,18 @@ elaboration. This includes the destructors that its drops run.
 * A cycle of calls between strict functions must consist of `become` calls only. A non-tail call
   adds a frame, so a cycle through one grows the stack.
 
+`-V fip-lint` (which does not need `-V alloc-check`) warns about recursion that grows the stack
+and suggests how to avoid it:
+
+* A recursive call in tail position that is not a tail call. The warning says whether a drop is
+  pending after the call, and whether the signatures allow `become`.
+* Recursion modulo a constructor (TRMC), such as `List::Cons(n, Box::new(range(n - 1)))`. The
+  call is not a tail call, because its result becomes a field of the value that is returned. A
+  loop can build the same value in constant stack space. It keeps a `&mut` hole (the field that
+  is still to be filled), stores each new value into it, and then moves the hole into the new
+  value's field. This is destination-passing style, as in Leijen and Lorenzen's "Tail Recursion
+  Modulo Context".
+
 ## Libraries and other crates
 
 A bound in an imported crate is trusted only if that crate was verified with `-V alloc-check`,
