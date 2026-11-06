@@ -731,7 +731,8 @@ pub fn get_global_query<'tcx>(_tcx: TyCtxt<'tcx>) -> Option<Rc<Query<'tcx>>> {
 /// every impl in the program. An impl that Verus does not see (one outside `verus!` that Verus
 /// does not import, or one in a dependency whose .vir is not imported) is unchecked, so it is
 /// rejected if it
-/// - implements `vstd::alloc_check::AllocFreeDrop` (the drop rule trusts that bound), or
+/// - implements `vstd::alloc_check::AllocFreeDrop` or `vstd::alloc_check::BoundedAllocator` (the
+///   drop rule trusts these bounds), or
 /// - defines a method whose trait declaration has an `allocates` bound (callers rely on the
 ///   bound for every implementation).
 /// (No impl in the toolchain can implement these traits. The traits that vstd specifies are not
@@ -767,17 +768,19 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
         })
         .filter(|p| !vstd_specified.contains(p))
         .collect();
-    let afd_path = krate
+    // the vstd marker traits that the drop rule trusts
+    let marker_paths: HashSet<Path> = krate
         .traits
         .iter()
         .map(|t| &t.x.name)
-        .find(|p| {
-            vir::ast_util::path_as_friendly_rust_name(p) == "vstd::alloc_check::AllocFreeDrop"
+        .filter(|p| {
+            let name = vir::ast_util::path_as_friendly_rust_name(p);
+            name == "vstd::alloc_check::AllocFreeDrop"
+                || name == "vstd::alloc_check::BoundedAllocator"
         })
-        .cloned();
-    if let Some(p) = &afd_path {
-        traits_of_interest.insert(p.clone());
-    }
+        .cloned()
+        .collect();
+    traits_of_interest.extend(marker_paths.iter().cloned());
     if traits_of_interest.is_empty() {
         return Ok(());
     }
@@ -788,7 +791,7 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
         if !traits_of_interest.contains(&trait_path) {
             continue;
         }
-        let is_afd = afd_path.as_ref() == Some(&trait_path);
+        let is_afd = marker_paths.contains(&trait_path);
         for impl_def_id in tcx.all_impls(trait_def_id) {
             let span = tcx.def_span(impl_def_id);
             let unchecked = if is_afd {
@@ -803,7 +806,13 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
             };
             if unchecked {
                 let msg = if is_afd {
-                    "-V alloc-check: this `AllocFreeDrop` impl is not checked by Verus (every impl of it must be one that Verus checks)".to_string()
+                    format!(
+                        "-V alloc-check: this `{}` impl is not checked by Verus (every impl of it must be one that Verus checks)",
+                        vir::ast_util::path_as_friendly_rust_name(&trait_path)
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or_default()
+                    )
                 } else {
                     format!(
                         "-V alloc-check: this impl defines a method of `{}` whose declaration has an `allocates` bound, but Verus does not check this impl",

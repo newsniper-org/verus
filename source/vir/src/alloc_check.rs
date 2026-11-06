@@ -109,9 +109,9 @@ const TRUSTED_STD_OPAQUE: &[&str] = &[
     "core::iter::adapters::scan::Scan",
 ];
 
-/// std datatypes whose last type parameter is an allocator. Only the global allocator is
-/// supported: a user allocator's `deallocate` (run by the drop glue) and `clone` (run by the
-/// container's `clone`) are unbounded user code.
+/// std datatypes whose last type parameter is an allocator. Dropping one calls the allocator's
+/// `deallocate` (and drops the allocator), so the allocator must be one whose `deallocate` is
+/// known to allocate nothing: see `DropGlueCheck::check_allocator`.
 const STD_ALLOCATOR_PARAM_TYPES: &[&str] = &[
     "alloc::vec::Vec",
     "alloc::vec::into_iter::IntoIter",
@@ -137,10 +137,12 @@ const UNTRUSTED_VSTD_OPAQUE: &[&str] = &["vstd::thread::JoinHandle"];
 /// be in neither of the lists above.)
 const UNTRUSTED_STD_OPAQUE: &[&str] = &["core::mem::drop_guard::DropGuard"];
 
+/// The global allocator (`Global`) or the system allocator (`System`), or a reference to one
 fn is_global_allocator(typ: &Typ) -> bool {
     match &**typ {
         TypX::Datatype(Dt::Path(path), _, _) => {
-            crate::ast_util::path_as_friendly_rust_name(path) == "alloc::alloc::Global"
+            let name = crate::ast_util::path_as_friendly_rust_name(path);
+            name == "alloc::alloc::Global" || name == "std::alloc::System"
         }
         // `&Global` forwards to `Global`
         TypX::Decorate(TypDecoration::Ref, _, t) | TypX::MutRef(t) => is_global_allocator(t),
@@ -166,17 +168,32 @@ fn is_alloc_free_drop_trait(path: &Path) -> bool {
     crate::ast_util::path_as_friendly_rust_name(path) == "vstd::alloc_check::AllocFreeDrop"
 }
 
+/// `vstd::alloc_check::BoundedAllocator`: allocators whose `Allocator` impl Verus has checked
+/// against the bounds of the `Allocator` declaration (`deallocate` allocates nothing)
+fn is_bounded_allocator_trait(path: &Path) -> bool {
+    crate::ast_util::path_as_friendly_rust_name(path) == "vstd::alloc_check::BoundedAllocator"
+}
+
+/// `core::alloc::Allocator`
+fn is_allocator_trait(path: &Path) -> bool {
+    crate::ast_util::path_as_friendly_rust_name(path) == "core::alloc::Allocator"
+}
+
 /// `Copy` types have no drop glue at all
 fn is_copy_trait(path: &Path) -> bool {
     crate::ast_util::path_as_friendly_rust_name(path) == "core::marker::Copy"
 }
 
 /// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
+/// (or `T: BoundedAllocator`, whose supertrait is `AllocFreeDrop`)
 fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     let mut params = HashSet::new();
     for bound in bounds.iter() {
         if let GenericBoundX::Trait(TraitId::Path(path), args) = &**bound {
-            if is_alloc_free_drop_trait(path) || is_copy_trait(path) {
+            if is_alloc_free_drop_trait(path)
+                || is_copy_trait(path)
+                || is_bounded_allocator_trait(path)
+            {
                 if let Some(self_typ) = args.first() {
                     if let TypX::TypParam(x) = &**self_typ {
                         params.insert(x.clone());
@@ -197,8 +214,10 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
 /// For each datatype, its `Copy` impls: (self type arguments, impl type parameters, impl bounds)
 pub(crate) type CopyImpls = HashMap<Dt, Vec<(crate::ast::Typs, Vec<Ident>, GenericBounds)>>;
 
-/// The trait bounds (trait, type arguments) that show a value of `typ` is `Copy`
-pub(crate) type CopyObligation = (Span, Typ, Vec<(crate::ast::Path, crate::ast::Typs)>);
+/// Trait bounds (trait, type arguments) that the verifier must show on entry for a value of `typ`
+/// to be dropped: that it is `Copy`, or that its allocator is a `BoundedAllocator`; with the
+/// reason given if they cannot be shown
+pub(crate) type CopyObligation = (Span, Typ, Vec<(crate::ast::Path, crate::ast::Typs)>, String);
 
 struct DropGlueCheck<'a> {
     datatypes: &'a HashMap<Dt, Datatype>,
@@ -214,6 +233,10 @@ struct DropGlueCheck<'a> {
     /// obligation can be checked (then the type is rejected)
     copy_obligations: Option<Vec<CopyObligation>>,
     alloc_free_params: HashSet<Ident>,
+    /// Type parameters bounded by `vstd::alloc_check::BoundedAllocator`
+    bounded_alloc_params: HashSet<Ident>,
+    /// The path of `vstd::alloc_check::BoundedAllocator`, if the crate has it
+    bounded_alloc_trait: Option<Path>,
     /// Types already checked, keyed by their debug form (TypX is not Eq)
     visited: HashSet<String>,
     /// Datatypes currently being expanded, with how many times each is on the stack: a
@@ -240,11 +263,26 @@ impl<'a> DropGlueCheck<'a> {
         copy_impls: &'a CopyImpls,
         copy_obligations: bool,
         bounds: &GenericBounds,
+        bounded_alloc_trait: Option<Path>,
     ) -> Self {
         let copy_params = bounds
             .iter()
             .filter_map(|b| match &**b {
                 GenericBoundX::Trait(TraitId::Path(path), args) if is_copy_trait(path) => {
+                    match args.first().map(|t| &**t) {
+                        Some(TypX::TypParam(x)) => Some(x.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        let bounded_alloc_params = bounds
+            .iter()
+            .filter_map(|b| match &**b {
+                GenericBoundX::Trait(TraitId::Path(path), args)
+                    if is_bounded_allocator_trait(path) =>
+                {
                     match args.first().map(|t| &**t) {
                         Some(TypX::TypParam(x)) => Some(x.clone()),
                         _ => None,
@@ -261,6 +299,8 @@ impl<'a> DropGlueCheck<'a> {
             copy_params,
             copy_obligations: if copy_obligations { Some(vec![]) } else { None },
             alloc_free_params: alloc_free_typ_params(bounds),
+            bounded_alloc_params,
+            bounded_alloc_trait,
             visited: HashSet::new(),
             on_stack: HashMap::new(),
             depth: 0,
@@ -410,6 +450,51 @@ impl<'a> DropGlueCheck<'a> {
         )
     }
 
+    /// Dropping a container with allocator `alloc` (`Vec<T, A>`, `Box<T, A>`, ...) calls
+    /// `alloc.deallocate`, whose declaration bound is `allocates 0` (vstd's
+    /// `std_specs::rust_1_100::ExAllocator`); that bound holds for every implementation that Verus
+    /// has checked, which is what `vstd::alloc_check::BoundedAllocator` says (see
+    /// `check_bounded_allocator_impls`). So `alloc` must be the global or system allocator, or a
+    /// `BoundedAllocator` (a reference to one is one too), which the verifier must show on entry.
+    /// (Dropping the allocator itself is checked like dropping any other value.)
+    fn check_allocator(&mut self, span: &Span, typ: &Typ, alloc: &Typ) -> Result<(), VirErr> {
+        let mut a = alloc;
+        while let TypX::Decorate(TypDecoration::Ref, _, t) | TypX::MutRef(t) = &**a {
+            a = t;
+        }
+        if is_global_allocator(a) {
+            return Ok(());
+        }
+        if let TypX::TypParam(x) = &**a {
+            if self.bounded_alloc_params.contains(x) {
+                return Ok(());
+            }
+        }
+        let why = format!(
+            "its allocator `{}` must implement `vstd::alloc_check::BoundedAllocator` (dropping the value calls the allocator's `deallocate`)",
+            crate::ast_util::typ_to_diagnostic_str(alloc)
+        );
+        // (closure types are not yet in the form that the verifier encodes, see
+        // `copy_instance_bounds`)
+        let has_closure = crate::ast_visitor::typ_visitor_check::<(), _>(a, &mut |u| match &**u {
+            TypX::AnonymousClosure(..) => Err(()),
+            _ => Ok(()),
+        })
+        .is_err();
+        match (&self.bounded_alloc_trait, &mut self.copy_obligations) {
+            (Some(path), Some(obligations)) if !has_closure => {
+                obligations.push((
+                    span.clone(),
+                    typ.clone(),
+                    vec![(path.clone(), std::sync::Arc::new(vec![a.clone()]))],
+                    why,
+                ));
+                Ok(())
+            }
+            _ => Err(self.unsupported(span, typ, &why)),
+        }
+    }
+
     fn check_datatype_drop(
         &self,
         span: &Span,
@@ -529,13 +614,9 @@ impl<'a> DropGlueCheck<'a> {
             // Dropping these drops the contents (for Rc/Arc, when the last reference goes away)
             TypX::Decorate(TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc, arg, t) => {
                 if let Some(arg) = arg {
-                    if !is_global_allocator(&arg.allocator_typ) {
-                        return Err(self.unsupported(
-                            span,
-                            typ,
-                            "custom allocators (`allocator_api`) are not supported yet: only the global allocator is (a custom allocator's `deallocate` and `clone` would need bounds)",
-                        ));
-                    }
+                    let alloc = arg.allocator_typ.clone();
+                    self.check_allocator(span, typ, &alloc)?;
+                    self.check(span, &alloc)?;
                 }
                 self.check(span, t)
             }
@@ -566,29 +647,41 @@ impl<'a> DropGlueCheck<'a> {
                 let datatype = datatype.clone();
                 if let Dt::Path(path) = dt {
                     let name = crate::ast_util::path_as_friendly_rust_name(path);
-                    // a type argument for a parameter bounded by `Allocator` (`HashMap<K, V, S, A>`)
-                    let allocator_param_not_global =
-                        datatype.x.typ_params.iter().zip(args.iter()).any(|((x, _), a)| {
+                    // the type arguments for parameters bounded by `Allocator` (`HashMap<K, V, S,
+                    // A>`), and the last one of the std containers above (the arguments
+                    // themselves are dropped too, below)
+                    let mut allocators: Vec<Typ> = datatype
+                        .x
+                        .typ_params
+                        .iter()
+                        .zip(args.iter())
+                        .filter(|((x, _), _)| {
                             datatype.x.typ_bounds.iter().any(|b| match &**b {
                                 GenericBoundX::Trait(TraitId::Path(tp), targs) => {
-                                    crate::ast_util::path_as_friendly_rust_name(tp)
-                                        == "core::alloc::Allocator"
+                                    is_allocator_trait(tp)
                                         && targs.first().is_some_and(
                                             |t| matches!(&**t, TypX::TypParam(y) if y == x),
                                         )
                                 }
                                 _ => false,
-                            }) && !is_global_allocator(a)
-                        });
-                    if allocator_param_not_global
-                        || STD_ALLOCATOR_PARAM_TYPES.contains(&name.as_str())
-                            && !args.last().is_some_and(is_global_allocator)
-                    {
-                        return Err(self.unsupported(
-                            span,
-                            typ,
-                            "custom allocators (`allocator_api`) are not supported yet: only the global allocator is (a custom allocator's `deallocate` and `clone` would need bounds)",
-                        ));
+                            })
+                        })
+                        .map(|(_, a)| a.clone())
+                        .collect();
+                    if STD_ALLOCATOR_PARAM_TYPES.contains(&name.as_str()) {
+                        match args.last() {
+                            Some(a) => allocators.push(a.clone()),
+                            None => {
+                                return Err(self.unsupported(
+                                    span,
+                                    typ,
+                                    "its allocator type is missing",
+                                ));
+                            }
+                        }
+                    }
+                    for a in allocators.iter() {
+                        self.check_allocator(span, typ, a)?;
                     }
                 }
                 self.check_datatype_drop(span, typ, dt, &datatype)?;
@@ -645,6 +738,8 @@ impl<'a> DropGlueCheck<'a> {
                             span.clone(),
                             typ.clone(),
                             bounds,
+                            "its fields are not visible, and it is not known to be `Copy`"
+                                .to_string(),
                         ));
                     }
                     return Ok(());
@@ -697,6 +792,11 @@ impl<'a> DropGlueCheck<'a> {
     }
 }
 
+/// The path of `vstd::alloc_check::BoundedAllocator`, if the crate has it
+fn bounded_allocator_trait_path(ctx: &Ctx) -> Option<Path> {
+    ctx.trait_map.keys().find(|p| is_bounded_allocator_trait(p)).cloned()
+}
+
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
 pub(crate) fn check_drop_glue(
     ctx: &Ctx,
@@ -709,6 +809,7 @@ pub(crate) fn check_drop_glue(
         &ctx.global.copy_impls,
         true,
         &function.x.typ_bounds,
+        bounded_allocator_trait_path(ctx),
     );
     for param in function.x.params.iter() {
         checker.check(&param.span, &param.x.typ)?;
@@ -856,6 +957,7 @@ pub(crate) fn check_closures_with_bounds(
             &ctx.global.copy_impls,
             true,
             &function.x.typ_bounds,
+            bounded_allocator_trait_path(ctx),
         );
         // Dropping a value of a closure type drops that closure's captures. The bounded closure's
         // own captures are uses inside its body, but a capture may itself be (or contain) another
@@ -924,12 +1026,99 @@ pub(crate) fn check_alloc_free_drop_impls(
             &empty,
             false,
             &imp.x.typ_bounds,
+            None,
         );
         checker.check(&imp.span, self_typ).map_err(|e| {
             e.help(
                 "an `AllocFreeDrop` impl is only accepted when dropping the type cannot allocate",
             )
         })?;
+    }
+    Ok(())
+}
+
+/// The methods of `X`'s `core::alloc::Allocator` impl depend on `X`'s
+/// `vstd::alloc_check::BoundedAllocator` impl, which gives the value of their bounds
+pub(crate) fn add_bounded_allocator_edges(
+    krate: &Krate,
+    call_graph: &mut crate::context::GraphBuilder<crate::recursion::Node>,
+) {
+    let markers: Vec<&crate::ast::TraitImpl> =
+        krate.trait_impls.iter().filter(|i| is_bounded_allocator_trait(&i.x.trait_path)).collect();
+    if markers.is_empty() {
+        return;
+    }
+    for f in krate.functions.iter() {
+        let crate::ast::FunctionKind::TraitMethodImpl { trait_path, trait_typ_args, .. } =
+            &f.x.kind
+        else {
+            continue;
+        };
+        if !is_allocator_trait(trait_path) {
+            continue;
+        }
+        let Some(self_typ) = trait_typ_args.first() else { continue };
+        for m in markers.iter() {
+            if m.x.trait_typ_args.first().is_some_and(|t| crate::ast_util::types_equal(t, self_typ))
+            {
+                call_graph.add_edge(
+                    crate::recursion::Node::Fun(f.x.name.clone()),
+                    crate::recursion::Node::TraitImpl(crate::ast::ImplPath::TraitImplPath(
+                        m.x.impl_path.clone(),
+                    )),
+                );
+            }
+        }
+    }
+}
+
+/// Marker rule: `unsafe impl BoundedAllocator for X` is accepted only if `X`'s `Allocator` impl
+/// is one that Verus checks: its `allocate` and `deallocate` (the methods without a default) are
+/// in the crate, so they were verified against the bounds of the `Allocator` declaration
+/// (`deallocate` allocates nothing, the others at most `allocator_allocate_cost::<X>()`, which the
+/// marker defines), here or, for an imported crate, with -V alloc-check
+/// (`check_imported_bounds_were_checked`). The methods it does not define run std's default
+/// bodies, each of which calls one of `allocate`/`allocate_zeroed` once and `deallocate` at most
+/// once (std 1.100 `core/src/alloc/mod.rs`), so they stay within the same bounds.
+/// (vstd's impls, for the std allocators and for references, are trusted.)
+pub(crate) fn check_bounded_allocator_impls(krate: &Krate) -> Result<(), VirErr> {
+    for imp in krate.trait_impls.iter() {
+        if !is_bounded_allocator_trait(&imp.x.trait_path) || imp.x.impl_path.is_vstd_path() {
+            continue;
+        }
+        // (an impl outside `verus!` is imported without its `allocate_cost`)
+        if imp.x.auto_imported {
+            return Err(error(
+                &imp.span,
+                "-V alloc-check: this `BoundedAllocator` impl is not checked by Verus (every impl of it must be one that Verus checks)",
+            ));
+        }
+        let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
+        let alloc_impl = krate.trait_impls.iter().find(|i| {
+            is_allocator_trait(&i.x.trait_path)
+                && i.x
+                    .trait_typ_args
+                    .first()
+                    .is_some_and(|t| crate::ast_util::types_equal(t, self_typ))
+        });
+        let has_method = |name: &str| {
+            alloc_impl.is_some_and(|ai| {
+                krate.functions.iter().any(|f| match &f.x.kind {
+                    crate::ast::FunctionKind::TraitMethodImpl { method, impl_path, .. } => {
+                        impl_path == &ai.x.impl_path
+                            && matches!(method.path.last_segment(), crate::ast::Segment::V(x, _) if x.as_str() == name)
+                    }
+                    _ => false,
+                })
+            })
+        };
+        if !has_method("allocate") || !has_method("deallocate") {
+            let msg = format!(
+                "-V alloc-check: `BoundedAllocator` for `{}` needs its `core::alloc::Allocator` impl to be checked by Verus (inside `verus!`, for the same type written the same way), but Verus does not see that impl's `allocate` and `deallocate`",
+                crate::ast_util::typ_to_diagnostic_str(self_typ)
+            );
+            return Err(error(&imp.span, msg));
+        }
     }
     Ok(())
 }
@@ -1388,6 +1577,7 @@ pub fn check_merged_krate(krate: &Krate) -> Result<(), VirErr> {
             }
         }
     }
+    check_bounded_allocator_impls(krate)?;
     let table = drop_impl_table(krate);
     let copies = copy_datatypes(krate);
     check_alloc_free_drop_impls(krate, &table, &copies)

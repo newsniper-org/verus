@@ -113,9 +113,13 @@ unsafe impl<T: AllocFreeDrop> AllocFreeDrop for alloc::vec::Vec<T> {
 
 }
 
-// (`Global` is behind the unstable `allocator_api`, which vstd only enables when verifying)
-#[cfg(all(feature = "alloc", verus_keep_ghost))]
+#[cfg(feature = "alloc")]
 unsafe impl AllocFreeDrop for alloc::alloc::Global {
+
+}
+
+#[cfg(feature = "std")]
+unsafe impl AllocFreeDrop for std::alloc::System {
 
 }
 
@@ -127,6 +131,60 @@ unsafe impl AllocFreeDrop for alloc::string::String {
 #[cfg(feature = "std")]
 unsafe impl AllocFreeDrop for std::hash::RandomState {
 
+}
+
+/// Allocators (`core::alloc::Allocator`) whose allocations `-V alloc-check` counts, also when a
+/// container uses them (`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>`, ...).
+///
+/// The `Allocator` declaration bounds `deallocate` by `allocates 0` and each of `allocate`,
+/// `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by
+/// `vstd::std_specs::rust_1_100::allocator_allocate_cost::<Self>()`. For an allocator `X`,
+/// `unsafe impl BoundedAllocator for X { open spec fn allocate_cost() -> int { n } }` makes that
+/// cost `n` (clamped at 0). `X`'s `Allocator` impl, which Verus verifies against the declaration,
+/// must then make at most `n` allocations per call of those methods, counted at the leaves: a call
+/// to the global or the system allocator is 1, a call to another `BoundedAllocator` costs what its
+/// `allocate_cost` says. The containers' specifications charge `allocator_allocate_cost::<A>()`
+/// per allocation (`Vec::push` that grows, `Box::new_in`, ...), so for `n == 0` (an arena that
+/// hands out memory it already has) using the container allocates nothing.
+///
+/// Under `-V alloc-check` the impl is accepted only if `X`'s `Allocator` impl is one that Verus
+/// checks (inside `verus!`), and every impl must be one that Verus checks. A value of a container
+/// whose allocator is not the global or the system allocator may be dropped (which calls the
+/// allocator's `deallocate`) only if its allocator is a `BoundedAllocator` (a reference to one is
+/// one too). `AllocFreeDrop` is a supertrait: dropping the allocator itself must not allocate.
+///
+/// The trait is `unsafe` for the same reason as `AllocFreeDrop`.
+pub unsafe trait BoundedAllocator: AllocFreeDrop {
+    /// The allocations of one call of `allocate`, `allocate_zeroed`, `grow`, `grow_zeroed` or
+    /// `shrink`
+    spec fn allocate_cost() -> int;
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl BoundedAllocator for alloc::alloc::Global {
+    open spec fn allocate_cost() -> int {
+        1
+    }
+}
+
+#[cfg(feature = "std")]
+unsafe impl BoundedAllocator for std::alloc::System {
+    open spec fn allocate_cost() -> int {
+        1
+    }
+}
+
+// `&A` and `&mut A` forward every method to `A`
+unsafe impl<'a, A: BoundedAllocator + ?Sized> BoundedAllocator for &'a A {
+    open spec fn allocate_cost() -> int {
+        A::allocate_cost()
+    }
+}
+
+unsafe impl<'a, A: BoundedAllocator + ?Sized> BoundedAllocator for &'a mut A {
+    open spec fn allocate_cost() -> int {
+        A::allocate_cost()
+    }
 }
 
 } // verus!

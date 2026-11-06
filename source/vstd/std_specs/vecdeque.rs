@@ -3,6 +3,7 @@
 use super::super::prelude::*;
 use super::iter::IteratorSpec;
 
+use super::rust_1_100::{allocator_allocate_cost, allocator_clone_cost};
 use alloc::collections::vec_deque::Iter;
 use alloc::collections::vec_deque::VecDeque;
 use core::alloc::Allocator;
@@ -127,7 +128,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::reserve ](
     ensures
         final(v)@ == old(v)@,
     allocates
-        1,
+        allocator_allocate_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_back ](
@@ -137,7 +138,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_back ](
     ensures
         final(v)@ == old(v)@.push(value),
     allocates
-        1,
+        allocator_allocate_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_front ](
@@ -147,7 +148,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_front ](
     ensures
         final(v)@ == seq![value] + old(v)@,
     allocates
-        1,
+        allocator_allocate_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_back ](
@@ -196,7 +197,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::append ](
         final(v)@ == old(v)@ + old(other)@,
         final(other)@ == Seq::<T>::empty(),
     allocates
-        1,
+        allocator_allocate_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::insert ](
@@ -209,7 +210,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::insert ](
     ensures
         final(v)@ == old(v)@.insert(i as int, element),
     allocates
-        1,
+        allocator_allocate_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::remove ](
@@ -249,7 +250,7 @@ pub assume_specification<T, A: Allocator + core::clone::Clone>[ VecDeque::<T, A>
         final(v)@ == old(v)@[..at],
         return_value@ == old(v)@[at..],
     allocates
-        1,
+        allocator_allocate_cost::<A>() + allocator_clone_cost::<A>(),
 ;
 
 pub open spec fn vec_dequeue_clone_trigger<T, A: Allocator>(
@@ -274,8 +275,8 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <VecDeque<T, A> as Clo
         (if v.len() == 0 {
             0int
         } else {
-            1int
-        }) + super::clone::seq_clone_allocates(v@, v@.len()),
+            allocator_allocate_cost::<A>()
+        }) + super::clone::seq_clone_allocates(v@, v@.len()) + allocator_clone_cost::<A>(),
 ;
 
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::truncate ](
@@ -309,7 +310,10 @@ pub assume_specification<T: Clone, A: Allocator>[ VecDeque::<T, A>::resize ](
         if len <= old(v).len() {
             0int
         } else {
-            1int + (len - old(v).len()) * call_allocates(T::clone, (&value,))
+            allocator_allocate_cost::<A>() + (len - old(v).len()) * call_allocates(
+                T::clone,
+                (&value,),
+            )
         },
 ;
 

@@ -136,8 +136,62 @@ reallocate(grow·shrink)입니다. deallocate는 세지 않습니다.
 * 클로저는 자신의 캡처를 drop합니다. 상한이 붙은 클로저는 함수처럼 검사합니다. 그 클로저가 drop할 수 있는
   다른 클로저를 포함해, 캡처가 모두 drop 규칙을 통과해야 합니다.
 
-사용자 정의 할당기(전역이 아닌 `A`에 대한 `Vec<T, A>`)는 아직 지원하지 않습니다. 그 할당기의 `deallocate`와
-`clone`에도 상한이 필요하기 때문입니다.
+### 사용자 정의 할당기
+
+전역 할당기가 아닌 할당기를 쓰는 컨테이너(`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>` 등)는 할당 한 번마다
+`allocator_allocate_cost::<A>()`(`vstd::std_specs::rust_1_100`)를 청구합니다. 할당은 말단에서 셉니다.
+전역 할당기나 시스템 할당기를 한 번 호출하면 1입니다. 사용자 정의 할당기의 비용은 unsafe 표시 trait
+`vstd::alloc_check::BoundedAllocator`로 정합니다.
+
+```rust
+use std::alloc::{Allocator, AllocError, Global, Layout};
+use std::ptr::NonNull;
+use vstd::alloc_check::BoundedAllocator;
+
+pub struct Fwd;
+
+unsafe impl Allocator for Fwd {
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        allocates 1
+    {
+        Global.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+        allocates 0
+    {
+        unsafe { Global.deallocate(ptr, layout) }
+    }
+}
+
+unsafe impl AllocFreeDrop for Fwd {}
+
+unsafe impl BoundedAllocator for Fwd {
+    open spec fn allocate_cost() -> int { 1 }
+}
+
+fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
+    allocates 1
+{
+    v.push(x);
+}
+```
+
+`Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로, `allocate`, `allocate_zeroed`, `grow`,
+`grow_zeroed`, `shrink` 각각의 상한을 그 할당기의 비용으로 둡니다. Verus는 impl을 이 상한에 대해 검증합니다.
+impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데, 그 본문은 각각 `allocate`나 `allocate_zeroed`를
+한 번 호출합니다. 이미 가진 메모리를 나눠 주는 arena는 비용을 0으로 둘 수 있고, 그러면 그 arena를 쓰는
+컨테이너는 아무것도 할당하지 않습니다.
+
+* 할당기의 `Allocator` impl이 Verus가 검사하는 것(`verus!` 안)일 때만 표시 impl을 받습니다.
+  표시 impl도 모두 Verus가 검사하는 것이어야 합니다.
+* 컨테이너를 drop하면 그 할당기의 `deallocate`가 호출됩니다. 그래서 할당기가 전역 할당기나 시스템
+  할당기이거나 `BoundedAllocator`일 때만 컨테이너를 drop할 수 있습니다. 그런 할당기에 대한 참조도
+  됩니다. 제네릭 할당기에는 `A: Allocator + BoundedAllocator` bound가 필요합니다. `AllocFreeDrop`이
+  `BoundedAllocator`의 supertrait이므로, 할당기 자체를 drop할 때도 할당하면 안 됩니다.
+* 컨테이너를 clone하면(`split_off`도) 할당기도 clone하며, 그 비용은 `allocator_clone_cost::<A>()`입니다.
+  전역 할당기와 참조에서는 0이고, 다른 할당기에서는 해석되지 않는 항입니다.
+* 표시 trait은 타입마다 비용 하나를 줍니다. 할당기의 상태에 따라 달라지는 상한은 표현할 수 없습니다.
 
 ## 콜백, 클로저, trait
 
@@ -233,7 +287,8 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하는 쪽이며, 불건전하지는 않습니다.
-* 사용자 정의 할당기
+* 할당기가 전역 할당기도 참조도 아닌 컨테이너의 clone, 그리고 자신이 가진 할당기에 위임하는
+  할당기(`Box`, `Rc`, `Arc`, `Pin`을 할당기로 쓰는 경우)
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop
 * drop glue 안의 projection 타입(예: `Cow`)
 * 구조체의 필드 하나만 캡처하는 클로저를 구조체 전체를 캡처한 것처럼 검사하는 점

@@ -25,6 +25,7 @@
 use super::super::prelude::*;
 use super::iter::IteratorSpec;
 
+use super::rust_1_100::allocator_allocate_cost;
 use core::alloc::Allocator;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash, Hasher};
@@ -695,7 +696,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
     ensures
         final(m)@ == old(m)@,
     allocates
-        1 + hash_grow_cost(&*m),
+        allocator_allocate_cost::<A>() + hash_grow_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ HashMap::<
@@ -713,7 +714,7 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
             }
         },
     allocates
-        1 + hash_ops_cost(&*m, &k),
+        allocator_allocate_cost::<A>() + hash_ops_cost(&*m, &k),
 ;
 
 // The specification for `contains_key` has a parameter `key: &Q`
@@ -1087,7 +1088,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
     ensures
         final(m)@ == old(m)@,
     allocates
-        1 + hash_grow_cost(&*m),
+        allocator_allocate_cost::<A>() + hash_grow_cost(&*m),
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1101,7 +1102,7 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
             &&& result == !old(m)@.contains(k)
         },
     allocates
-        1 + hash_ops_cost(&*m, &k),
+        allocator_allocate_cost::<A>() + hash_ops_cost(&*m, &k),
 ;
 
 // The specification for `contains` has a parameter `key: &Q`
@@ -1414,7 +1415,7 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
             None => old(m)@.remove(key),
         })),
     allocates
-        1 + hash_ops_cost(&*m, &key),
+        allocator_allocate_cost::<A>() + hash_ops_cost(&*m, &key),
 ;
 
 //// Entry

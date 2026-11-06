@@ -2118,7 +2118,8 @@ fn alloc_check_unchecked_impl_reached_through_impl_bounds() {
 
 test_verify_one_file_with_options! {
     // `Rc<T, Rc<Global, MyA>>` is not the global allocator just because its outer layer is an
-    // `Rc` over `Global`: its allocator argument is a user allocator
+    // `Rc` over `Global`: its allocator argument is a user allocator (here not a
+    // `BoundedAllocator`)
     #[test] alloc_check_rc_allocator_arg_not_global ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         use std::rc::Rc;
@@ -2141,7 +2142,7 @@ test_verify_one_file_with_options! {
         {
             o.clone()
         }
-    } => Err(err) => assert_vir_error_msg(err, "custom allocators (`allocator_api`) are not supported yet")
+    } => Err(err) => assert_any_vir_error_msg(err, "its allocator `test_crate::MyA` must implement `vstd::alloc_check::BoundedAllocator`")
 }
 
 // VIR drops `Send` bounds, so an impl of `Copy` with an auto-trait bound does not show that a
@@ -2670,6 +2671,38 @@ test_verify_one_file_with_options! {
         unsafe impl AllocFreeDrop for Handle {}
 
         fn drop_handle(h: Handle) allocates 0 { consume(h) }
+
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        use vstd::alloc_check::BoundedAllocator;
+
+        pub struct Fwd;
+
+        unsafe impl Allocator for Fwd {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                Global.allocate(layout)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+                unsafe { Global.deallocate(ptr, layout) }
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Fwd {}
+
+        unsafe impl BoundedAllocator for Fwd {
+            open spec fn allocate_cost() -> int { 1 }
+        }
+
+        fn push_one_fwd(v: &mut Vec<u64, Fwd>, x: u64)
+            allocates 1
+        {
+            v.push(x);
+        }
     } => Ok(())
 }
 

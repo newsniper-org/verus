@@ -1,5 +1,6 @@
 use super::super::prelude::*;
 
+use super::rust_1_100::{allocator_allocate_cost, allocator_clone_cost};
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::sync::Arc;
@@ -70,7 +71,9 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::
     ensures
         cloned::<T>(**b, *res),
     allocates
-        1 + call_allocates(T::clone, (&**b,)),
+        allocator_allocate_cost::<A>() + call_allocates(T::clone, (&**b,)) + allocator_clone_cost::<
+            A,
+        >(),
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>) -> (result: Result<
@@ -94,31 +97,6 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>)
     allocates
         0,
 ;
-
-/// -V alloc-check: the allocations of cloning an allocator of type `A` (which `Rc::clone` and
-/// `Arc::clone` do besides incrementing the reference count). 0 for the global allocator; for any
-/// other allocator, an uninterpreted per-type cost. (Values of such `Rc`/`Arc` types are rejected
-/// by the drop rule for now; this keeps the specification itself sound.)
-#[cfg(not(verus_verify_core))]
-pub uninterp spec fn allocator_clone_cost<A: ?Sized>() -> int;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_allocator_clone_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_clone_cost::<A>() >= 0,
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_global_allocator_clone_cost()
-    ensures
-        #[trigger] allocator_clone_cost::<alloc::alloc::Global>() == 0,
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast group group_smart_ptrs_alloc_axioms {
-    axiom_allocator_clone_cost,
-    axiom_global_allocator_clone_cost,
-}
 
 // Cloning an `Rc`/`Arc` increments its reference count and clones its allocator
 #[cfg(not(verus_verify_core))]

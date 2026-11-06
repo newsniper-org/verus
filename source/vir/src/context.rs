@@ -584,6 +584,12 @@ impl GlobalCtx {
                 f,
             )?;
         }
+        // -V alloc-check: the bounds of the `Allocator` declaration are
+        // `allocator_allocate_cost::<Self>()`, whose value for an allocator `X` comes from
+        // `X: vstd::alloc_check::BoundedAllocator` (vstd's
+        // `axiom_bounded_allocator_allocate_cost`); so the methods of `X`'s `Allocator` impl depend
+        // on that impl, which must come first (else its axioms are not available to them)
+        crate::alloc_check::add_bounded_allocator_edges(krate, &mut func_call_graph);
 
         for group in &krate.reveal_groups {
             let group_node = Node::Fun(group.x.name.clone());

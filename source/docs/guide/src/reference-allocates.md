@@ -141,8 +141,66 @@ drop. For each of these types:
 * A closure drops its captures. A bounded closure is checked like a function: its captures,
   including other closures it may drop, must pass the drop rule.
 
-Custom allocators (`Vec<T, A>` for a non-global `A`) are not supported yet: their `deallocate`
-and `clone` would need bounds of their own.
+### Custom allocators
+
+A container with an allocator other than the global one (`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>`,
+...) charges each allocation `allocator_allocate_cost::<A>()`
+(`vstd::std_specs::rust_1_100`). Allocations are counted at the leaves: a call to the global
+or the system allocator is 1. A custom allocator gets its cost from the unsafe marker trait
+`vstd::alloc_check::BoundedAllocator`:
+
+```rust
+use std::alloc::{Allocator, AllocError, Global, Layout};
+use std::ptr::NonNull;
+use vstd::alloc_check::BoundedAllocator;
+
+pub struct Fwd;
+
+unsafe impl Allocator for Fwd {
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        allocates 1
+    {
+        Global.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+        allocates 0
+    {
+        unsafe { Global.deallocate(ptr, layout) }
+    }
+}
+
+unsafe impl AllocFreeDrop for Fwd {}
+
+unsafe impl BoundedAllocator for Fwd {
+    open spec fn allocate_cost() -> int { 1 }
+}
+
+fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
+    allocates 1
+{
+    v.push(x);
+}
+```
+
+The `Allocator` declaration bounds `deallocate` by `allocates 0` and each of `allocate`,
+`allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by the allocator's cost. Verus verifies the
+impl against these bounds. The methods that the impl does not define run std's default bodies,
+and each of those calls `allocate` or `allocate_zeroed` once. An arena that hands out memory it
+already holds can have cost 0, and then using a container with it allocates nothing.
+
+* The marker impl is accepted only if the allocator's `Allocator` impl is one that Verus checks
+  (inside `verus!`). Every marker impl must also be one that Verus checks.
+* Dropping a container calls its allocator's `deallocate`. So a container may be dropped only if
+  its allocator is the global or the system allocator, or a `BoundedAllocator`. A reference to
+  one counts too. A generic allocator needs the bound `A: Allocator + BoundedAllocator`.
+  `AllocFreeDrop` is a supertrait of `BoundedAllocator`, so dropping the allocator itself must
+  not allocate.
+* Cloning a container (and `split_off`) also clones its allocator, at the cost
+  `allocator_clone_cost::<A>()`. That cost is 0 for the global allocator and for references.
+  For other allocators it is uninterpreted.
+* The marker gives one cost per type. A bound that depends on the allocator's state cannot be
+  expressed.
 
 ## Callbacks, closures and traits
 
@@ -235,7 +293,9 @@ What `-V alloc-check` trusts:
 * the toolchain's std (its trusted drops and opaque types).
 
 Known limitations, all of which make Verus reject programs (they are not unsound):
-* custom allocators;
+* cloning a container whose allocator is neither the global allocator nor a reference, and
+  allocators that forward to an allocator they hold (`Box`, `Rc`, `Arc` and `Pin` used as
+  allocators);
 * `dyn` values and opaque `impl Trait` values being dropped;
 * projected types in drop glue (for example `Cow`);
 * a closure that captures one field of a struct is checked as if it captured the whole struct;

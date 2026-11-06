@@ -1123,16 +1123,17 @@ pub fn func_def_to_sst(
     if let Some(check) = alloc_entry_check {
         stm = stms_to_one_stm(&body.span, vec![check, stm]);
     }
-    // Opaque types whose `Copy`-ness depends on trait bounds of their arguments (drop rule):
-    // show those bounds on entry
+    // Opaque types whose `Copy`-ness depends on trait bounds of their arguments, and containers
+    // whose allocator must be a `BoundedAllocator` (drop rule): show those bounds on entry
     if !copy_obligations.is_empty() {
         let mut checks: Vec<crate::sst::Stm> = Vec::new();
-        for (span, typ, bounds) in copy_obligations.iter() {
+        for (span, typ, bounds, why) in copy_obligations.iter() {
             let msg = crate::messages::error(
                 span,
                 format!(
-                    "cannot bound the allocations of dropping a value of type `{}`: its fields are not visible, and it is not known to be `Copy`",
-                    crate::ast_util::typ_to_diagnostic_str(typ)
+                    "cannot bound the allocations of dropping a value of type `{}`: {}",
+                    crate::ast_util::typ_to_diagnostic_str(typ),
+                    why
                 ),
             );
             for (path, targs) in bounds.iter() {
