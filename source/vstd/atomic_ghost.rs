@@ -67,6 +67,7 @@ macro_rules! declare_atomic_type {
             pub const fn new(Ghost(k): Ghost<K>, u: $value_ty, Tracked(g): Tracked<G>) -> (t: Self)
                 requires Pred::atomic_inv(k, u, g),
                 ensures t.well_formed() && t.constant() == k,
+                allocates 0
             {
 
                 let (patomic, Tracked(perm)) = $patomic_ty::new(u);
@@ -95,6 +96,7 @@ macro_rules! declare_atomic_type {
             pub fn into_inner(self) -> (res: ($value_ty, Tracked<G>))
                 requires self.well_formed(),
                 ensures Pred::atomic_inv(self.constant(), res.0, res.1@),
+                allocates 0
             {
                 let Self { patomic, atomic_inv: Tracked(atomic_inv) } = self;
                 let tracked (perm, g) = atomic_inv.into_inner();
@@ -174,7 +176,6 @@ macro_rules! declare_atomic_type_generic {
             #[inline(always)]
             pub fn load(&self) -> $value_ty
                 requires self.well_formed(),
-                allocates 0
             {
                 atomic_with_ghost!(self => load(); g => { })
             }

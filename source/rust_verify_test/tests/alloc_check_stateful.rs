@@ -48,6 +48,7 @@ const POOL: &str = verus_code_str! {
         fn new(n: u64) -> (p: Self)
             ensures
                 allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+            allocates 0
         {
             let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
             let ghost l = reg.loc();
@@ -127,7 +128,9 @@ test_verify_one_file_with_options! {
             let _ = p.allocate(l);
         }
 
-        fn top(l: Layout) {
+        fn top(l: Layout)
+            allocates 0
+        {
             let p = Pool::new(2);
             two(&p, l);
         }

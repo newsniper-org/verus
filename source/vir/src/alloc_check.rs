@@ -721,6 +721,10 @@ impl<'a> DropGlueCheck<'a> {
                         .collect();
                     for variant in datatype.x.variants.iter() {
                         for field in variant.fields.iter() {
+                            // (a ghost or tracked field does not exist at run time)
+                            if field.a.1 != crate::ast::Mode::Exec {
+                                continue;
+                            }
                             let field_typ = crate::sst_util::subst_typ(&substs, &field.a.0);
                             self.check(span, &field_typ)?;
                         }
@@ -758,9 +762,12 @@ impl<'a> DropGlueCheck<'a> {
                     // arguments, checked below.)
                     return Err(self.unsupported(span, typ, "its fields are not visible"));
                 }
-                // An opaque container (e.g. Vec<T>) drops values of its type arguments
-                for t in args.iter() {
-                    self.check(span, t)?;
+                // An opaque container (e.g. Vec<T>) drops values of its type arguments (a
+                // datatype whose fields are visible drops exactly its fields, checked above)
+                if !has_visible_fields || opaque || trusted_std {
+                    for t in args.iter() {
+                        self.check(span, t)?;
+                    }
                 }
                 Ok(())
             }
