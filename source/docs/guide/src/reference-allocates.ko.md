@@ -308,8 +308,21 @@ Verus는 스레드마다 이 상태들의 하한을 담은 ghost heap을 둡니�
     컨테이너 명세는 heap을 말하지 않고, 호출 뒤 heap을 모르게 됩니다.
 * 클로저 자신의 명세도 heap을 말할 수 있습니다. `requires`와 본문에서 `allocator_state(a)`는 호출 중 그 지점의
   heap, `ensures`에서는 돌아갈 때의 heap, `old_allocator_state(a)`는 호출됐을 때의 heap입니다. 클로저 값을
-  부르면(`f(x)`) 호출자의 heap에서 그 명세를 씁니다. 이런 클로저는 `call_requires(f, args)`만 아는 곳(제네릭
-  코드)에 넘길 수 없습니다. 그것은 "모든 heap에서"를 뜻하기 때문입니다.
+  부르면(`f(x)`) 호출자의 heap에서 그 명세를 씁니다. `allocates` 상한은 함수와 마찬가지로 호출될 때 계산되므로
+  `old_` 형태만 쓸 수 있습니다.
+
+  ```rust
+  let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+      allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+  {
+      p.allocate(l)
+  };
+  ```
+
+  이런 클로저(`requires`, `ensures`, `allocates` 중 하나라도 heap을 말하는 클로저)는 `call_requires(f, args)`만
+  아는 곳(제네릭 코드)에 넘길 수 없습니다. 그것은 "모든 heap에서"를 뜻하기 때문입니다. `allocates` 상한이 heap을
+  말하는 함수를 값으로 쓸 때도 같습니다(`let g = take; g(p, l)`은 되고, `take`를 제네릭 코드에 넘기는 것은 안
+  됩니다).
 
 ## 콜백, 클로저, trait
 

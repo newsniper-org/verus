@@ -329,8 +329,21 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
 * A closure's own specification may mention the heap: in its `requires` and body,
   `allocator_state(a)` is the heap at that point of the call, in its `ensures` the heap when it
   returns, and `old_allocator_state(a)` the heap when it was called. Calling the closure value
-  (`f(x)`) uses its specification at the caller's heap. Such a closure cannot be passed where only
-  `call_requires(f, args)` is known (generic code): that means "at every heap".
+  (`f(x)`) uses its specification at the caller's heap. Its `allocates` bound, like a function's,
+  is evaluated when it is called, so it may use only the `old_` forms:
+
+  ```rust
+  let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+      allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+  {
+      p.allocate(l)
+  };
+  ```
+
+  Such a closure (one whose `requires`, `ensures` or `allocates` mentions the heap) cannot be
+  passed where only `call_requires(f, args)` is known (generic code): that means "at every
+  heap". The same holds for a function whose `allocates` bound mentions the heap, used as a
+  value (`let g = take; g(p, l)` works, passing `take` to generic code does not).
 
 ## Callbacks, closures and traits
 
