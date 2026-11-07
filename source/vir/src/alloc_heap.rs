@@ -140,6 +140,19 @@ fn mentions_heap(expr: &Expr) -> bool {
     found
 }
 
+fn mentions_old_heap(expr: &Expr) -> bool {
+    let mut found = false;
+    let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(expr, &mut |_scope, e: &Expr| {
+        if let ExprX::Call { target: CallTarget::Fun(_, fun, ..), .. } = &e.x {
+            if matches!(special(fun), Some(Special::OldHeap | Special::OldState)) {
+                found = true;
+            }
+        }
+        Ok(())
+    });
+    found
+}
+
 fn spec_mentions_heap(f: &FunctionX) -> bool {
     f.require.iter().any(mentions_heap)
         || f.ensure.0.iter().any(mentions_heap)
@@ -372,22 +385,33 @@ pub(crate) fn prepare_function(info: &HeapInfo, function: &Function) -> Result<F
         fx.unwind_spec = Some(crate::ast::UnwindSpec::NoUnwindWhen(rewrite(info, e, spec_role)?));
     }
     if let Some(b) = &f.body {
-        // (a closure body runs later, with the heap of then; not supported yet)
-        let mut in_closure: Option<crate::messages::Span> = None;
+        // A closure body runs later, with the heap of then: it may read the current heap, but not
+        // the heap when the enclosing function was called, and its own specification cannot
+        // mention the heap yet
+        let mut bad: Option<(crate::messages::Span, &str)> = None;
         let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(b, &mut |_s, e: &Expr| {
-            if matches!(&e.x, ExprX::NonSpecClosure { .. })
-                && in_closure.is_none()
-                && mentions_heap(e)
-            {
-                in_closure = Some(e.span.clone());
+            if let ExprX::NonSpecClosure { body, requires, ensures, allocates, .. } = &e.x {
+                if bad.is_none()
+                    && (requires.iter().any(mentions_heap)
+                        || ensures.iter().any(mentions_heap)
+                        || allocates.as_ref().is_some_and(mentions_heap))
+                {
+                    bad = Some((
+                        e.span.clone(),
+                        "a closure's specification cannot mention the allocator heap yet",
+                    ));
+                }
+                if bad.is_none() && mentions_old_heap(body) {
+                    bad = Some((
+                        body.span.clone(),
+                        "a closure body cannot use `old_allocator_state` (or `old_allocator_heap`): it runs later",
+                    ));
+                }
             }
             Ok(())
         });
-        if let Some(span) = in_closure {
-            return Err(error(
-                &span,
-                "the allocator heap (`allocator_state`, ...) cannot be used inside a closure yet",
-            ));
+        if let Some((span, msg)) = bad {
+            return Err(error(&span, msg));
         }
         fx.body = Some(rewrite(info, b, body_role)?);
     }

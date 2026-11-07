@@ -350,6 +350,25 @@ fn total<S: Shape>(a: &S, b: &S) -> u64
   상한을 지키지 않고 그 trait을 구현할 수 있기 때문입니다. `requires`, `no_unwind`, `opens_invariants`와
   같은 규칙입니다.
 
+### bound 명세: `T: Tr with { .. }`
+
+함수의 타입 매개변수에서 마커 trait 대신 bound의 메서드 명세를 직접 적을 수 있습니다:
+
+```rust
+fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }>(x: &T) -> (r: (T, T))
+    allocates 0
+{
+    (x.clone(), x.clone())
+}
+```
+
+함수 안에서는 그 메서드를 부르면 bound의 명세를 씁니다. 호출자는 `T`를 인스턴스화한 타입이 그 명세를
+만족함을 보여야 합니다. 메서드 명세에는 `requires`(impl이 받아들여야 함), `ensures`(impl이 보장해야 함),
+`allocates`를 쓸 수 있습니다. `fn drop allocates 0;`은 `T`를 drop해도 할당하지 않는다는 뜻이고, Verus가
+인스턴스의 drop glue로 확인하므로 위의 `P`에는 `AllocFreeDrop` impl이 필요 없습니다. 이 블록은
+`requires`(`call_requires`, `call_ensures`, `call_allocates`)로 풀리므로 함수에서만 쓸 수 있습니다. impl,
+struct, trait, `where` 절에서는 아직 쓸 수 없습니다.
+
 ## 완전한 제자리 함수: `#[verifier::fip]`
 
 FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되는 함수를 구분합니다. 그 용어로

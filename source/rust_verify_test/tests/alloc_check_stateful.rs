@@ -525,10 +525,24 @@ test_verify_one_file_with_options! {
 
 test_verify_one_file_with_options! {
     #[test] stateful_no_heap_in_closure ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
-        fn f(p: &Pool) {
-            let c = || { assert(allocator_tracked(p)); };
+        fn f(p: &Pool, l: Layout) {
+            let c = || {
+                // (the closure runs later: the pool's state is unknown here)
+                assert(allocator_state(p).0 >= 1); // FAILS
+            };
         }
-    } => Err(err) => assert_vir_error_msg(err, "cannot be used inside a closure yet")
+
+        fn g(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 1,
+        {
+            let c = || { assert(allocator_state(p).0 >= 1); }; // FAILS
+            assert(allocator_state(p).0 >= 1);
+        }
+
+        fn h(p: &Pool) {
+            let c = || { assert(old_allocator_state(p).0 >= 1); };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "a closure body cannot use `old_allocator_state`")
 }
 
 test_verify_one_file_with_options! {
@@ -536,4 +550,15 @@ test_verify_one_file_with_options! {
         fn need_sync<T: Sync>() {}
         fn f() { need_sync::<Pool>(); }
     } => Err(err) => assert_rust_error_msg(err, "cannot be shared between threads safely")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_heap_in_closure_unknown ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn g(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 1,
+        {
+            let c = || { assert(allocator_state(p).0 >= 1); }; // FAILS
+            assert(allocator_state(p).0 >= 1);
+        }
+    } => Err(err) => assert_one_fails(err)
 }

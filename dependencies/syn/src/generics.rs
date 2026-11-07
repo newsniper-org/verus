@@ -558,10 +558,11 @@ pub(crate) mod parsing {
                         ..input.parse()?
                     }));
                 } else if lookahead.peek(Ident) {
-                    params.push_value(GenericParam::Type(TypeParam {
-                        attrs,
-                        ..input.parse()?
-                    }));
+                    let mut tp: TypeParam = input.parse()?;
+                    let mut all_attrs = attrs;
+                    all_attrs.append(&mut tp.attrs);
+                    tp.attrs = all_attrs;
+                    params.push_value(GenericParam::Type(tp));
                 } else if lookahead.peek(Token![const]) {
                     params.push_value(GenericParam::Const(ConstParam {
                         attrs,
@@ -605,10 +606,11 @@ pub(crate) mod parsing {
 
             let lookahead = input.lookahead1();
             if lookahead.peek(Ident) {
-                Ok(GenericParam::Type(TypeParam {
-                    attrs,
-                    ..input.parse()?
-                }))
+                let mut tp: TypeParam = input.parse()?;
+                let mut all_attrs = attrs;
+                all_attrs.append(&mut tp.attrs);
+                tp.attrs = all_attrs;
+                Ok(GenericParam::Type(tp))
             } else if lookahead.peek(Lifetime) {
                 Ok(GenericParam::Lifetime(LifetimeParam {
                     attrs,
@@ -710,6 +712,7 @@ pub(crate) mod parsing {
                         || input.peek(Token![,])
                         || input.peek(Token![>])
                         || input.peek(Token![=])
+                        || input.peek(Token![with])
                     {
                         break;
                     }
@@ -724,6 +727,28 @@ pub(crate) mod parsing {
                     let punct: Token![+] = input.parse()?;
                     bounds.push_punct(punct);
                 }
+            }
+
+            // Verus: `T: Tr with { fn m(..) allocates e; fn drop allocates 0; }`, a specification
+            // of the bound's methods (see builtin_macros); carried as the attribute
+            // `#[verus_bound_spec(..)]` on the type parameter
+            let mut attrs = attrs;
+            if input.peek(Token![with]) && input.peek2(token::Brace) {
+                let with_token: Token![with] = input.parse()?;
+                let content;
+                let brace_token = braced!(content in input);
+                let tokens: proc_macro2::TokenStream = content.parse()?;
+                let span = with_token.span;
+                attrs.push(Attribute {
+                    pound_token: Token![#](span),
+                    style: crate::attr::AttrStyle::Outer,
+                    bracket_token: token::Bracket(brace_token.span),
+                    meta: crate::attr::Meta::List(crate::attr::MetaList {
+                        path: Ident::new("verus_bound_spec", span).into(),
+                        delimiter: crate::MacroDelimiter::Brace(brace_token),
+                        tokens,
+                    }),
+                });
             }
 
             let eq_token: Option<Token![=]> = input.parse()?;

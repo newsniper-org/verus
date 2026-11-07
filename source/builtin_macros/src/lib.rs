@@ -11,6 +11,7 @@ use synstructure::{decl_attribute, decl_derive};
 
 #[macro_use]
 mod syntax;
+mod bound_spec;
 mod atomic_ghost;
 mod attr_block_trait;
 mod attr_rewrite;

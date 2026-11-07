@@ -1609,6 +1609,33 @@ fn stm_call(
     } else {
         None
     };
+    // `T: Tr with { fn drop allocates 0; }` on the callee: check the instantiation's drop glue
+    // (with -V alloc-check), then the marker holds
+    for (marker, t) in crate::alloc_check::bound_drop_markers(&fun.x.require) {
+        let substs: HashMap<Ident, Typ> =
+            fun.x.typ_params.iter().cloned().zip(typs.iter().cloned()).collect();
+        let t = crate::sst_util::subst_typ(&substs, &t);
+        if ctx.global.alloc_check {
+            if let Some(fctx) = &ctx.fun {
+                if let Some(caller) = ctx.func_map.get(&fctx.current_fun) {
+                    crate::alloc_check::check_bound_drop_at_call(ctx, caller, span, &t).map_err(
+                        |e| {
+                            e.secondary_label(
+                                &fun.span,
+                                "the callee requires that dropping this type allocates nothing (`with { fn drop allocates 0; }`)",
+                            )
+                        },
+                    )?;
+                }
+            }
+        }
+        let m = SpannedTyped::new(
+            span,
+            &Arc::new(TypX::Bool),
+            ExpX::Call(CallFun::Fun(marker, None), Arc::new(vec![t]), Arc::new(vec![])),
+        );
+        stms.push(Spanned::new(span.clone(), StmX::Assume(m)));
+    }
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -5226,15 +5253,9 @@ fn exec_closure_body_stms(
     let outer_alloc_counter = state.alloc_counter.take();
     // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function)
     let outer_fip = std::mem::replace(&mut state.fip, false);
-    // The closure body runs later, with whatever the heap is then
-    let outer_heap = match (&ctx.global.alloc_heap, &state.alloc_heap) {
-        (Some(info), Some(_)) => {
-            let (id, _) =
-                state.declare_temp_var_stm(&body.span, &info.typ, PreLocalDeclKind::StmtLet);
-            state.alloc_heap.replace(id)
-        }
-        _ => state.alloc_heap.take(),
-    };
+    // The closure body runs later, with whatever the heap is then (its own `alloc%heap`, declared
+    // in its scope by exec_closure_body_stms_inner)
+    let outer_heap = state.alloc_heap.clone();
     let result = exec_closure_body_stms_inner(
         ctx,
         state,
@@ -5268,6 +5289,15 @@ fn exec_closure_body_stms_inner(
     typ_inv_vars: &mut Vec<(UniqueIdent, Typ)>,
 ) -> Result<Vec<Stm>, VirErr> {
     state.push_scope();
+    if let (Some(info), Some(_)) = (&ctx.global.alloc_heap, &state.alloc_heap) {
+        let id = state.declare_var_stm(
+            &crate::alloc_heap::heap_cur(),
+            &info.typ,
+            PreLocalDeclKind::StmtLet,
+            true,
+        );
+        state.alloc_heap = Some(id);
+    }
 
     let mut param_set = HashSet::<VarIdent>::new();
 

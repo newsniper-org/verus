@@ -364,6 +364,26 @@ Each impl is checked against the declaration's bound. Consequently:
   unverified safe code could implement the trait without staying within the bound. (This is the
   same rule as for `requires`, `no_unwind` and `opens_invariants`.)
 
+### Bound specifications: `T: Tr with { .. }`
+
+A function's type parameter can specify the methods of its bound, instead of a marker trait:
+
+```rust
+fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }>(x: &T) -> (r: (T, T))
+    allocates 0
+{
+    (x.clone(), x.clone())
+}
+```
+
+Inside the function, a call of the method gets the bound's specification; a caller must show
+that the type it instantiates `T` with meets it. A method's specification may have `requires`
+(which the impl must accept), `ensures` (which the impl must give) and `allocates`.
+`fn drop allocates 0;` says that dropping a `T` allocates nothing; Verus checks it against the
+instantiation's drop glue, so `P` above needs no `AllocFreeDrop` impl. The block stands for
+`requires` clauses (`call_requires`, `call_ensures`, `call_allocates`), so it is available on
+functions only, not on impls, structs or traits, and not in `where` clauses yet.
+
 ## Fully in-place functions: `#[verifier::fip]`
 
 The FP² paper (Lorenzen, Leijen and Swierstra, ICFP 2023) distinguishes functions that run in

@@ -799,6 +799,67 @@ fn bounded_allocator_trait_path(ctx: &Ctx) -> Option<Path> {
     ctx.trait_map.keys().find(|p| is_bounded_allocator_trait(p)).cloned()
 }
 
+/// Is this `vstd::alloc_check::bound_drop_alloc_free` (from `T: Tr with { fn drop allocates 0; }`)?
+pub(crate) fn is_bound_drop_marker(fun: &crate::ast::Fun) -> bool {
+    fun.path.krate == crate::ast::CrateId::Vstd
+        && crate::ast_util::fun_as_friendly_rust_name(fun)
+            == "vstd::alloc_check::bound_drop_alloc_free"
+}
+
+/// The `bound_drop_alloc_free::<X>()` conjuncts of `require`: (marker, X)
+pub(crate) fn bound_drop_markers(require: &crate::ast::Exprs) -> Vec<(crate::ast::Fun, Typ)> {
+    fn walk(e: &crate::ast::Expr, out: &mut Vec<(crate::ast::Fun, Typ)>) {
+        match &e.x {
+            crate::ast::ExprX::Logical(crate::ast::LogicalOp::And, a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            crate::ast::ExprX::Call {
+                target: crate::ast::CallTarget::Fun(_, f, typs, ..), ..
+            } if is_bound_drop_marker(f) && typs.len() == 1 => {
+                out.push((f.clone(), typs[0].clone()))
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for e in require.iter() {
+        walk(e, &mut out);
+    }
+    out
+}
+
+fn marked_params(require: &crate::ast::Exprs) -> Vec<Ident> {
+    bound_drop_markers(require)
+        .into_iter()
+        .filter_map(|(_, t)| match &*t {
+            TypX::TypParam(x) => Some(x.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// At a call of a function whose requires have `bound_drop_alloc_free::<X>()`: dropping `X` (the
+/// instantiation) must not allocate, in the caller's context
+pub(crate) fn check_bound_drop_at_call(
+    ctx: &Ctx,
+    caller: &Function,
+    span: &Span,
+    typ: &Typ,
+) -> Result<(), VirErr> {
+    let mut checker = DropGlueCheck::new(
+        &ctx.global.alloc_datatypes,
+        &ctx.global.drop_impl_alloc_zero,
+        &ctx.global.copy_datatypes,
+        &ctx.global.copy_impls,
+        false,
+        &caller.x.typ_bounds,
+        bounded_allocator_trait_path(ctx),
+    );
+    checker.alloc_free_params.extend(marked_params(&caller.x.require));
+    checker.check(span, typ)
+}
+
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
 pub(crate) fn check_drop_glue(
     ctx: &Ctx,
@@ -813,7 +874,15 @@ pub(crate) fn check_drop_glue(
         &function.x.typ_bounds,
         bounded_allocator_trait_path(ctx),
     );
+    // (`T: Tr with { fn drop allocates 0; }`)
+    checker.alloc_free_params.extend(marked_params(&function.x.require));
     for param in function.x.params.iter() {
+        // (a ghost parameter, or one unwrapped from `Ghost(x)`, has no drop glue at run time)
+        if param.x.mode == crate::ast::Mode::Spec
+            || matches!(param.x.unwrapped_info, Some((crate::ast::Mode::Spec, _)))
+        {
+            continue;
+        }
         checker.check(&param.span, &param.x.typ)?;
     }
     checker.check(&function.x.outer_ret.span, &function.x.outer_ret.x.typ)?;

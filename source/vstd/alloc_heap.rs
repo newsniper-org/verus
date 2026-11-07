@@ -173,6 +173,66 @@ pub open spec fn stateful_allocate_heap<A: StatefulAllocator + ?Sized>(
     heap_set::<A::State>(h, a.loc(), a.allocate_next(heap_state::<A::State>(h, a.loc()), layout, r))
 }
 
+/// What Verus charges for `a.grow(ptr, old_layout, new_layout)` (and `grow_zeroed`)
+pub open spec fn stateful_grow_cost<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+) -> int {
+    crate::std_specs::rust_1_100::clamp_cost(
+        a.grow_cost_at(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout),
+        A::max_cost(),
+    )
+}
+
+/// The heap after `a.grow(ptr, old_layout, new_layout)` (or `grow_zeroed`) returned `r`
+pub open spec fn stateful_grow_heap<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+) -> AllocHeap {
+    heap_set::<A::State>(
+        h,
+        a.loc(),
+        a.grow_next(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout, r),
+    )
+}
+
+/// What Verus charges for `a.shrink(ptr, old_layout, new_layout)`
+pub open spec fn stateful_shrink_cost<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+) -> int {
+    crate::std_specs::rust_1_100::clamp_cost(
+        a.shrink_cost_at(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout),
+        A::max_cost(),
+    )
+}
+
+/// The heap after `a.shrink(ptr, old_layout, new_layout)` returned `r`
+pub open spec fn stateful_shrink_heap<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+) -> AllocHeap {
+    heap_set::<A::State>(
+        h,
+        a.loc(),
+        a.shrink_next(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout, r),
+    )
+}
+
 /// Is `a` in heap `h`? (Always, for a live allocator: see `lemma_registered`.)
 pub open spec fn stateful_tracked<A: StatefulAllocator + ?Sized>(h: AllocHeap, a: &A) -> bool {
     heap_has::<A::State>(h, a.loc())
@@ -312,6 +372,56 @@ pub unsafe trait StatefulAllocator: crate::alloc_check::BoundedAllocator {
         layout: core::alloc::Layout,
         r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
     ) -> Self::State;
+
+    /// The allocations of `self.grow(ptr, old_layout, new_layout)` (and `grow_zeroed`) when the
+    /// state is at least `s`. By default, what std's default bodies do: one `allocate` with the
+    /// new layout. Only an allocator whose `Allocator` impl defines `grow` and `grow_zeroed` may
+    /// change it (or `grow_next`).
+    open spec fn grow_cost_at(
+        &self,
+        s: Self::State,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> int {
+        self.allocate_cost_at(s, new_layout)
+    }
+
+    /// The state after `self.grow(ptr, old_layout, new_layout)` (or `grow_zeroed`) returned `r`
+    open spec fn grow_next(
+        &self,
+        s: Self::State,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+        r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+    ) -> Self::State {
+        self.allocate_next(s, new_layout, r)
+    }
+
+    /// The allocations of `self.shrink(ptr, old_layout, new_layout)` (see `grow_cost_at`; only an
+    /// allocator whose `Allocator` impl defines `shrink` may change it, or `shrink_next`)
+    open spec fn shrink_cost_at(
+        &self,
+        s: Self::State,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> int {
+        self.allocate_cost_at(s, new_layout)
+    }
+
+    /// The state after `self.shrink(ptr, old_layout, new_layout)` returned `r`
+    open spec fn shrink_next(
+        &self,
+        s: Self::State,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+        r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+    ) -> Self::State {
+        self.allocate_next(s, new_layout, r)
+    }
 }
 
 } // verus!

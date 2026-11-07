@@ -1330,6 +1330,34 @@ impl Visitor {
         }
         let atomic_perm_clause = self.handle_atomic_spec(sig, vis, &mut stmts);
 
+        // `T: Tr with { .. }` (bound_spec.rs)
+        {
+            let span = sig.fn_token.span;
+            let builtin = Builtin(span);
+            let builtin = quote! { #builtin };
+            let alloc_check = match crate::vstd_kind() {
+                crate::VstdKind::IsVstd => quote_spanned! { span => crate::alloc_check },
+                _ => quote_spanned! { span => ::vstd::alloc_check },
+            };
+            match crate::bound_spec::take_bound_specs(&mut sig.generics, &builtin, &alloc_check) {
+                Ok(reqs) if !reqs.is_empty() => {
+                    let token = Token![requires](span);
+                    let requires = sig.spec.requires.get_or_insert_with(|| verus_syn::Requires {
+                        token,
+                        exprs: verus_syn::Specification { exprs: Punctuated::new() },
+                    });
+                    for r in reqs {
+                        requires.exprs.exprs.push(r);
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    let e = err.to_compile_error();
+                    stmts.push(Stmt::Expr(Expr::Verbatim(quote! { #e }), Some(Token![;](span))));
+                }
+            }
+        }
+
         // attrs.push(mk_verus_attr(sig.fn_token.span, quote! { verus_macro }));
         if self.erase_ghost.keep() {
             attrs.push(mk_verus_attr(sig.fn_token.span, quote! { verus_macro }));
