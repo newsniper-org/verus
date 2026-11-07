@@ -79,26 +79,65 @@ pub struct HeapInfo {
     pub(crate) stateful: HashSet<crate::ast::Dt>,
 }
 
-pub(crate) fn stateful_fun(name: &str) -> Fun {
-    match name {
-        "cost" => crate::fun!(crate::ast::CrateId::Vstd => "alloc_heap"; "stateful_allocate_cost"),
-        "heap" => crate::fun!(crate::ast::CrateId::Vstd => "alloc_heap"; "stateful_allocate_heap"),
-        _ => crate::fun!(crate::ast::CrateId::Vstd => "alloc_heap"; "stateful_tracked"),
+/// The `Allocator` methods that move an allocator's state
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StatefulMethod {
+    /// `allocate`, `allocate_zeroed`
+    Allocate,
+    /// `grow`, `grow_zeroed`
+    Grow,
+    /// `shrink`
+    Shrink,
+}
+
+/// vstd's `stateful_{allocate,grow,shrink}_{cost,heap}` and `stateful_tracked`
+pub(crate) fn stateful_fun(m: StatefulMethod, kind: &str) -> Fun {
+    use crate::ast::CrateId;
+    match (m, kind) {
+        (_, "tracked") => crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_tracked"),
+        (StatefulMethod::Allocate, "cost") => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_allocate_cost")
+        }
+        (StatefulMethod::Allocate, _) => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_allocate_heap")
+        }
+        (StatefulMethod::Grow, "cost") => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_grow_cost")
+        }
+        (StatefulMethod::Grow, _) => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_grow_heap")
+        }
+        (StatefulMethod::Shrink, "cost") => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_shrink_cost")
+        }
+        (StatefulMethod::Shrink, _) => {
+            crate::fun!(CrateId::Vstd => "alloc_heap"; "stateful_shrink_heap")
+        }
     }
 }
 
-/// Is this (by its friendly name) `Allocator::allocate` or `Allocator::allocate_zeroed`?
-pub(crate) fn is_allocate_method(fun: &Fun) -> bool {
-    matches!(
-        crate::ast_util::fun_as_friendly_rust_name(fun).as_str(),
-        "core::alloc::Allocator::allocate" | "core::alloc::Allocator::allocate_zeroed"
-    )
+/// Which state-moving `Allocator` method is this (by its friendly name)?
+pub(crate) fn stateful_method(fun: &Fun) -> Option<StatefulMethod> {
+    match crate::ast_util::fun_as_friendly_rust_name(fun).as_str() {
+        "core::alloc::Allocator::allocate" | "core::alloc::Allocator::allocate_zeroed" => {
+            Some(StatefulMethod::Allocate)
+        }
+        "core::alloc::Allocator::grow" | "core::alloc::Allocator::grow_zeroed" => {
+            Some(StatefulMethod::Grow)
+        }
+        "core::alloc::Allocator::shrink" => Some(StatefulMethod::Shrink),
+        _ => None,
+    }
 }
 
 impl HeapInfo {
     /// The `Self` type of a call to an `Allocator` method, if it is an allocator with a state
     pub(crate) fn stateful_self(&self, typs: &crate::ast::Typs) -> Option<Typ> {
-        let t = typs.first()?;
+        let mut t = typs.first()?;
+        // (`&A` forwards every method to `A`, std 1.100)
+        while let TypX::Decorate(crate::ast::TypDecoration::Ref, _, inner) = &**t {
+            t = inner;
+        }
         match &**t {
             TypX::Datatype(dt, _, _) if self.stateful.contains(dt) => Some(t.clone()),
             _ => None,
@@ -160,6 +199,59 @@ fn spec_mentions_heap(f: &FunctionX) -> bool {
         || f.allocates.as_ref().is_some_and(mentions_heap)
         || f.deallocates.as_ref().is_some_and(mentions_heap)
         || matches!(&f.unwind_spec, Some(crate::ast::UnwindSpec::NoUnwindWhen(e)) if mentions_heap(e))
+}
+
+/// A `StatefulAllocator` may replace the default `grow_*`/`shrink_*` (std's default bodies: one
+/// `allocate` of the new layout) only for methods its `Allocator` impl defines (std's default
+/// bodies are not verified)
+pub(crate) fn check_stateful_overrides(krate: &Krate) -> Result<(), VirErr> {
+    let sa = crate::path!(crate::ast::CrateId::Vstd => "alloc_heap", "StatefulAllocator");
+    for imp in krate.trait_impls.iter() {
+        if imp.x.trait_path != sa {
+            continue;
+        }
+        let Some(self_typ) = imp.x.trait_typ_args.first() else { continue };
+        let alloc_impl = krate.trait_impls.iter().find(|i| {
+            crate::ast_util::path_as_friendly_rust_name(&i.x.trait_path) == "core::alloc::Allocator"
+                && i.x
+                    .trait_typ_args
+                    .first()
+                    .is_some_and(|t| crate::ast_util::types_equal(t, self_typ))
+        });
+        let defines = |impl_path: &crate::ast::Path, name: &str| {
+            krate.functions.iter().any(|f| match &f.x.kind {
+                FunctionKind::TraitMethodImpl { method, impl_path: p, inherit_body_from: None, .. } => {
+                    p == impl_path
+                        && matches!(method.path.last_segment(), crate::ast::Segment::V(x, _) if x.as_str() == name)
+                }
+                _ => false,
+            })
+        };
+        let has = |name: &str| alloc_impl.is_some_and(|ai| defines(&ai.x.impl_path, name));
+        for (spec_fns, methods) in [
+            (["grow_cost_at", "grow_next"], vec!["grow", "grow_zeroed"]),
+            (["shrink_cost_at", "shrink_next"], vec!["shrink"]),
+        ] {
+            for f in spec_fns {
+                if defines(&imp.x.impl_path, f) && !methods.iter().all(|m| has(m)) {
+                    return Err(error(
+                        &imp.span,
+                        format!(
+                            "this `StatefulAllocator` defines `{}`, but its `Allocator` impl does not define {} (std's default bodies, which Verus does not check, make one `allocate` with the new layout: the default `{}`)",
+                            f,
+                            methods
+                                .iter()
+                                .map(|m| format!("`{}`", m))
+                                .collect::<Vec<_>>()
+                                .join(" and "),
+                            f
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A trait method impl whose own specification mentions the heap needs its trait declaration to

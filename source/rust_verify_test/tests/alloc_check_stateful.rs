@@ -562,3 +562,33 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_grow_default_and_ref ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        // (Pool's `Allocator` impl does not define `grow`: std's default body allocates once with
+        // the new layout, so the state moves as `allocate` says)
+        fn grow_once(p: &Pool, ptr: NonNull<u8>, l1: Layout, l2: Layout)
+            requires allocator_state(p).0 >= 1,
+            ensures allocator_state(p).0 == old_allocator_state(p).0 - 1,
+            allocates 0
+        {
+            let _ = unsafe { p.grow(ptr, l1, l2) };
+        }
+
+        // `&A` forwards every method to `A`
+        fn through_ref(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 1,
+            ensures allocator_state(p).0 == old_allocator_state(p).0 - 1,
+            allocates 0
+        {
+            let _ = <&Pool as Allocator>::allocate(&p, l);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_override_needs_method ["vstd", "-V alloc-check"] => POOL.to_string().replace(
+        "open spec fn allocate_next(",
+        "open spec fn grow_next(&self, s: Free, ptr: NonNull<u8>, o: Layout, n: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free { s }\n    open spec fn allocate_next(",
+    ) => Err(err) => assert_vir_error_msg(err, "defines `grow_next`, but its `Allocator` impl does not define `grow` and `grow_zeroed`")
+}

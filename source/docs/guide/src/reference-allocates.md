@@ -304,8 +304,11 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   bound: it may change the heap only through its type arguments (a type parameter, a closure,
   a type of the user's crate). So a std call instantiated with a user type (`Vec<MyStruct>::push`)
   also makes the states unknown.
-* Not yet: `grow` and `shrink` of an allocator with a state are charged their stateless costs
-  and leave the states unknown; the containers' specifications do not name the states.
+* `grow` (and `grow_zeroed`) and `shrink` move the state too, by `grow_cost_at`/`grow_next` and
+  `shrink_cost_at`/`shrink_next`. By default these are what std's default bodies do (one
+  `allocate` with the new layout); an allocator may change them only for methods its `Allocator`
+  impl defines. A call through `&A` is a call of `A`'s method.
+* Not yet: the containers' specifications do not name the states.
 
 ## Callbacks, closures and traits
 

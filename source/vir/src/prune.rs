@@ -523,9 +523,9 @@ fn traverse_reachable(ctxt: &Ctxt, state: &mut State) {
                         reach_function(ctxt, state, &h);
                     }
                 }
-                if crate::alloc_heap::is_allocate_method(&f) {
+                if let Some(m) = crate::alloc_heap::stateful_method(&f) {
                     for n in ["cost", "heap", "tracked"] {
-                        let g = crate::alloc_heap::stateful_fun(n);
+                        let g = crate::alloc_heap::stateful_fun(m, n);
                         if ctxt.function_map.contains_key(&g) {
                             reach_function(ctxt, state, &g);
                         }

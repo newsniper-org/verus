@@ -1492,12 +1492,12 @@ fn stm_call(
     // which then moves as the allocator says (see vstd::alloc_heap::StatefulAllocator)
     let mut stateful_charge: Option<Exp> = None;
     let stateful = match (&ctx.global.alloc_heap, &state.alloc_heap) {
-        (Some(info), Some(cur)) if crate::alloc_heap::is_allocate_method(&name) => {
-            info.stateful_self(&typs).map(|t| (info.clone(), cur.clone(), t))
-        }
+        (Some(info), Some(cur)) => crate::alloc_heap::stateful_method(&name)
+            .and_then(|m| info.stateful_self(&typs).map(|t| (info.clone(), cur.clone(), t, m))),
         _ => None,
     };
-    if let Some((info, cur, self_typ)) = &stateful {
+    if let Some((info, cur, self_typ, method)) = &stateful {
+        let rest: Vec<Exp> = small_args[1..].to_vec();
         let int_typ = Arc::new(TypX::Int(IntRange::Int));
         let bool_typ = Arc::new(TypX::Bool);
         let st_typs = Arc::new(vec![self_typ.clone()]);
@@ -1519,18 +1519,20 @@ fn stm_call(
                 span,
                 t,
                 ExpX::Call(
-                    CallFun::Fun(crate::alloc_heap::stateful_fun(f), None),
+                    CallFun::Fun(crate::alloc_heap::stateful_fun(*method, f), None),
                     st_typs.clone(),
                     Arc::new(a),
                 ),
             )
         };
         stms.push(Spanned::new(span.clone(), StmX::Assume(call("tracked", vec![], &bool_typ))));
-        stateful_charge = Some(call("cost", vec![small_args[1].clone()], &int_typ));
+        stateful_charge = Some(call("cost", rest.clone(), &int_typ));
         if let Some(Dest { dest, .. }) = &dest {
             if let ExpX::VarLoc(x) = &dest.x {
                 let r = SpannedTyped::new(span, &dest.typ, ExpX::Var(x.clone()));
-                let next = call("heap", vec![small_args[1].clone(), r], &info.typ);
+                let mut rest_r = rest.clone();
+                rest_r.push(r);
+                let next = call("heap", rest_r, &info.typ);
                 let lhs = Dest { dest: var_loc_exp(span, &info.typ, cur.clone()), is_init: false };
                 heap_after = Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: next }));
             }

@@ -1208,7 +1208,7 @@ pub fn func_def_to_sst(
     if let (Some(info), Some(cur), FunctionKind::TraitMethodImpl { method, trait_typ_args, .. }) =
         (&ctx.global.alloc_heap, &state.alloc_heap, &function.x.kind)
     {
-        if crate::alloc_heap::is_allocate_method(method) && !check_api_safety {
+        if let (Some(m), false) = (crate::alloc_heap::stateful_method(method), check_api_safety) {
             if let Some(self_typ) = info.stateful_self(trait_typ_args) {
                 if !ens_has_return {
                     return Err(crate::messages::error(
@@ -1224,7 +1224,8 @@ pub fn func_def_to_sst(
                 };
                 let pre = var(&crate::alloc_heap::heap_pre(), &info.typ);
                 let a = var(&function.x.params[0].x.name, &function.x.params[0].x.typ);
-                let layout = var(&function.x.params[1].x.name, &function.x.params[1].x.typ);
+                let rest: Vec<Exp> =
+                    function.x.params[1..].iter().map(|p| var(&p.x.name, &p.x.typ)).collect();
                 let ParamX { name: rname, typ: rtyp, .. } = &function.x.inner_ret.x;
                 let r = var(rname, rtyp);
                 let typs = Arc::new(vec![self_typ.clone()]);
@@ -1233,7 +1234,7 @@ pub fn func_def_to_sst(
                         span,
                         t,
                         crate::sst::ExpX::Call(
-                            crate::sst::CallFun::Fun(crate::alloc_heap::stateful_fun(f), None),
+                            crate::sst::CallFun::Fun(crate::alloc_heap::stateful_fun(m, f), None),
                             typs.clone(),
                             Arc::new(args),
                         ),
@@ -1243,7 +1244,10 @@ pub fn func_def_to_sst(
                     span.clone(),
                     StmX::Assume(call("tracked", vec![pre.clone(), a.clone()], &bool_typ)),
                 ));
-                let next = call("heap", vec![pre.clone(), a.clone(), layout.clone(), r], &info.typ);
+                let mut args = vec![pre.clone(), a.clone()];
+                args.extend(rest.iter().cloned());
+                args.push(r);
+                let next = call("heap", args, &info.typ);
                 let eq = crate::sst_util::sst_equal(span, &var(cur, &info.typ), &next);
                 let label = crate::ast::ProofNoteLabel {
                     text: Arc::new("the heap must move as `allocate_next` says".to_string()),
@@ -1255,7 +1259,9 @@ pub fn func_def_to_sst(
                     crate::sst::ExpX::UnaryOpr(crate::ast::UnaryOpr::ProofNote(label), eq),
                 ));
                 if let Some(counter) = &state.alloc_counter {
-                    let cost = call("cost", vec![pre.clone(), a.clone(), layout.clone()], &int_typ);
+                    let mut args = vec![pre.clone(), a.clone()];
+                    args.extend(rest.iter().cloned());
+                    let cost = call("cost", args, &int_typ);
                     let le = SpannedTyped::new(
                         span,
                         &bool_typ,

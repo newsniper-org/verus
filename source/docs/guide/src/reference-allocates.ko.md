@@ -288,8 +288,10 @@ Verus는 스레드마다 이 상태들의 하한을 담은 ghost heap을 둡니�
 * `external_body` 함수와 `assume_specification`은 `allocates` 상한처럼 신뢰합니다. 이들은 타입 인자(타입
   매개변수, 클로저, 사용자 crate의 타입)를 통해서만 heap을 바꿀 수 있다고 봅니다. 그래서 사용자 타입으로
   인스턴스화한 std 호출(`Vec<MyStruct>::push`)도 상태를 모르게 만듭니다.
-* 아직 안 되는 것: 상태 있는 할당기의 `grow`와 `shrink`는 상태 없는 비용으로 청구되고 상태를 모르게 만듭니다.
-  컨테이너의 명세는 상태를 말하지 않습니다.
+* `grow`(`grow_zeroed`)와 `shrink`도 `grow_cost_at`/`grow_next`, `shrink_cost_at`/`shrink_next`로 상태를
+  옮깁니다. 기본값은 std 기본 본문이 하는 일(새 layout으로 `allocate` 한 번)이고, 할당기는 자기 `Allocator`
+  impl이 정의한 메서드에 대해서만 바꿀 수 있습니다. `&A`를 통한 호출은 `A`의 메서드 호출입니다.
+* 아직 안 되는 것: 컨테이너의 명세는 상태를 말하지 않습니다.
 
 ## 콜백, 클로저, trait
 
