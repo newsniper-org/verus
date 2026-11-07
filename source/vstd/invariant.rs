@@ -320,7 +320,8 @@ pub struct OpenInvariantCredit;
 pub fn create_open_invariant_credit() -> Tracked<OpenInvariantCredit>
     opens_invariants none
     no_unwind
-    allocates 0
+    allocates
+        0,
 {
     Tracked::<OpenInvariantCredit>::assume_new()
 }
@@ -341,7 +342,8 @@ pub fn spend_open_invariant_credit(
 )
     opens_invariants none
     no_unwind
-    allocates 0
+    allocates
+        0,
 {
     proof {
         spend_open_invariant_credit_in_proof(credit.get());

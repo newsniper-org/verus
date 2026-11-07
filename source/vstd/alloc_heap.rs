@@ -424,10 +424,8 @@ pub unsafe trait StatefulAllocator: crate::alloc_check::BoundedAllocator {
     }
 }
 
-
 // ---- The cost and the heap after an allocator call, for any allocator type (the containers'
 // specifications use these; see `std_specs::vec`)
-
 use super::std_specs::rust_1_100::{allocator_allocate_cost, allocator_grow_cost};
 
 /// The allocations of `a.allocate(layout)` in heap `h`: at most the stateless cost, and at most
@@ -577,8 +575,14 @@ pub broadcast axiom fn axiom_global_grow_in(
     r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
 )
     ensures
-        #[trigger] allocator_grow_heap_in::<alloc::alloc::Global>(h, a, ptr, old_layout, new_layout, r)
-            == h,
+        #[trigger] allocator_grow_heap_in::<alloc::alloc::Global>(
+            h,
+            a,
+            ptr,
+            old_layout,
+            new_layout,
+            r,
+        ) == h,
 ;
 
 #[cfg(feature = "alloc")]
@@ -612,8 +616,9 @@ pub broadcast axiom fn axiom_ref_allocate_cost_in<A: ?Sized>(
     layout: core::alloc::Layout,
 )
     ensures
-        #[trigger] allocator_allocate_cost_in::<&A>(h, a, layout)
-            == allocator_allocate_cost_in::<A>(h, *a, layout),
+        #[trigger] allocator_allocate_cost_in::<&A>(h, a, layout) == allocator_allocate_cost_in::<
+            A,
+        >(h, *a, layout),
 ;
 
 pub broadcast axiom fn axiom_ref_grow_in<A: ?Sized>(
