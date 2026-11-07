@@ -71,8 +71,8 @@ pub struct HeapInfo {
     pub(crate) aware: HashSet<Fun>,
     state_in: Fun,
     tracked_in: Fun,
-    /// The exec functions with bodies whose calls may change the heap
-    pub(crate) touching: HashSet<Fun>,
+    /// The effects of the exec functions with bodies
+    pub(crate) effects: HashMap<Fun, Effect>,
     /// All functions of the crate (to classify calls)
     funs: HashMap<Fun, Function>,
     /// Datatypes that implement `vstd::alloc_heap::StatefulAllocator`
@@ -154,15 +154,8 @@ impl HeapInfo {
         resolved: Option<&Fun>,
         dynamic: bool,
     ) -> bool {
-        call_may_touch_with(
-            &self.funs,
-            &self.aware,
-            &self.touching,
-            callee,
-            typs,
-            resolved,
-            dynamic,
-        )
+        call_effect_with(&self.funs, &self.aware, &self.effects, callee, typs, resolved, dynamic)
+            .may_touch()
     }
 }
 
@@ -299,7 +292,8 @@ pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Res
             continue;
         };
         if f.x.body.is_some()
-            && (info.touching.contains(&f.x.name) || info.aware.contains(&f.x.name))
+            && (info.effects.get(&f.x.name).is_some_and(|e| e.may_touch())
+                || info.aware.contains(&f.x.name))
         {
             return Err(error(
                 &f.span,
@@ -314,9 +308,17 @@ pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Res
 }
 
 /// The exec functions of `krate` (with bodies) whose calls may change the heap (for export:
-/// the others get `heap_preserving`). None if the crate has no heap (no vstd).
-pub fn exported_touching(krate: &Krate) -> Option<HashSet<Fun>> {
-    heap_info(krate).map(|i| i.touching)
+/// the others get `heap_effect_params`). None if the crate has no heap (no vstd).
+pub fn exported_effects(krate: &Krate) -> Option<HashMap<Fun, Vec<crate::ast::Ident>>> {
+    heap_info(krate).map(|i| {
+        i.effects
+            .into_iter()
+            .filter_map(|(f, e)| match e {
+                Effect::Always => None,
+                Effect::IfParams(ps) => Some((f, ps.into_iter().collect())),
+            })
+            .collect()
+    })
 }
 
 pub(crate) fn heap_info(krate: &Krate) -> Option<HeapInfo> {
@@ -344,7 +346,7 @@ pub(crate) fn heap_info(krate: &Krate) -> Option<HeapInfo> {
             }
         }
     }
-    let touching = touching_funs(krate, &aware);
+    let effects = function_effects(krate, &aware);
     let funs = krate.functions.iter().map(|f| (f.x.name.clone(), f.clone())).collect();
     let sa = crate::path!(crate::ast::CrateId::Vstd => "alloc_heap", "StatefulAllocator");
     let mut stateful = HashSet::new();
@@ -357,7 +359,7 @@ pub(crate) fn heap_info(krate: &Krate) -> Option<HeapInfo> {
             }
         }
     }
-    Some(HeapInfo { typ, aware, state_in, tracked_in, touching, funs, stateful })
+    Some(HeapInfo { typ, aware, state_in, tracked_in, effects, funs, stateful })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -553,33 +555,89 @@ fn trusted_dt(dt: &crate::ast::Dt) -> bool {
 
 /// May code of a trusted crate, instantiated with these type arguments, change the heap? It can
 /// only reach user code (an allocator, a trait impl, a closure) through them.
-fn typs_may_touch(typs: &crate::ast::Typs) -> bool {
-    let mut touch = false;
-    for t in typs.iter() {
-        let _ = crate::ast_visitor::typ_visitor_check::<(), _>(t, &mut |t: &Typ| {
-            match &**t {
-                TypX::TypParam(_)
-                | TypX::Projection { .. }
-                | TypX::AnonymousClosure(..)
-                | TypX::FnDef(..)
-                | TypX::Dyn(..)
-                | TypX::Opaque { .. } => touch = true,
-                TypX::Datatype(dt, _, _) if !trusted_dt(dt) => touch = true,
-                _ => {}
-            }
-            Ok(())
-        });
-    }
-    touch
+/// Whether calling a function may change the heap: always, or only if one of these type
+/// parameters (of the function the effect is about) is instantiated with a type through which
+/// code may reach an allocator with a state (an empty set: never)
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Effect {
+    Always,
+    IfParams(std::collections::BTreeSet<crate::ast::Ident>),
 }
 
-/// The exec functions with bodies in `krate` whose calls may change the heap
-pub(crate) fn touching_funs(krate: &Krate, aware: &HashSet<Fun>) -> HashSet<Fun> {
+impl Effect {
+    fn none() -> Self {
+        Effect::IfParams(std::collections::BTreeSet::new())
+    }
+
+    fn join(self, other: Effect) -> Effect {
+        match (self, other) {
+            (Effect::Always, _) | (_, Effect::Always) => Effect::Always,
+            (Effect::IfParams(mut a), Effect::IfParams(b)) => {
+                a.extend(b);
+                Effect::IfParams(a)
+            }
+        }
+    }
+
+    pub(crate) fn may_touch(&self) -> bool {
+        !matches!(self, Effect::IfParams(p) if p.is_empty())
+    }
+
+    /// The effect of a callee with this effect (over its type parameters `callee_params`),
+    /// instantiated with `typs`, over the caller's type parameters
+    fn instantiate(&self, callee_params: &crate::ast::Idents, typs: &crate::ast::Typs) -> Effect {
+        match self {
+            Effect::Always => Effect::Always,
+            Effect::IfParams(ps) => {
+                let mut e = Effect::none();
+                for p in ps.iter() {
+                    match callee_params.iter().position(|q| q == p) {
+                        Some(i) if i < typs.len() => {
+                            e = e.join(typ_effect(&typs[i]));
+                        }
+                        _ => return Effect::Always,
+                    }
+                }
+                e
+            }
+        }
+    }
+}
+
+/// The effect of trusted code instantiated with `typ`: it reaches user code (which may change the
+/// heap) only through the type
+fn typ_effect(typ: &Typ) -> Effect {
+    let mut e = Effect::none();
+    let _ = crate::ast_visitor::typ_visitor_check::<(), _>(typ, &mut |t: &Typ| {
+        match &**t {
+            TypX::TypParam(x) => {
+                e = std::mem::replace(&mut e, Effect::Always)
+                    .join(Effect::IfParams([x.clone()].into_iter().collect()));
+            }
+            TypX::Projection { .. }
+            | TypX::AnonymousClosure(..)
+            | TypX::FnDef(..)
+            | TypX::Dyn(..)
+            | TypX::Opaque { .. } => e = Effect::Always,
+            TypX::Datatype(dt, _, _) if !trusted_dt(dt) => e = Effect::Always,
+            _ => {}
+        }
+        Ok(())
+    });
+    e
+}
+
+fn typs_effect(typs: &crate::ast::Typs) -> Effect {
+    typs.iter().fold(Effect::none(), |e, t| e.join(typ_effect(t)))
+}
+
+/// The effects of the exec functions with bodies in `krate`
+pub(crate) fn function_effects(krate: &Krate, aware: &HashSet<Fun>) -> HashMap<Fun, Effect> {
     let funs: HashMap<Fun, Function> =
         krate.functions.iter().map(|f| (f.x.name.clone(), f.clone())).collect();
     // calls of each exec body: (callee, type args, resolved callee)
     let mut calls: HashMap<Fun, Vec<(Fun, crate::ast::Typs, Option<Fun>, bool)>> = HashMap::new();
-    let mut touching: HashSet<Fun> = HashSet::new();
+    let mut effects: HashMap<Fun, Effect> = HashMap::new();
     for f in krate.functions.iter() {
         if f.x.mode != Mode::Exec {
             continue;
@@ -610,31 +668,28 @@ pub(crate) fn touching_funs(krate: &Krate, aware: &HashSet<Fun>) -> HashSet<Fun>
             }
             Ok(())
         });
-        if direct {
-            touching.insert(f.x.name.clone());
-        }
+        effects.insert(f.x.name.clone(), if direct { Effect::Always } else { Effect::none() });
         calls.insert(f.x.name.clone(), cs);
     }
-    // fixed point
+    // fixed point (effects only grow)
     loop {
         let mut changed = false;
         for (f, cs) in calls.iter() {
-            if touching.contains(f) {
-                continue;
-            }
-            let t = cs.iter().any(|(callee, typs, resolved, dynamic)| {
-                call_may_touch_with(
+            let mut e = effects[f].clone();
+            for (callee, typs, resolved, dynamic) in cs.iter() {
+                let ce = call_effect_with(
                     &funs,
                     aware,
-                    &touching,
+                    &effects,
                     callee,
                     typs,
                     resolved.as_ref(),
                     *dynamic,
-                )
-            });
-            if t {
-                touching.insert(f.clone());
+                );
+                e = e.join(ce);
+            }
+            if e != effects[f] {
+                effects.insert(f.clone(), e);
                 changed = true;
             }
         }
@@ -642,44 +697,62 @@ pub(crate) fn touching_funs(krate: &Krate, aware: &HashSet<Fun>) -> HashSet<Fun>
             break;
         }
     }
-    touching
+    effects
 }
 
-fn call_may_touch_with(
+/// The effect of a call, over the caller's type parameters
+fn call_effect_with(
     funs: &HashMap<Fun, Function>,
     aware: &HashSet<Fun>,
-    touching: &HashSet<Fun>,
+    effects: &HashMap<Fun, Effect>,
     callee: &Fun,
     typs: &crate::ast::Typs,
     resolved: Option<&Fun>,
     dynamic: bool,
-) -> bool {
+) -> Effect {
     if aware.contains(callee) || resolved.is_some_and(|r| aware.contains(r)) {
-        return true;
+        return Effect::Always;
     }
     let target = resolved.unwrap_or(callee);
     let Some(func) = funs.get(target) else {
         // not in the crate (pruned): only trusted crates are known
-        return !trusted_crate(target) || typs_may_touch(typs);
+        return if trusted_crate(target) { typs_effect(typs) } else { Effect::Always };
     };
     if func.x.mode != Mode::Exec {
         // a proof function that is not heap-aware leaves the heap as it was (checked)
-        return false;
+        return Effect::none();
     }
     if dynamic && resolved.is_none() {
-        return true;
+        // (the impl is the one of the instantiation's type, which is among `typs`; an impl for a
+        // trusted type is trusted, and reaches user code only through its type arguments)
+        return typs_effect(typs);
     }
+    let callee_typs = if resolved.is_some() { None } else { Some(&func.x.typ_params) };
+    let instantiate = |e: &Effect| match callee_typs {
+        Some(ps) => e.instantiate(ps, typs),
+        // (a resolved impl's type parameters are not the call's type arguments)
+        None => {
+            if e.may_touch() {
+                Effect::Always
+            } else {
+                Effect::none()
+            }
+        }
+    };
     if func.x.body.is_some() && !trusted_crate(target) {
-        return touching.contains(target);
+        return match effects.get(target) {
+            Some(e) => instantiate(e),
+            None => Effect::Always,
+        };
     }
     if func.x.attrs.is_external_body && func.x.body.is_none() || func.x.proxy.is_some() {
         // trusted, like its `allocates` bound: it reaches user code only through its type
         // arguments
-        return typs_may_touch(typs);
+        return typs_effect(typs);
     }
-    if func.x.attrs.heap_preserving {
+    if let Some(ps) = &func.x.attrs.heap_effect_params {
         // (computed by the crate that defined it)
-        return false;
+        return instantiate(&Effect::IfParams(ps.iter().cloned().collect()));
     }
     if trusted_crate(target) {
         // (a trusted function reaches user code through its type arguments, or through `dyn`
@@ -694,8 +767,8 @@ fn call_may_touch_with(
             });
             d
         });
-        return dyn_param || typs_may_touch(typs);
+        return if dyn_param { Effect::Always } else { typs_effect(typs) };
     }
     // a verified function of another crate: unknown
-    true
+    Effect::Always
 }

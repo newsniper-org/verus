@@ -297,8 +297,11 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   and its lower bound stay in one thread.
 * A function whose specification mentions the heap passes it on to its callers. After a call to
   any other function that may change the heap (it allocates from an allocator with a state, or
-  calls code that Verus cannot see the effect of: a trait method on a type parameter, a closure,
-  a function of another crate), the states are unknown, and then cost `max_cost()`. A proof
+  calls code that Verus cannot see the effect of: a closure, a function of a crate verified
+  without Verus's heap analysis), the states are unknown, and then cost `max_cost()`. The
+  analysis is per instantiation: a generic function that may reach an allocator only through its
+  type parameter `A` (`v.push(1)` on a `Vec<u8, A>`) keeps the states when called with
+  `A = Global`. A proof
   function that changes the heap must say how in its `ensures`.
 * An `external_body` function or an `assume_specification` is trusted, like its `allocates`
   bound: it may change the heap only through its type arguments (a type parameter, a closure,

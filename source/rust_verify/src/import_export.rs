@@ -78,18 +78,17 @@ pub(crate) fn export_crate(
         // for efficiency's sake, prune out elements of AST that won't be needed by importers:
         let mut kratex = (*vir_crate).clone();
         // (computed while the bodies are still there)
-        let touching = vir::alloc_heap::exported_touching(&vir_crate);
+        let effects = vir::alloc_heap::exported_effects(&vir_crate);
         kratex.functions.retain(|f| f.x.visibility.restricted_to.is_none());
         for func in kratex.functions.iter_mut() {
             let mut functionx = func.x.clone();
-            if let Some(touching) = &touching {
-                if functionx.mode == Mode::Exec
-                    && functionx.body.is_some()
-                    && !touching.contains(&functionx.name)
-                {
-                    let mut attrs = (*functionx.attrs).clone();
-                    attrs.heap_preserving = true;
-                    functionx.attrs = Arc::new(attrs);
+            if let Some(effects) = &effects {
+                if functionx.mode == Mode::Exec && functionx.body.is_some() {
+                    if let Some(ps) = effects.get(&functionx.name) {
+                        let mut attrs = (*functionx.attrs).clone();
+                        attrs.heap_effect_params = Some(Arc::new(ps.clone()));
+                        functionx.attrs = Arc::new(attrs);
+                    }
                 }
             }
             if !alloc_checked {

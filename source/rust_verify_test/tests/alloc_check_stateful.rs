@@ -592,3 +592,26 @@ test_verify_one_file_with_options! {
         "open spec fn grow_next(&self, s: Free, ptr: NonNull<u8>, o: Layout, n: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free { s }\n    open spec fn allocate_next(",
     ) => Err(err) => assert_vir_error_msg(err, "defines `grow_next`, but its `Allocator` impl does not define `grow` and `grow_zeroed`")
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_effect_per_instantiation ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn push_generic<A: Allocator + BoundedAllocator>(v: &mut Vec<u8, A>) {
+            v.push(1);
+        }
+
+        // (instantiated with the global allocator, push_generic cannot reach the pool)
+        fn keeps(p: &Pool, v: &mut Vec<u8>)
+            requires allocator_state(p).0 >= 1,
+        {
+            push_generic(v);
+            assert(allocator_state(p).0 >= 1);
+        }
+
+        fn loses<'a>(p: &'a Pool, v: &mut Vec<u8, &'a Pool>)
+            requires allocator_state(p).0 >= 1,
+        {
+            push_generic(v);
+            assert(allocator_state(p).0 >= 1); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
