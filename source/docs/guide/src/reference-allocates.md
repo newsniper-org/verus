@@ -311,10 +311,26 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   `shrink_cost_at`/`shrink_next`. By default these are what std's default bodies do (one
   `allocate` with the new layout); an allocator may change them only for methods its `Allocator`
   impl defines. A call through `&A` is a call of `A`'s method.
-* `Vec::push` and `Vec::reserve` name the states: their cost is the allocator call's cost at
-  its state, and the state moves as the allocator says (and not at all for the global allocator,
-  or when the vector has room). The other containers' specifications do not name the states
-  yet: calling them with an allocator with a state makes the states unknown.
+* The containers' specifications say what they do to the heap:
+  * `Vec`: every operation that allocates (`with_capacity_in`, `reserve`, `try_reserve`,
+    `try_reserve_exact`, `push`, `insert`, `append`, `extend_from_slice`, `resize`) costs the
+    allocator call's cost at its state, and moves the state as the allocator says (not at all for
+    the global allocator, or when the vector has room); the other operations keep the heap.
+    `Box::new_in` likewise.
+  * `VecDeque` (with `new_in` and `with_capacity_in`), `HashMap` and `HashSet`: their allocating
+    operations make at most one allocator call (`allocator_some_call_heap_in`), with the
+    stateless cost; the others keep the heap. `BTreeMap`/`BTreeSet` reads and removals keep it.
+  * The heap is unknown after: operations that clone the allocator (`clone`, `split_off`) or call
+    a closure (`Box`/`Rc`/`Arc::map`), the trait methods (`Deref`, `Index`, `IntoIterator`), and
+    `BTreeMap`/`BTreeSet` inserts (which have no `allocates` bound).
+  * A container instantiated with an element type through which user code may reach an
+    allocator with a state (`Vec<Vec<u8, &Pool>>`: `T::clone`, drops) does not describe the heap:
+    it is unknown after the call.
+* A closure's own specification may mention the heap: in its `requires` and body,
+  `allocator_state(a)` is the heap at that point of the call, in its `ensures` the heap when it
+  returns, and `old_allocator_state(a)` the heap when it was called. Calling the closure value
+  (`f(x)`) uses its specification at the caller's heap. Such a closure cannot be passed where only
+  `call_requires(f, args)` is known (generic code): that means "at every heap".
 
 ## Callbacks, closures and traits
 
@@ -390,8 +406,12 @@ that the type it instantiates `T` with meets it. A method's specification may ha
 (which the impl must accept), `ensures` (which the impl must give) and `allocates`.
 `fn drop allocates 0;` says that dropping a `T` allocates nothing; Verus checks it against the
 instantiation's drop glue, so `P` above needs no `AllocFreeDrop` impl. The block stands for
-`requires` clauses (`call_requires`, `call_ensures`, `call_allocates`), so it is available on
-functions only, not on impls, structs or traits, and not in `where` clauses yet.
+`requires` clauses (`call_requires`, `call_ensures`, `call_allocates`). Besides a function's
+type parameters, it may appear in a `where` clause (`where T: Clone with { .. }`, also for a type
+that is not a parameter), on an inherent impl block (every exec and proof method gets it), and
+on a struct's type parameter (every inherent impl block of the struct in the same `verus!`
+block gets it, for the type it instantiates the parameter with). It is rejected on a trait impl,
+whose methods cannot have `requires`.
 
 ## Fully in-place functions: `#[verifier::fip]`
 

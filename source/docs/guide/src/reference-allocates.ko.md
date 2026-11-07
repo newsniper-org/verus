@@ -293,9 +293,23 @@ Verus는 스레드마다 이 상태들의 하한을 담은 ghost heap을 둡니�
 * `grow`(`grow_zeroed`)와 `shrink`도 `grow_cost_at`/`grow_next`, `shrink_cost_at`/`shrink_next`로 상태를
   옮깁니다. 기본값은 std 기본 본문이 하는 일(새 layout으로 `allocate` 한 번)이고, 할당기는 자기 `Allocator`
   impl이 정의한 메서드에 대해서만 바꿀 수 있습니다. `&A`를 통한 호출은 `A`의 메서드 호출입니다.
-* `Vec::push`와 `Vec::reserve`는 상태를 말합니다. 비용은 상태에서의 할당기 호출 비용이고, 상태는 할당기가
-  말하는 대로 옮겨집니다(전역 할당기이거나 벡터에 자리가 있으면 그대로입니다). 다른 컨테이너의 명세는 아직
-  상태를 말하지 않으므로, 상태 있는 할당기로 부르면 상태를 모르게 됩니다.
+* 컨테이너 명세는 heap에 무엇을 하는지 말합니다:
+  * `Vec`: 할당하는 모든 연산(`with_capacity_in`, `reserve`, `try_reserve`, `try_reserve_exact`, `push`,
+    `insert`, `append`, `extend_from_slice`, `resize`)은 상태에서의 할당기 호출 비용만큼 들고, 상태를 할당기가
+    말하는 대로 옮깁니다(전역 할당기이거나 벡터에 자리가 있으면 그대로). 나머지 연산은 heap을 그대로 둡니다.
+    `Box::new_in`도 같습니다.
+  * `VecDeque`(`new_in`, `with_capacity_in` 포함), `HashMap`, `HashSet`: 할당하는 연산은 할당기를 최대 한 번
+    부르고(`allocator_some_call_heap_in`), 비용은 상태 없는 비용입니다. 나머지는 heap을 그대로 둡니다.
+    `BTreeMap`/`BTreeSet`의 읽기와 삭제도 그대로 둡니다.
+  * 그 뒤에 heap을 모르게 되는 것: 할당기를 clone하는 연산(`clone`, `split_off`), 클로저를 부르는 연산
+    (`Box`/`Rc`/`Arc::map`), trait 메서드(`Deref`, `Index`, `IntoIterator`), `BTreeMap`/`BTreeSet`의 삽입
+    (`allocates` 상한이 없음).
+  * 원소 타입을 통해 사용자 코드가 상태 있는 할당기에 닿을 수 있으면(`Vec<Vec<u8, &Pool>>`: `T::clone`, drop)
+    컨테이너 명세는 heap을 말하지 않고, 호출 뒤 heap을 모르게 됩니다.
+* 클로저 자신의 명세도 heap을 말할 수 있습니다. `requires`와 본문에서 `allocator_state(a)`는 호출 중 그 지점의
+  heap, `ensures`에서는 돌아갈 때의 heap, `old_allocator_state(a)`는 호출됐을 때의 heap입니다. 클로저 값을
+  부르면(`f(x)`) 호출자의 heap에서 그 명세를 씁니다. 이런 클로저는 `call_requires(f, args)`만 아는 곳(제네릭
+  코드)에 넘길 수 없습니다. 그것은 "모든 heap에서"를 뜻하기 때문입니다.
 
 ## 콜백, 클로저, trait
 
@@ -372,8 +386,11 @@ fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0;
 만족함을 보여야 합니다. 메서드 명세에는 `requires`(impl이 받아들여야 함), `ensures`(impl이 보장해야 함),
 `allocates`를 쓸 수 있습니다. `fn drop allocates 0;`은 `T`를 drop해도 할당하지 않는다는 뜻이고, Verus가
 인스턴스의 drop glue로 확인하므로 위의 `P`에는 `AllocFreeDrop` impl이 필요 없습니다. 이 블록은
-`requires`(`call_requires`, `call_ensures`, `call_allocates`)로 풀리므로 함수에서만 쓸 수 있습니다. impl,
-struct, trait, `where` 절에서는 아직 쓸 수 없습니다.
+`requires`(`call_requires`, `call_ensures`, `call_allocates`)로 풀립니다. 함수의 타입 매개변수 말고도
+`where` 절(`where T: Clone with { .. }`, 매개변수가 아닌 타입에도), inherent impl 블록(그 안의 모든 exec·proof
+메서드가 받음), struct의 타입 매개변수(같은 `verus!` 블록에 있는 그 struct의 모든 inherent impl 블록이,
+매개변수를 인스턴스화한 타입에 대해 받음)에 쓸 수 있습니다. trait impl에서는 메서드가 `requires`를 가질 수
+없으므로 거부됩니다.
 
 ## 완전한 제자리 함수: `#[verifier::fip]`
 
