@@ -1561,13 +1561,27 @@ fn stm_call(
                         &info.typ,
                         PreLocalDeclKind::Immutable(Immutable(LocalDeclKind::Nondeterministic)),
                     );
+                    let mut after = next_exp.clone();
                     if aware {
                         small_args.push(SpannedTyped::new(span, &info.typ, ExpX::Var(cur.clone())));
                         small_args.push(next_exp.clone());
+                        // A trusted specification (`Vec::push`) describes what its allocator
+                        // calls do to the heap; if it is instantiated with other types through
+                        // which user code (`T::clone`, `K::hash`) may change the heap too, the
+                        // heap after the call is unknown
+                        if !info.trusted_aware_call_exact(&fun, &typs) {
+                            let (_id, unknown) = state.declare_temp_var_stm(
+                                span,
+                                &info.typ,
+                                PreLocalDeclKind::Immutable(Immutable(
+                                    LocalDeclKind::Nondeterministic,
+                                )),
+                            );
+                            after = unknown;
+                        }
                     }
                     let lhs = Dest { dest: var_loc_exp(span, &info.typ, cur), is_init: false };
-                    heap_after =
-                        Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: next_exp }));
+                    heap_after = Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: after }));
                 }
             }
             None if aware => {

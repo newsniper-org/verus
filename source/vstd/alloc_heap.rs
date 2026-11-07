@@ -646,6 +646,27 @@ pub broadcast axiom fn axiom_ref_grow_cost_in<A: ?Sized>(
             == allocator_grow_cost_in::<A>(h, *a, ptr, old_layout, new_layout),
 ;
 
+/// `h2` is `h` after at most one `allocate` (or `allocate_zeroed`), `grow` (or `grow_zeroed`)
+/// call of `a`, with arguments that a specification does not name (the containers whose
+/// specifications charge `allocator_max_cost`: `VecDeque`, `HashMap`, ...)
+pub open spec fn allocator_some_call_heap_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    h2: AllocHeap,
+) -> bool {
+    h2 == h || (exists|
+        l: core::alloc::Layout,
+        r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+    |
+        h2 == #[trigger] allocator_allocate_heap_in::<A>(h, a, l, r)) || (exists|
+        p: core::ptr::NonNull<u8>,
+        o: core::alloc::Layout,
+        n: core::alloc::Layout,
+        r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+    |
+        h2 == #[trigger] allocator_grow_heap_in::<A>(h, a, p, o, n, r))
+}
+
 pub broadcast group group_allocator_in_axioms {
     axiom_allocator_allocate_cost_in,
     axiom_allocator_grow_cost_in,

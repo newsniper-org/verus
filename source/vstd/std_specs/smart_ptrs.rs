@@ -83,6 +83,7 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>)
             Ok(t) => t == *v,
             Err(e) => e == v,
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -92,6 +93,7 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>)
 >)
     ensures
         result matches Some(t) ==> t == *v,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;

@@ -101,6 +101,7 @@ pub broadcast proof fn axiom_spec_len<T, A: Allocator>(v: &Vec<T, A>)
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::len ](vec: &Vec<T, A>) -> (len: usize)
     ensures
         len == spec_vec_len(vec),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     no_unwind
     allocates deallocates_when(0int, false)
 ;
@@ -256,6 +257,30 @@ pub open spec fn vec_reserve_heap_in<T, A: Allocator>(
     }
 }
 
+/// `h2` is the allocator heap after making room in `v` (in heap `h`) for `additional` more
+/// elements, for some result of the allocator call
+pub open spec fn vec_reserve_heap<T, A: Allocator>(
+    h: crate::alloc_heap::AllocHeap,
+    h2: crate::alloc_heap::AllocHeap,
+    v: &Vec<T, A>,
+    additional: int,
+) -> bool {
+    exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
+        h2 == #[trigger] vec_reserve_heap_in(h, v, additional, r)
+}
+
+/// `h2` is the allocator heap after growing `v` (in heap `h`) to capacity `new_cap`, for some
+/// result of the allocator call
+pub open spec fn vec_grow_heap<T, A: Allocator>(
+    h: crate::alloc_heap::AllocHeap,
+    h2: crate::alloc_heap::AllocHeap,
+    v: &Vec<T, A>,
+    new_cap: int,
+) -> bool {
+    exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
+        h2 == #[trigger] vec_grow_heap_in(h, v, new_cap, r)
+}
+
 /// The allocations of making room in `v` for `additional` more elements (`reserve`)
 pub open spec fn vec_reserve_cost<T, A: Allocator>(v: &Vec<T, A>, additional: int) -> int {
     if spec_vec_capacity(v) - v@.len() >= additional {
@@ -288,6 +313,7 @@ pub open spec fn vec_reserved<T, A: Allocator>(old_v: &Vec<T, A>, new_v: &Vec<T,
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::capacity ](vec: &Vec<T, A>) -> (capacity: usize)
     ensures
         capacity == spec_vec_capacity(vec),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     no_unwind
     allocates deallocates_when(0int, false)
 ;
@@ -312,6 +338,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::new_in ](alloc: A) -> (v
         v@ == Seq::<T>::empty(),
         spec_vec_allocator(&v) == alloc,
         crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, false)
 ;
 
@@ -327,11 +354,14 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::with_capacity_in ](capac
         v@ == Seq::<T>::empty(),
         spec_vec_capacity(&v) >= capacity,
         spec_vec_allocator(&v) == alloc,
+        capacity == 0 || crate::layout::size_of::<T>() == 0 ==> crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        capacity > 0 && crate::layout::size_of::<T>() > 0 ==> exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
+            crate::alloc_heap::allocator_heap() == #[trigger] crate::alloc_heap::allocator_allocate_heap_in::<A>(crate::alloc_heap::old_allocator_heap(), &alloc, spec_array_layout::<T>(capacity as nat), r),
     // `RawVecInner::try_allocate_in`: one `allocate` of the array layout, unless it is empty
     allocates deallocates_when(if capacity == 0 || crate::layout::size_of::<T>() == 0 {
         0int
     } else {
-        allocator_allocate_cost::<A>(&alloc, spec_array_layout::<T>(capacity as nat))
+        crate::alloc_heap::allocator_allocate_cost_in::<A>(crate::alloc_heap::old_allocator_heap(), &alloc, spec_array_layout::<T>(capacity as nat))
     }, false)
 ;
 
@@ -346,13 +376,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::reserve ](
         spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         vec_reserved(old(vec), final(vec), additional as int),
-        exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
-            crate::alloc_heap::allocator_heap() == #[trigger] vec_reserve_heap_in(
-                crate::alloc_heap::old_allocator_heap(),
-                old(vec),
-                additional as int,
-                r,
-            ),
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), additional as int),
     allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), additional as int), vec_regrows(old(vec), additional as int))
 ;
 
@@ -367,7 +391,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve ](
         spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         result is Ok ==> vec_reserved(old(vec), final(vec), additional as int),
-    allocates deallocates_when(vec_reserve_cost(old(vec), additional as int), vec_regrows(old(vec), additional as int))
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), additional as int),
+    allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), additional as int), vec_regrows(old(vec), additional as int))
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
@@ -384,10 +409,12 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
         result is Ok && crate::layout::size_of::<T>() > 0 && spec_vec_capacity(old(vec))
             - old(vec)@.len() < additional ==> spec_vec_capacity(final(vec)) == old(vec)@.len()
             + additional,
+        spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional ==> crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vec_capacity(old(vec)) - old(vec)@.len() < additional ==> vec_grow_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), old(vec)@.len() + additional),
     allocates deallocates_when(if spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional {
         0int
     } else {
-        vec_grow_cost(old(vec), old(vec)@.len() + additional)
+        vec_grow_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), old(vec)@.len() + additional)
     }, vec_regrows(old(vec), additional as int))
 ;
 
@@ -398,13 +425,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::push ](vec: &mut Vec<T, 
         old(vec)@.len() < spec_vec_capacity(old(vec))
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         vec_reserved(old(vec), final(vec), 1),
-        exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
-            crate::alloc_heap::allocator_heap() == #[trigger] vec_reserve_heap_in(
-                crate::alloc_heap::old_allocator_heap(),
-                old(vec),
-                1,
-                r,
-            ),
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), 1),
     // `RawVec::grow_one`, i.e. `grow_amortized(len, 1)` with `len == capacity`
     allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), 1), vec_regrows(old(vec), 1))
 ;
@@ -417,6 +438,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::pop ](vec: &mut Vec<T, A
             && final(vec)@ == old(vec)@[..old(vec)@.len() - 1],
         old(vec)@.len() == 0 ==> value == None::<T> && final(vec)@ == old(vec)@,
         spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, false)
 ;
 
@@ -432,8 +454,9 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::append ](
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         vec_reserved(old(vec), final(vec), old(other)@.len() as int),
         spec_vec_allocator(final(other)) == spec_vec_allocator(old(other)),
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), old(other)@.len() as int),
     // `reserve(other.len())`
-    allocates deallocates_when(vec_reserve_cost(old(vec), old(other)@.len() as int), vec_regrows(old(vec), old(other)@.len() as int))
+    allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), old(other)@.len() as int), vec_regrows(old(vec), old(other)@.len() as int))
 ;
 
 pub assume_specification<T: core::clone::Clone, A: Allocator>[ Vec::<T, A>::extend_from_slice ](
@@ -450,8 +473,9 @@ pub assume_specification<T: core::clone::Clone, A: Allocator>[ Vec::<T, A>::exte
             } else {
                 cloned::<T>(other@[i - old(vec)@.len()], final(vec)@[i])
             },
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), other@.len() as int),
     // `reserve(other.len())` (at most one growth), then one `T::clone` per element
-    allocates vec_reserve_cost(old(vec), other@.len() as int) + seq_clone_allocates(other@, other@.len())
+    allocates vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), other@.len() as int) + seq_clone_allocates(other@, other@.len())
 ;
 
 impl<T: Sized, I: SliceIndex<[T]>, A: Allocator> super::core::IndexSpecImpl<I> for Vec<T, A> {
@@ -481,6 +505,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::swap_remove ](
         element == old(vec)[i as int],
         final(vec)@ == old(vec)@.update(i as int, old(vec)@.last()).drop_last(),
         spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, false)
 ;
 
@@ -497,8 +522,9 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::insert ](
         old(vec)@.len() < spec_vec_capacity(old(vec))
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         vec_reserved(old(vec), final(vec), 1),
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), 1),
     // `RawVec::grow_one`, i.e. `grow_amortized(len, 1)` with `len == capacity`
-    allocates deallocates_when(vec_reserve_cost(old(vec), 1), vec_regrows(old(vec), 1))
+    allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), 1), vec_regrows(old(vec), 1))
 ;
 
 pub assume_specification<T, A: Allocator> [ <Vec<T, A>>::is_empty ](
@@ -521,6 +547,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::remove ](
         element == old(vec)[i as int],
         final(vec)@ == old(vec)@.remove(i as int),
         spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, false)
 ;
 
@@ -529,12 +556,14 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::clear ](vec: &mut Vec<T,
         spec_vec_allocator(final(vec)) == spec_vec_allocator(old(vec)),
         final(vec).view() == Seq::<T>::empty(),
         spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, old(vec)@.len() > 0 && crate::alloc_check::drop_may_deallocate::<T>())
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_slice ](vec: &Vec<T, A>) -> (slice: &[T])
     ensures
         slice@ == vec@,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates deallocates_when(0int, false)
@@ -556,6 +585,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_mut_slice ](vec: &mut
         spec_vec_allocator(final(vec)) == spec_vec_allocator(old(vec)),
         slice@ == old(vec)@,
         final(slice)@ == final(vec)@,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates deallocates_when(0int, false)
@@ -628,6 +658,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::truncate ](vec: &mut Vec
         len <= old(vec).len() ==> final(vec)@ == old(vec)@[..len],
         len > old(vec).len() ==> final(vec)@ == old(vec)@,
         spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates deallocates_when(0int, len < old(vec)@.len() && crate::alloc_check::drop_may_deallocate::<T>())
 ;
 
@@ -644,11 +675,13 @@ pub assume_specification<T: Clone, A: Allocator>[ Vec::<T, A>::resize ](
             &&& final(vec)@[..old(vec).len()] == old(vec)@
             &&& forall|i| #![all_triggers] old(vec).len() <= i < len ==> cloned::<T>(value, final(vec)@[i])
         },
+        len <= old(vec).len() ==> crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        len > old(vec).len() ==> vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), len - old(vec)@.len()),
     // `extend_with(len - old_len, value)`: at most one growth, at most one `T::clone` per new element
     allocates if len <= old(vec)@.len() {
         0int
     } else {
-        vec_reserve_cost(old(vec), len - old(vec)@.len())
+        vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), len - old(vec)@.len())
             + (len - old(vec)@.len()) * call_allocates(T::clone, (&value,))
     }
 ;

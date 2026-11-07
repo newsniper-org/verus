@@ -641,6 +641,7 @@ pub assume_specification<T, F: FnMut(usize) -> T>[ Vec::<T>::from_fn::<F> ](
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::allocator ](v: &Vec<T, A>) -> (r: &A)
     ensures
         *r == super::vec::spec_vec_allocator(v),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates
@@ -654,6 +655,7 @@ pub assume_specification<T: ?Sized, A: Allocator>[ Box::<T, A>::allocator ](b: &
     &A)
     ensures
         *r == spec_box_allocator(b),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates
@@ -666,8 +668,20 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::new_in ](x: T, alloc: A)
     ensures
         *b == x,
         spec_box_allocator(&b) == alloc,
+        exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
+            crate::alloc_heap::allocator_heap()
+                == #[trigger] crate::alloc_heap::allocator_allocate_heap_in::<A>(
+                crate::alloc_heap::old_allocator_heap(),
+                &alloc,
+                spec_array_layout::<T>(1),
+                r,
+            ),
     allocates
-        allocator_allocate_cost::<A>(&alloc, spec_array_layout::<T>(1)),
+        crate::alloc_heap::allocator_allocate_cost_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &alloc,
+            spec_array_layout::<T>(1),
+        ),
 ;
 
 /// `Box::take` moves the value out and keeps the allocation (with uninitialized contents)
@@ -678,6 +692,7 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::take ](boxed: Box<T, A>)
     ensures
         r.0 == *boxed,
         spec_box_allocator(&r.1) == spec_box_allocator(&boxed),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates

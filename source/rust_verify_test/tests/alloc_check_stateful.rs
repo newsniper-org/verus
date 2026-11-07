@@ -656,3 +656,55 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_containers ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        use vstd::std_specs::vec::*;
+        use vstd::std_specs::vecdeque::*;
+        use std::collections::VecDeque;
+
+        // `Box::new_in` allocates once with the allocator
+        fn boxed<'a>(p: &'a Pool) -> (b: Box<u64, &'a Pool>)
+            requires allocator_state(p).0 >= 1,
+            ensures allocator_state(p).0 == old_allocator_state(p).0 - 1,
+            allocates 0
+        {
+            Box::new_in(5u64, p)
+        }
+
+        // a `VecDeque` makes at most one allocator call per push
+        fn deque<'a>(p: &'a Pool)
+            requires allocator_state(p).0 >= 5,
+        {
+            let mut d: VecDeque<u64, &'a Pool> = VecDeque::new_in(p);
+            assert(allocator_state(p).0 >= 5);
+            d.push_back(1);
+            assert(allocator_state(p).0 >= 4);
+            let _ = d.pop_back();
+            assert(allocator_state(p).0 >= 4);
+        }
+
+        // operations that do not allocate keep the state
+        fn reads<'a>(p: &'a Pool, v: &mut Vec<u64, &'a Pool>)
+            requires allocator_state(p).0 >= 1,
+            ensures allocator_state(p) == old_allocator_state(p),
+        {
+            let _ = v.len();
+            let _ = v.pop();
+            v.clear();
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_container_of_allocating_elements ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        // (a vector of pool-allocated vectors: std's `clear` drops them, which Verus does not
+        // follow; its specification cannot describe the pool's state then)
+        fn outer<'a>(p: &'a Pool, v: &mut Vec<Vec<u8, &'a Pool>>)
+            requires allocator_state(p).0 >= 1,
+        {
+            let _ = v.len();
+            assert(allocator_state(p).0 >= 1); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}

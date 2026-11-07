@@ -414,6 +414,14 @@ impl<'a, K, V> super::iter::IteratorSpecImpl for hash_map::Iter<'a, K, V> {
     }
 }
 
+/// The allocator of a `HashMap` (its operations keep it)
+pub uninterp spec fn spec_hashmap_allocator<Key, Value, S, A: Allocator>(
+    m: &HashMap<Key, Value, S, A>,
+) -> A;
+
+/// The allocator of a `HashSet` (its operations keep it)
+pub uninterp spec fn spec_hashset_allocator<Key, S, A: Allocator>(m: &HashSet<Key, S, A>) -> A;
+
 pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::iter ](
     m: &'a HashMap<Key, Value, S, A>,
 ) -> (iter: hash_map::Iter<'a, Key, Value>)
@@ -435,6 +443,7 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& into_iter(iter) == IteratorSpec::remaining(&iter).unref()
             &&& IteratorSpec::decrease(&iter) is Some
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -613,6 +622,7 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
 ) -> (len: usize)
     ensures
         len == spec_hash_map_len(m),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -622,6 +632,7 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
 ) -> (cap: usize)
     ensures
         cap >= spec_hash_map_len(m),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -631,6 +642,7 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
 ) -> (res: bool)
     ensures
         res == m@.is_empty(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -695,6 +707,12 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
 >::reserve ](m: &mut HashMap<Key, Value, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_hashmap_allocator(old(m)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_hashmap_allocator(final(m)) == spec_hashmap_allocator(old(m)),
     allocates
         allocator_max_cost::<A>() + hash_grow_cost(&*m),
 ;
@@ -713,6 +731,12 @@ pub assume_specification<Key: Eq + Hash, Value, S: BuildHasher, A: Allocator>[ H
                 None => !old(m)@.contains_key(k),
             }
         },
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_hashmap_allocator(old(m)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_hashmap_allocator(final(m)) == spec_hashmap_allocator(old(m)),
     allocates
         allocator_max_cost::<A>() + hash_ops_cost(&*m, &k),
 ;
@@ -767,6 +791,7 @@ pub assume_specification<
             m@,
             k,
         ),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m, k),
 ;
@@ -826,6 +851,7 @@ pub assume_specification<
             Some(v) => maps_borrowed_key_to_value(m@, k, *v),
             None => !contains_borrowed_key(m@, k),
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(m, k),
 ;
@@ -892,6 +918,8 @@ pub assume_specification<
                 None => !contains_borrowed_key(old(m)@, k),
             }
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_hashmap_allocator(final(m)) == spec_hashmap_allocator(old(m)),
     allocates
         hash_lookup_cost::<Q, HashMap<Key, Value, S, A>>(&*m, k),
 ;
@@ -901,6 +929,8 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
 )
     ensures
         final(m)@ == Map::<Key, Value>::empty(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_hashmap_allocator(final(m)) == spec_hashmap_allocator(old(m)),
     allocates
         0,
 ;
@@ -916,6 +946,7 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& into_iter_keys(keys) == IteratorSpec::remaining(&keys).unref()
             &&& IteratorSpec::decrease(&keys) is Some
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -930,6 +961,7 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& into_iter_values(values) == IteratorSpec::remaining(&values).unref()
             &&& IteratorSpec::decrease(&values) is Some
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1020,6 +1052,7 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::len ](
 ) -> (len: usize)
     ensures
         len == spec_hash_set_len(m),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1029,6 +1062,7 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::is_empty ]
 ) -> (res: bool)
     ensures
         res == m@.is_empty(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1087,6 +1121,12 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
 >::reserve ](m: &mut HashSet<Key, S, A>, additional: usize)
     ensures
         final(m)@ == old(m)@,
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_hashset_allocator(old(m)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_hashset_allocator(final(m)) == spec_hashset_allocator(old(m)),
     allocates
         allocator_max_cost::<A>() + hash_grow_cost(&*m),
 ;
@@ -1101,6 +1141,12 @@ pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet:
             &&& final(m)@ == old(m)@.insert(k)
             &&& result == !old(m)@.contains(k)
         },
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_hashset_allocator(old(m)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_hashset_allocator(final(m)) == spec_hashset_allocator(old(m)),
     allocates
         allocator_max_cost::<A>() + hash_ops_cost(&*m, &k),
 ;
@@ -1144,6 +1190,7 @@ pub assume_specification<
     ensures
         obeys_key_model::<Key>() && builds_valid_hashers::<S>() ==> result
             == set_contains_borrowed_key(m@, k),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         hash_lookup_cost::<Q, HashSet<Key, S, A>>(m, k),
 ;
@@ -1194,6 +1241,7 @@ pub assume_specification<
             Some(v) => sets_borrowed_key_to_key(m@, k, v),
             None => !set_contains_borrowed_key(m@, k),
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         hash_lookup_cost::<Q, HashSet<Key, S, A>>(m, k),
 ;
@@ -1246,6 +1294,8 @@ pub assume_specification<
             &&& sets_differ_by_borrowed_key(old(m)@, final(m)@, k)
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_hashset_allocator(final(m)) == spec_hashset_allocator(old(m)),
     allocates
         hash_lookup_cost::<Q, HashSet<Key, S, A>>(&*m, k),
 ;
@@ -1255,6 +1305,8 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
 )
     ensures
         final(m)@ == Set::<Key>::empty(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_hashset_allocator(final(m)) == spec_hashset_allocator(old(m)),
     allocates
         0,
 ;
@@ -1270,6 +1322,7 @@ pub assume_specification<'a, Key, S, A: Allocator>[ HashSet::<Key, S, A>::iter ]
             &&& into_iter_hash_keys(hash_keys) == IteratorSpec::remaining(&hash_keys).unref()
             &&& IteratorSpec::decrease(&hash_keys) is Some
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1414,6 +1467,11 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
             Some(value) => old(m)@.insert(key, value),
             None => old(m)@.remove(key),
         })),
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_hashmap_allocator(old(m)),
+            crate::alloc_heap::allocator_heap(),
+        ),
     allocates
         allocator_max_cost::<A>() + hash_ops_cost(&*m, &key),
 ;
@@ -1423,6 +1481,8 @@ pub assume_specification<'a, Key: Hash + Eq, Value, S: BuildHasher, A: Allocator
 pub assume_specification<'a, 'b, K, V, A: Allocator>[ Entry::key ](
     entry: &'b Entry::<'a, K, V, A>,
 ) -> (key: &'b K)
+    ensures
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     returns
         &entry.spec_key(),
     allocates
@@ -1439,6 +1499,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
             None => default,
         }),
         entry.final_value() == Some(*final(value)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1451,6 +1512,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1477,6 +1539,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove_entry ](
 ) -> (kv: (K, V))
     ensures
         entry.final_value() == None,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     returns
         (*entry.key(), entry.value()),
     allocates
@@ -1488,6 +1551,7 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get ](
 ) -> (value: &'b V)
     ensures
         *value == entry.value(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1500,6 +1564,7 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get_mut ](
         final(entry).key() == old(entry).key(),
         final(entry).value() == *final(value),
         final(entry).final_value() == old(entry).final_value(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1510,6 +1575,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::into_mut ](
     ensures
         *value == entry.value(),
         entry.final_value() == Some(*final(value)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1523,6 +1589,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::insert ](
         final(entry).key() == old(entry).key(),
         final(entry).value() == value,
         final(entry).final_value() == old(entry).final_value(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1533,6 +1600,7 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove ](
     ensures
         value == entry.value(),
         entry.final_value() == None,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1560,6 +1628,7 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::into_key 
     ensures
         key == entry.key(),
         entry.final_value() == None,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1571,6 +1640,7 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
     ensures
         *value_ref == value,
         entry.final_value() == Some(*final(value_ref)),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -1583,6 +1653,7 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
         occ_entry.key() == entry.key(),
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;

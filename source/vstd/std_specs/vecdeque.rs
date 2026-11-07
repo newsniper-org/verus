@@ -68,6 +68,53 @@ impl<T, A: Allocator> super::core::IndexSpecImpl<usize> for VecDeque<T, A> {
     }
 }
 
+/// The allocator of a `VecDeque` (its operations keep it)
+pub uninterp spec fn spec_vecdeque_allocator<T, A: Allocator>(v: &VecDeque<T, A>) -> A;
+
+pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::new_in ](alloc: A) -> (v: VecDeque<
+    T,
+    A,
+>)
+    ensures
+        v@ == Seq::<T>::empty(),
+        spec_vecdeque_allocator(&v) == alloc,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+    allocates
+        0,
+;
+
+/// `RawVec::with_capacity_in`: one `allocate` of the array layout, unless it is empty
+pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::with_capacity_in ](
+    capacity: usize,
+    alloc: A,
+) -> (v: VecDeque<T, A>)
+    ensures
+        v@ == Seq::<T>::empty(),
+        spec_vecdeque_allocator(&v) == alloc,
+        capacity == 0 || crate::layout::size_of::<T>() == 0 ==> crate::alloc_heap::allocator_heap()
+            == crate::alloc_heap::old_allocator_heap(),
+        capacity > 0 && crate::layout::size_of::<T>() > 0 ==> exists|
+            r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+        |
+            crate::alloc_heap::allocator_heap()
+                == #[trigger] crate::alloc_heap::allocator_allocate_heap_in::<A>(
+                crate::alloc_heap::old_allocator_heap(),
+                &alloc,
+                super::rust_1_100::spec_array_layout::<T>(capacity as nat),
+                r,
+            ),
+    allocates
+        if capacity == 0 || crate::layout::size_of::<T>() == 0 {
+            0int
+        } else {
+            crate::alloc_heap::allocator_allocate_cost_in::<A>(
+                crate::alloc_heap::old_allocator_heap(),
+                &alloc,
+                super::rust_1_100::spec_array_layout::<T>(capacity as nat),
+            )
+        },
+;
+
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::index ](
     v: &VecDeque<T, A>,
     i: usize,
@@ -94,6 +141,7 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::len ](v: &VecDeque<
     usize)
     ensures
         len == spec_vec_dequeue_len(v),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -127,6 +175,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::reserve ](
 )
     ensures
         final(v)@ == old(v)@,
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         allocator_max_cost::<A>(),
 ;
@@ -137,6 +191,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_back ](
 )
     ensures
         final(v)@ == old(v)@.push(value),
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         allocator_max_cost::<A>(),
 ;
@@ -147,6 +207,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::push_front ](
 )
     ensures
         final(v)@ == seq![value] + old(v)@,
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         allocator_max_cost::<A>(),
 ;
@@ -166,6 +232,8 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_back ](
                 &&& final(v)@ == old(v)@
             },
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         0,
 ;
@@ -185,6 +253,8 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::pop_front ](
                 &&& final(v)@ == old(v)@
             },
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         0,
 ;
@@ -196,6 +266,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::append ](
     ensures
         final(v)@ == old(v)@ + old(other)@,
         final(other)@ == Seq::<T>::empty(),
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         allocator_max_cost::<A>(),
 ;
@@ -209,6 +285,12 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::insert ](
         i <= old(v).len(),
     ensures
         final(v)@ == old(v)@.insert(i as int, element),
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         allocator_max_cost::<A>(),
 ;
@@ -229,6 +311,8 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::remove ](
                 &&& final(v)@ == old(v)@
             },
         },
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         0,
 ;
@@ -236,6 +320,8 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::remove ](
 pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::clear ](v: &mut VecDeque<T, A>)
     ensures
         final(v).view() == Seq::<T>::empty(),
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         0,
 ;
@@ -286,6 +372,8 @@ pub assume_specification<T, A: Allocator>[ VecDeque::<T, A>::truncate ](
     ensures
         len <= old(v).len() ==> final(v)@ == old(v)@[..len],
         len > old(v).len() ==> final(v)@ == old(v)@,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(old(v)),
     allocates
         0,
 ;
@@ -304,6 +392,14 @@ pub assume_specification<T: Clone, A: Allocator>[ VecDeque::<T, A>::resize ](
                 #![all_triggers]
                 old(v).len() <= i < len ==> cloned::<T>(value, final(v)@[i])
         },
+        crate::alloc_heap::allocator_some_call_heap_in::<A>(
+            crate::alloc_heap::old_allocator_heap(),
+            &spec_vecdeque_allocator(old(v)),
+            crate::alloc_heap::allocator_heap(),
+        ),
+        spec_vecdeque_allocator(final(v)) == spec_vecdeque_allocator(
+            old(v),
+        ),
 // `extend` of the new elements: at most one growth, at most one `T::clone` per new element
 
     allocates
@@ -390,6 +486,7 @@ pub assume_specification<'a, T, A: Allocator>[ VecDeque::<T, A>::iter ](
         IteratorSpec::remaining(&iter) == v@.as_ref(),
         into_iter_elts(iter) == IteratorSpec::remaining(&iter),
         IteratorSpec::decrease(&iter) is Some,
+        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;

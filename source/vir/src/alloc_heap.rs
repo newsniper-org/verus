@@ -131,6 +131,39 @@ pub(crate) fn stateful_method(fun: &Fun) -> Option<StatefulMethod> {
 }
 
 impl HeapInfo {
+    /// For a call of a heap-aware `fun` with type arguments `typs`: is the heap its `ensures`
+    /// describe the whole effect? Always for a verified function; for a trusted specification
+    /// (std's), only if the type arguments other than its allocators cannot reach user code that
+    /// changes the heap
+    pub(crate) fn trusted_aware_call_exact(&self, fun: &Function, typs: &crate::ast::Typs) -> bool {
+        // (only std's functions, specified by `assume_specification`, can run user code that
+        // their specification does not describe)
+        if fun.x.proxy.is_none() {
+            return true;
+        }
+        let mut allocator_params: HashSet<crate::ast::Ident> = HashSet::new();
+        for b in fun.x.typ_bounds.iter() {
+            if let crate::ast::GenericBoundX::Trait(crate::ast::TraitId::Path(p), args) = &**b {
+                if crate::ast_util::path_as_friendly_rust_name(p) == "core::alloc::Allocator" {
+                    if let Some(t) = args.first() {
+                        if let TypX::TypParam(x) = &**t {
+                            allocator_params.insert(x.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let others: Vec<Typ> = fun
+            .x
+            .typ_params
+            .iter()
+            .zip(typs.iter())
+            .filter(|(x, _)| !allocator_params.contains(*x))
+            .map(|(_, t)| t.clone())
+            .collect();
+        !typs_effect(&std::sync::Arc::new(others)).may_touch()
+    }
+
     /// The `Self` type of a call to an `Allocator` method, if it is an allocator with a state
     pub(crate) fn stateful_self(&self, typs: &crate::ast::Typs) -> Option<Typ> {
         let mut t = typs.first()?;
