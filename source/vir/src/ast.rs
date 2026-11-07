@@ -1009,6 +1009,10 @@ pub enum BuiltinSpecFun {
     Allocated,
     /// `call_allocates(f, args)`: the `allocates` bound of a function value at the given args
     ClosureAlloc,
+    /// `closure_req(f, args)` at a given allocator heap (alloc_heap.rs; not user syntax)
+    ClosureReqHeap,
+    /// `closure_ens(f, args, r)` at given allocator heaps before and after the call
+    ClosureEnsHeap,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]

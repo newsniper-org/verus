@@ -877,7 +877,7 @@ pub fn func_def_to_sst(
                 &crate::alloc_heap::heap_cur(),
                 &info.typ,
                 PreLocalDeclKind::StmtLet,
-                false,
+                true,
             );
             let pre_exp = SpannedTyped::new(&function.span, &info.typ, crate::sst::ExpX::Var(pre));
             heap_init = Some(crate::ast_to_sst::init_var(&function.span, &cur, &pre_exp));

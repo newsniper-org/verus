@@ -1000,6 +1000,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
             let skip_first_decoration = match func {
                 InternalFun::ClosureReq
                 | InternalFun::ClosureEns
+                | InternalFun::ClosureReqHeap
+                | InternalFun::ClosureEnsHeap
                 | InternalFun::ClosureOpensInvariants
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc => true,
@@ -1017,6 +1019,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 match func {
                     InternalFun::ClosureReq => str_ident(crate::def::CLOSURE_REQ),
                     InternalFun::ClosureEns => str_ident(crate::def::CLOSURE_ENS),
+                    InternalFun::ClosureReqHeap => str_ident(crate::def::CLOSURE_REQ_HEAP),
+                    InternalFun::ClosureEnsHeap => str_ident(crate::def::CLOSURE_ENS_HEAP),
                     InternalFun::ClosureOpensInvariants => {
                         str_ident(crate::def::CLOSURE_OPENS_INVARIANTS)
                     }

@@ -51,6 +51,9 @@ pub type UniqueIdent = VarIdent;
 pub enum InternalFun {
     ClosureReq,
     ClosureEns,
+    /// (alloc_heap.rs) closure_req/closure_ens at given allocator heaps
+    ClosureReqHeap,
+    ClosureEnsHeap,
     ClosureOpensInvariants,
     DefaultEns,
     CheckDecreaseHeight,

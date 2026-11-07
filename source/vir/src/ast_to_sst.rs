@@ -2253,6 +2253,8 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::Allocated => unreachable!(),
                 BuiltinSpecFun::ClosureReq => InternalFun::ClosureReq,
                 BuiltinSpecFun::ClosureEns => InternalFun::ClosureEns,
+                BuiltinSpecFun::ClosureReqHeap => InternalFun::ClosureReqHeap,
+                BuiltinSpecFun::ClosureEnsHeap => InternalFun::ClosureEnsHeap,
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,
                 BuiltinSpecFun::DefaultEns => InternalFun::DefaultEns,
                 BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,
@@ -5306,13 +5308,23 @@ fn exec_closure_body_stms_inner(
     typ_inv_vars: &mut Vec<(UniqueIdent, Typ)>,
 ) -> Result<Vec<Stm>, VirErr> {
     state.push_scope();
+    // The closure's own heap: unknown when it is called (alloc%closure_heap_pre), then current
+    let mut closure_heap_init: Option<Stm> = None;
     if let (Some(info), Some(_)) = (&ctx.global.alloc_heap, &state.alloc_heap) {
+        let pre = state.declare_var_stm(
+            &crate::alloc_heap::closure_heap_pre(),
+            &info.typ,
+            PreLocalDeclKind::Immutable(Immutable(LocalDeclKind::Nondeterministic)),
+            true,
+        );
         let id = state.declare_var_stm(
             &crate::alloc_heap::heap_cur(),
             &info.typ,
             PreLocalDeclKind::StmtLet,
             true,
         );
+        let pre_exp = SpannedTyped::new(&body.span, &info.typ, ExpX::Var(pre));
+        closure_heap_init = Some(init_var(&body.span, &id, &pre_exp));
         state.alloc_heap = Some(id);
     }
 
@@ -5328,6 +5340,9 @@ fn exec_closure_body_stms_inner(
     // Assert all the requires
 
     let mut stms = Vec::new();
+    if let Some(init) = closure_heap_init {
+        stms.push(init);
+    }
     for req in requires.iter() {
         let (check_stms, exp) = expr_to_pure_exp_check(ctx, state, req)?;
         stms.extend(check_stms);

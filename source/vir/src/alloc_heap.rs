@@ -36,8 +36,22 @@ pub(crate) fn heap_pre() -> VarIdent {
     crate::ast_util::air_unique_var(HEAP_PRE)
 }
 
+/// The heap when a closure was called (in the closure's own scope)
+pub(crate) fn closure_heap_pre() -> VarIdent {
+    crate::ast_util::air_unique_var("alloc%closure_heap_pre")
+}
+
 pub(crate) fn heap_post() -> VarIdent {
     crate::ast_util::air_unique_var(HEAP_POST)
+}
+
+/// The type of the heap arguments of `closure_req`/`closure_ens` (the heap before a call of a
+/// closure, and after it): the heap type, or `int` when there is no vstd
+pub(crate) fn closure_heap_typ(info: &Option<std::sync::Arc<HeapInfo>>) -> Typ {
+    match info {
+        Some(i) => i.typ.clone(),
+        None => std::sync::Arc::new(TypX::Int(crate::ast::IntRange::Int)),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -192,7 +206,7 @@ impl HeapInfo {
     }
 }
 
-fn mentions_heap(expr: &Expr) -> bool {
+pub(crate) fn mentions_heap(expr: &Expr) -> bool {
     let mut found = false;
     let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(expr, &mut |_scope, e: &Expr| {
         if let ExprX::Call { target: CallTarget::Fun(_, fun, ..), .. } = &e.x {
@@ -370,6 +384,9 @@ pub(crate) fn heap_info(krate: &Krate) -> Option<HeapInfo> {
             aware.insert(f.x.name.clone());
         }
     }
+    // A call of a closure value (`f(x)`, through vstd's exec_nonstatic_call) takes the heap: the
+    // closure's specification may mention it
+    aware.insert(crate::def::nonstatic_call_fun(false));
     // A trait method impl takes the hidden parameters of its trait method (it inherits its
     // specification)
     for f in krate.functions.iter() {
@@ -467,6 +484,49 @@ fn rewrite(info: &HeapInfo, expr: &Expr, role: Role) -> Result<Expr, VirErr> {
     })
 }
 
+/// Replace the heap specification functions in `expr` by the given heaps: plain forms by `post`,
+/// `old_` forms by `pre` (a closure's specification: see ast_simplify)
+pub(crate) fn rewrite_with(
+    info: &HeapInfo,
+    expr: &Expr,
+    pre: &Expr,
+    post: &Expr,
+) -> Result<Expr, VirErr> {
+    crate::ast_visitor::map_expr_visitor(expr, &|e: &Expr| {
+        let ExprX::Call { target: CallTarget::Fun(kind, fun, typs, impl_paths, attrs), args, .. } =
+            &e.x
+        else {
+            return Ok(e.clone());
+        };
+        let Some(sp) = special(fun) else {
+            return Ok(e.clone());
+        };
+        let heap = if matches!(sp, Special::OldHeap | Special::OldState) { pre } else { post };
+        let heap = crate::ast::SpannedTyped::new(&e.span, &info.typ, heap.x.clone());
+        match sp {
+            Special::Heap | Special::OldHeap => Ok(heap),
+            Special::State | Special::OldState | Special::Tracked => {
+                let name =
+                    if sp == Special::Tracked { info.tracked_in.clone() } else { info.state_in.clone() };
+                let mut new_args = vec![heap];
+                new_args.extend(args.iter().cloned());
+                Ok(e.new_x(ExprX::Call {
+                    target: CallTarget::Fun(
+                        kind.clone(),
+                        name,
+                        typs.clone(),
+                        impl_paths.clone(),
+                        attrs.clone(),
+                    ),
+                    args: Arc::new(new_args),
+                    post_args: None,
+                    body: None,
+                }))
+            }
+        }
+    })
+}
+
 fn rewrite_all(
     info: &HeapInfo,
     es: &crate::ast::Exprs,
@@ -498,6 +558,60 @@ pub(crate) fn prepare_function(info: &HeapInfo, function: &Function) -> Result<F
         (Role::None, Role::None, Role::None, Role::None)
     };
     let mut fx = f.clone();
+    if f.name == crate::def::nonstatic_call_fun(false) {
+        // `call_requires(f, args)` at the heap before the call, `call_ensures(f, args, r)` at the
+        // heaps before and after it
+        let pre = crate::ast::SpannedTyped::new(&function.span, &info.typ, ExprX::Var(heap_pre()));
+        let post =
+            crate::ast::SpannedTyped::new(&function.span, &info.typ, ExprX::Var(heap_post()));
+        let heap_args = |e: &Expr| -> Result<Expr, VirErr> {
+            crate::ast_visitor::map_expr_visitor(e, &|x: &Expr| match &x.x {
+                ExprX::Call {
+                    target: CallTarget::BuiltinSpecFun(bsf, typs, impl_paths),
+                    args,
+                    post_args,
+                    body,
+                } if matches!(
+                    bsf,
+                    crate::ast::BuiltinSpecFun::ClosureReq | crate::ast::BuiltinSpecFun::ClosureEns
+                ) =>
+                {
+                    let (bsf2, extra) = match bsf {
+                        crate::ast::BuiltinSpecFun::ClosureReq => {
+                            (crate::ast::BuiltinSpecFun::ClosureReqHeap, vec![pre.clone()])
+                        }
+                        _ => (
+                            crate::ast::BuiltinSpecFun::ClosureEnsHeap,
+                            vec![pre.clone(), post.clone()],
+                        ),
+                    };
+                    let mut a = (**args).clone();
+                    a.extend(extra);
+                    Ok(x.new_x(ExprX::Call {
+                        target: CallTarget::BuiltinSpecFun(bsf2, typs.clone(), impl_paths.clone()),
+                        args: Arc::new(a),
+                        post_args: post_args.clone(),
+                        body: body.clone(),
+                    }))
+                }
+                _ => Ok(x.clone()),
+            })
+        };
+        fx.require = Arc::new(f.require.iter().map(heap_args).collect::<Result<Vec<_>, _>>()?);
+        fx.ensure = (
+            Arc::new(f.ensure.0.iter().map(heap_args).collect::<Result<Vec<_>, _>>()?),
+            f.ensure.1.clone(),
+        );
+        let mut params = (*f.params).clone();
+        for name in [heap_pre(), heap_post()] {
+            params.push(crate::def::Spanned::new(
+                function.span.clone(),
+                ParamX { name, typ: info.typ.clone(), mode: Mode::Spec, user_mut: false, unwrapped_info: None },
+            ));
+        }
+        fx.params = Arc::new(params);
+        return Ok(function.new_x(fx));
+    }
     fx.require = rewrite_all(info, &f.require, spec_role)?;
     fx.ensure =
         (rewrite_all(info, &f.ensure.0, post_role)?, rewrite_all(info, &f.ensure.1, post_role)?);
@@ -512,34 +626,56 @@ pub(crate) fn prepare_function(info: &HeapInfo, function: &Function) -> Result<F
         fx.unwind_spec = Some(crate::ast::UnwindSpec::NoUnwindWhen(rewrite(info, e, spec_role)?));
     }
     if let Some(b) = &f.body {
-        // A closure body runs later, with the heap of then: it may read the current heap, but not
-        // the heap when the enclosing function was called, and its own specification cannot
-        // mention the heap yet
-        let mut bad: Option<(crate::messages::Span, &str)> = None;
+        // A closure runs later, with the heap of then: in its body and its own specification,
+        // plain forms mean the heap at that point in the closure (in its `ensures`: when it
+        // returns), `old_` forms the heap when it was called (alloc%closure_heap_pre, declared with
+        // the closure's own `alloc%heap` in ast_to_sst). Its `allocates` cannot mention the heap.
+        let mut bad: Option<crate::messages::Span> = None;
         let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(b, &mut |_s, e: &Expr| {
-            if let ExprX::NonSpecClosure { body, requires, ensures, allocates, .. } = &e.x {
-                if bad.is_none()
-                    && (requires.iter().any(mentions_heap)
-                        || ensures.iter().any(mentions_heap)
-                        || allocates.as_ref().is_some_and(mentions_heap))
-                {
-                    bad = Some((
-                        e.span.clone(),
-                        "a closure's specification cannot mention the allocator heap yet",
-                    ));
-                }
-                if bad.is_none() && mentions_old_heap(body) {
-                    bad = Some((
-                        body.span.clone(),
-                        "a closure body cannot use `old_allocator_state` (or `old_allocator_heap`): it runs later",
-                    ));
+            if let ExprX::NonSpecClosure { allocates, .. } = &e.x {
+                if bad.is_none() && allocates.as_ref().is_some_and(mentions_heap) {
+                    bad = Some(e.span.clone());
                 }
             }
             Ok(())
         });
-        if let Some((span, msg)) = bad {
-            return Err(error(&span, msg));
+        if let Some(span) = bad {
+            return Err(error(&span, "a closure's `allocates` cannot mention the allocator heap yet"));
         }
+        let cur = crate::ast::SpannedTyped::new(&b.span, &info.typ, ExprX::Var(heap_cur()));
+        let cpre =
+            crate::ast::SpannedTyped::new(&b.span, &info.typ, ExprX::Var(closure_heap_pre()));
+        let b = crate::ast_visitor::map_expr_visitor(b, &|e: &Expr| match &e.x {
+            ExprX::NonSpecClosure {
+                params,
+                proof_fn_modes,
+                body,
+                requires,
+                ensures,
+                mask_spec,
+                allocates,
+                ret,
+                external_spec,
+            } => {
+                let rw = |x: &Expr| rewrite_with(info, x, &cpre, &cur);
+                let rws = |xs: &crate::ast::Exprs| -> Result<crate::ast::Exprs, VirErr> {
+                    Ok(Arc::new(xs.iter().map(|x| rw(x)).collect::<Result<Vec<_>, _>>()?))
+                };
+                Ok(e.new_x(ExprX::NonSpecClosure {
+                    params: params.clone(),
+                    proof_fn_modes: proof_fn_modes.clone(),
+                    body: rw(body)?,
+                    requires: rws(requires)?,
+                    ensures: rws(ensures)?,
+                    mask_spec: mask_spec.clone(),
+                    allocates: allocates.clone(),
+                    ret: ret.clone(),
+                    external_spec: external_spec.clone(),
+                }))
+            }
+            _ => Ok(e.clone()),
+        })?;
+        let b = &b;
         fx.body = Some(rewrite(info, b, body_role)?);
     }
     if aware {

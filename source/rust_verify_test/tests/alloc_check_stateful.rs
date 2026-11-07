@@ -527,28 +527,6 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] stateful_no_heap_in_closure ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
-        fn f(p: &Pool, l: Layout) {
-            let c = || {
-                // (the closure runs later: the pool's state is unknown here)
-                assert(allocator_state(p).0 >= 1); // FAILS
-            };
-        }
-
-        fn g(p: &Pool, l: Layout)
-            requires allocator_state(p).0 >= 1,
-        {
-            let c = || { assert(allocator_state(p).0 >= 1); }; // FAILS
-            assert(allocator_state(p).0 >= 1);
-        }
-
-        fn h(p: &Pool) {
-            let c = || { assert(old_allocator_state(p).0 >= 1); };
-        }
-    } => Err(err) => assert_vir_error_msg(err, "a closure body cannot use `old_allocator_state`")
-}
-
-test_verify_one_file_with_options! {
     #[test] stateful_pool_not_sync ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
         fn need_sync<T: Sync>() {}
         fn f() { need_sync::<Pool>(); }
@@ -705,6 +683,75 @@ test_verify_one_file_with_options! {
         {
             let _ = v.len();
             assert(allocator_state(p).0 >= 1); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_specs ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn direct(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 0
+        {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                requires allocator_state(p).0 >= 1,
+                ensures allocator_state(p).0 == old_allocator_state(p).0 - 1,
+                allocates 0
+            {
+                p.allocate(l)
+            };
+            let _ = f(0);
+            assert(allocator_state(p).0 >= 1);
+            let _ = f(1);
+        }
+
+        fn apply<F: Fn(u8) -> Result<NonNull<[u8]>, AllocError>>(f: F)
+            requires forall|x: u8| call_requires(f, (x,)),
+        {
+            let _ = f(0);
+        }
+
+        fn generic_ok(l: Layout) {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>) {
+                Err(AllocError)
+            };
+            apply(f);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_not_generic ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn apply<F: Fn(u8) -> Result<NonNull<[u8]>, AllocError>>(f: F)
+            requires forall|x: u8| call_requires(f, (x,)),
+        {
+            let _ = f(0);
+        }
+
+        fn generic_bad(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+        {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                requires allocator_state(p).0 >= 1,
+            {
+                p.allocate(l)
+            };
+            apply(f); // FAILS: the closure needs the heap
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_body_checked ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn closure_body_wrong(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+        {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                requires allocator_state(p).0 >= 1,
+                ensures allocator_state(p).0 == old_allocator_state(p).0, // FAILS
+            {
+                p.allocate(l)
+            };
         }
     } => Err(err) => assert_one_fails(err)
 }
