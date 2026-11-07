@@ -494,3 +494,46 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "may change the allocator heap")
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_bare_statement ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        #[allow(unused_must_use)]
+        fn one(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 1,
+            allocates 0
+        {
+            p.allocate(l);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_drop_must_preserve ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        pub struct Holder<'a> { p: &'a Pool, l: Layout }
+
+        impl<'a> Drop for Holder<'a> {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+                allocates 1
+            {
+                let _ = self.p.allocate(self.l);
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "may change the allocator heap")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_no_heap_in_closure ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn f(p: &Pool) {
+            let c = || { assert(allocator_tracked(p)); };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "cannot be used inside a closure yet")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_pool_not_sync ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn need_sync<T: Sync>() {}
+        fn f() { need_sync::<Pool>(); }
+    } => Err(err) => assert_rust_error_msg(err, "cannot be shared between threads safely")
+}

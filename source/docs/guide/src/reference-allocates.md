@@ -300,6 +300,10 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   calls code that Verus cannot see the effect of: a trait method on a type parameter, a closure,
   a function of another crate), the states are unknown, and then cost `max_cost()`. A proof
   function that changes the heap must say how in its `ensures`.
+* An `external_body` function or an `assume_specification` is trusted, like its `allocates`
+  bound: it may change the heap only through its type arguments (a type parameter, a closure,
+  a type of the user's crate). So a std call instantiated with a user type (`Vec<MyStruct>::push`)
+  also makes the states unknown.
 * Not yet: `grow` and `shrink` of an allocator with a state are charged their stateless costs
   and leave the states unknown; the containers' specifications do not name the states.
 

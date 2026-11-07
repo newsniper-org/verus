@@ -149,24 +149,60 @@ fn spec_mentions_heap(f: &FunctionX) -> bool {
         || matches!(&f.unwind_spec, Some(crate::ast::UnwindSpec::NoUnwindWhen(e)) if mentions_heap(e))
 }
 
+/// A trait method impl whose own specification mentions the heap needs its trait declaration to
+/// (the hidden parameters come from the declaration)
+pub(crate) fn check_impls_follow_decls(krate: &Krate) -> Result<(), VirErr> {
+    let decl_aware: HashSet<Fun> = krate
+        .functions
+        .iter()
+        .filter(|f| {
+            matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. }) && spec_mentions_heap(&f.x)
+        })
+        .map(|f| f.x.name.clone())
+        .collect();
+    for f in krate.functions.iter() {
+        if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+            if spec_mentions_heap(&f.x)
+                && !decl_aware.contains(method)
+                && krate.functions.iter().any(|g| &g.x.name == method)
+            {
+                return Err(error(
+                    &f.span,
+                    "a trait method impl may mention the allocator heap in its specification only if its trait method declaration does",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `Drop::drop` and `Allocator::deallocate` run where Verus does not see them (a drop), so their
 /// bodies must not change the heap (a lower bound in it would then be stale)
 pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Result<(), VirErr> {
     for f in krate.functions.iter() {
-        if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
-            let m = crate::ast_util::fun_as_friendly_rust_name(method);
-            if (m == "core::ops::Drop::drop" || m == "core::alloc::Allocator::deallocate")
-                && f.x.body.is_some()
-                && (info.touching.contains(&f.x.name) || info.aware.contains(&f.x.name))
+        let what = if f.x.attrs.is_drop {
+            "Drop::drop"
+        } else if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+            if crate::ast_util::fun_as_friendly_rust_name(method)
+                == "core::alloc::Allocator::deallocate"
             {
-                return Err(error(
-                    &f.span,
-                    format!(
-                        "`{}` may change the allocator heap (allocate from, or step, an allocator with a state), but it runs where Verus does not see it (when a value is dropped); an allocator's `deallocate` may only raise its authoritative state (`AllocAuth::raise`)",
-                        m
-                    ),
-                ));
+                "Allocator::deallocate"
+            } else {
+                continue;
             }
+        } else {
+            continue;
+        };
+        if f.x.body.is_some()
+            && (info.touching.contains(&f.x.name) || info.aware.contains(&f.x.name))
+        {
+            return Err(error(
+                &f.span,
+                format!(
+                    "this `{}` may change the allocator heap (allocate from, or step, an allocator with a state), but it runs where Verus does not see it (when a value is dropped); an allocator's `deallocate` may only raise its authoritative state (`AllocAuth::raise`)",
+                    what
+                ),
+            ));
         }
     }
     Ok(())
@@ -336,6 +372,23 @@ pub(crate) fn prepare_function(info: &HeapInfo, function: &Function) -> Result<F
         fx.unwind_spec = Some(crate::ast::UnwindSpec::NoUnwindWhen(rewrite(info, e, spec_role)?));
     }
     if let Some(b) = &f.body {
+        // (a closure body runs later, with the heap of then; not supported yet)
+        let mut in_closure: Option<crate::messages::Span> = None;
+        let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(b, &mut |_s, e: &Expr| {
+            if matches!(&e.x, ExprX::NonSpecClosure { .. })
+                && in_closure.is_none()
+                && mentions_heap(e)
+            {
+                in_closure = Some(e.span.clone());
+            }
+            Ok(())
+        });
+        if let Some(span) = in_closure {
+            return Err(error(
+                &span,
+                "the allocator heap (`allocator_state`, ...) cannot be used inside a closure yet",
+            ));
+        }
         fx.body = Some(rewrite(info, b, body_role)?);
     }
     if aware {
@@ -502,6 +555,11 @@ fn call_may_touch_with(
     }
     if func.x.body.is_some() && !trusted_crate(target) {
         return touching.contains(target);
+    }
+    if func.x.attrs.is_external_body && func.x.body.is_none() || func.x.proxy.is_some() {
+        // trusted, like its `allocates` bound: it reaches user code only through its type
+        // arguments
+        return typs_may_touch(typs);
     }
     if func.x.attrs.heap_preserving {
         // (computed by the crate that defined it)

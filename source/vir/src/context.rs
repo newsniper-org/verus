@@ -380,6 +380,7 @@ impl GlobalCtx {
         let alloc_heap = crate::alloc_heap::heap_info(krate).map(Arc::new);
         if let Some(info) = &alloc_heap {
             crate::alloc_heap::check_hidden_calls_preserve(info, krate)?;
+            crate::alloc_heap::check_impls_follow_decls(krate)?;
         }
         let alloc_datatypes: HashMap<Dt, crate::ast::Datatype> = if alloc_check {
             krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect()
