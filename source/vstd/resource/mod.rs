@@ -21,6 +21,7 @@ pub use impls::ghost_var;
 pub use impls::imap;
 pub use impls::iset;
 pub use impls::map;
+pub use impls::preorder_auth;
 pub use impls::seq;
 pub use impls::set;
 
