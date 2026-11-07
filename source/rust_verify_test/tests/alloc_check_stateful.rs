@@ -1,0 +1,496 @@
+#![feature(rustc_private)]
+#[macro_use]
+mod common;
+use common::*;
+
+// -V alloc-check with an allocator whose costs depend on its state (vstd::alloc_heap): a pool
+// that hands out `remaining` blocks without asking the global allocator, then asks it
+
+const POOL: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use vstd::atomic_ghost::*;
+    use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
+    use vstd::alloc_heap::*;
+    use vstd::resource::Loc;
+    use vstd::resource::preorder_auth::Preorder;
+    use std::alloc::{Allocator, AllocError, Global, Layout};
+    use std::ptr::NonNull;
+
+    pub struct Free(pub nat);
+    impl Preorder for Free {
+        open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+        proof fn le_refl(a: Self) {}
+        proof fn le_trans(a: Self, b: Self, c: Self) {}
+    }
+
+    pub struct PoolPred;
+    impl AtomicInvariantPredicate<Loc, u64, AllocAuth<Free>> for PoolPred {
+        open spec fn atomic_inv(k: Loc, v: u64, g: AllocAuth<Free>) -> bool {
+            g@ == Free(v as nat) && g.id() == k
+        }
+    }
+
+    /// A pool that hands out `remaining` blocks without asking the global allocator (it returns
+    /// `Err` for them here, to keep the example small), and then asks the global allocator
+    pub struct Pool {
+        remaining: AtomicU64<Loc, AllocAuth<Free>, PoolPred>,
+        reg: Tracked<Registered<Free>>,
+    }
+
+    impl Pool {
+        #[verifier::type_invariant]
+        spec fn inv(&self) -> bool {
+            self.remaining.well_formed() && self.remaining.constant() == self.reg@.loc()
+        }
+
+        pub closed spec fn id(&self) -> Loc { self.reg@.loc() }
+
+        fn new(n: u64) -> (p: Self)
+            ensures
+                allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+        {
+            let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
+            let ghost l = reg.loc();
+            let remaining = AtomicU64::new(Ghost(l), n, Tracked(auth));
+            Pool { remaining, reg: Tracked(reg) }
+        }
+    }
+
+    unsafe impl Allocator for Pool {
+        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            allocates 1
+        {
+            proof { use_type_invariant(self); }
+            let tracked reg = self.reg.borrow();
+            let ghost s = heap_state::<Free>(allocator_heap(), reg.loc());
+            let v = atomic_with_ghost!(&self.remaining => load(); ghost g => {
+                g.lower_bound(reg);
+            });
+            if v > 0 {
+                atomic_with_ghost!(&self.remaining => store(v - 1); ghost g => {
+                    g.step(reg, Free((v - 1) as nat), if s.0 > 0 { Free((s.0 - 1) as nat) } else { s });
+                });
+                Err(AllocError)
+            } else {
+                Global.allocate(layout)
+            }
+        }
+
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+            allocates 0
+        {
+        }
+    }
+
+    unsafe impl AllocFreeDrop for Pool {}
+
+    unsafe impl BoundedAllocator for Pool {
+        open spec fn max_cost() -> int { 1 }
+    }
+
+    unsafe impl StatefulAllocator for Pool {
+        type State = Free;
+
+        open spec fn loc(&self) -> Loc { self.id() }
+
+        proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) {
+            self.reg.borrow()
+        }
+
+        open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+            if s.0 > 0 { 0 } else { 1 }
+        }
+
+        open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+            if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+        }
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] stateful_pool ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn two(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            ensures allocator_state(p).0 == old_allocator_state(p).0 - 2,
+            allocates 0
+        {
+            let _ = p.allocate(l);
+            let _ = p.allocate(l);
+        }
+
+        fn three(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 1
+        {
+            let _ = p.allocate(l);
+            let _ = p.allocate(l);
+            let _ = p.allocate(l);
+        }
+
+        fn top(l: Layout) {
+            let p = Pool::new(2);
+            two(&p, l);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_pool_over_bound ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn three(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 0 // FAILS
+        {
+            let _ = p.allocate(l);
+            let _ = p.allocate(l);
+            let _ = p.allocate(l);
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_pool_unknown_after_call ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn helper(p: &Pool, l: Layout)
+            allocates 1
+        {
+            let _ = p.allocate(l);
+        }
+
+        fn lost(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 0 // FAILS
+        {
+            helper(p, l); // (charged 1 anyway; and the pool's state is unknown after it)
+        }
+
+        fn lost2(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+        {
+            helper(p, l);
+            assert(allocator_state(p).0 >= 1); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_proof_fn_must_say ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        proof fn sneaky() {
+            let tracked (a, r) = AllocAuth::register(Free(3)); // FAILS
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this proof function changes the allocator heap")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_step_down_rejected ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn bad() {
+            let tracked (mut a, r) = AllocAuth::register(Free(3));
+            proof { a.step(&r, Free(2), Free(3)); } // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_impl_over_cost ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::atomic_ghost::*;
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
+        use vstd::alloc_heap::*;
+        use vstd::resource::Loc;
+        use vstd::resource::preorder_auth::Preorder;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Free(pub nat);
+        impl Preorder for Free {
+            open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+            proof fn le_refl(a: Self) {}
+            proof fn le_trans(a: Self, b: Self, c: Self) {}
+        }
+
+        pub struct PoolPred;
+        impl AtomicInvariantPredicate<Loc, u64, AllocAuth<Free>> for PoolPred {
+            open spec fn atomic_inv(k: Loc, v: u64, g: AllocAuth<Free>) -> bool {
+                g@ == Free(v as nat) && g.id() == k
+            }
+        }
+
+        /// A pool that hands out `remaining` blocks without asking the global allocator (it returns
+        /// `Err` for them here, to keep the example small), and then asks the global allocator
+        pub struct Pool {
+            remaining: AtomicU64<Loc, AllocAuth<Free>, PoolPred>,
+            reg: Tracked<Registered<Free>>,
+        }
+
+        impl Pool {
+            #[verifier::type_invariant]
+            spec fn inv(&self) -> bool {
+                self.remaining.well_formed() && self.remaining.constant() == self.reg@.loc()
+            }
+
+            pub closed spec fn id(&self) -> Loc { self.reg@.loc() }
+
+            fn new(n: u64) -> (p: Self)
+                ensures
+                    allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+            {
+                let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
+                let ghost l = reg.loc();
+                let remaining = AtomicU64::new(Ghost(l), n, Tracked(auth));
+                Pool { remaining, reg: Tracked(reg) }
+            }
+        }
+
+        unsafe impl Allocator for Pool {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                proof { use_type_invariant(self); }
+                let tracked reg = self.reg.borrow();
+                let ghost s = heap_state::<Free>(allocator_heap(), reg.loc());
+                let v = atomic_with_ghost!(&self.remaining => load(); ghost g => {
+                    g.lower_bound(reg);
+                });
+                if v > 0 {
+                    atomic_with_ghost!(&self.remaining => store(v - 1); ghost g => {
+                        g.step(reg, Free((v - 1) as nat), if s.0 > 0 { Free((s.0 - 1) as nat) } else { s });
+                    });
+                    Global.allocate(layout)
+                } else {
+                    Global.allocate(layout)
+                }
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Pool {}
+
+        unsafe impl BoundedAllocator for Pool {
+            open spec fn max_cost() -> int { 1 }
+        }
+
+        unsafe impl StatefulAllocator for Pool {
+            type State = Free;
+
+            open spec fn loc(&self) -> Loc { self.id() }
+
+            proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) {
+                self.reg.borrow()
+            }
+
+            open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+                if s.0 > 0 { 0 } else { 1 }
+            }
+
+            open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+                if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the allocations must be within `allocate_cost_at` of the state on entry")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_impl_must_step ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::atomic_ghost::*;
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
+        use vstd::alloc_heap::*;
+        use vstd::resource::Loc;
+        use vstd::resource::preorder_auth::Preorder;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Free(pub nat);
+        impl Preorder for Free {
+            open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+            proof fn le_refl(a: Self) {}
+            proof fn le_trans(a: Self, b: Self, c: Self) {}
+        }
+
+        pub struct PoolPred;
+        impl AtomicInvariantPredicate<Loc, u64, AllocAuth<Free>> for PoolPred {
+            open spec fn atomic_inv(k: Loc, v: u64, g: AllocAuth<Free>) -> bool {
+                g@ == Free(v as nat) && g.id() == k
+            }
+        }
+
+        /// A pool that hands out `remaining` blocks without asking the global allocator (it returns
+        /// `Err` for them here, to keep the example small), and then asks the global allocator
+        pub struct Pool {
+            remaining: AtomicU64<Loc, AllocAuth<Free>, PoolPred>,
+            reg: Tracked<Registered<Free>>,
+        }
+
+        impl Pool {
+            #[verifier::type_invariant]
+            spec fn inv(&self) -> bool {
+                self.remaining.well_formed() && self.remaining.constant() == self.reg@.loc()
+            }
+
+            pub closed spec fn id(&self) -> Loc { self.reg@.loc() }
+
+            fn new(n: u64) -> (p: Self)
+                ensures
+                    allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+            {
+                let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
+                let ghost l = reg.loc();
+                let remaining = AtomicU64::new(Ghost(l), n, Tracked(auth));
+                Pool { remaining, reg: Tracked(reg) }
+            }
+        }
+
+        unsafe impl Allocator for Pool {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                proof { use_type_invariant(self); }
+                let tracked reg = self.reg.borrow();
+                let ghost s = heap_state::<Free>(allocator_heap(), reg.loc());
+                let v = atomic_with_ghost!(&self.remaining => load(); ghost g => {
+                    g.lower_bound(reg);
+                });
+                if v > 0 {
+                    Err(AllocError)
+                } else {
+                    Global.allocate(layout)
+                }
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Pool {}
+
+        unsafe impl BoundedAllocator for Pool {
+            open spec fn max_cost() -> int { 1 }
+        }
+
+        unsafe impl StatefulAllocator for Pool {
+            type State = Free;
+
+            open spec fn loc(&self) -> Loc { self.id() }
+
+            proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) {
+                self.reg.borrow()
+            }
+
+            open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+                if s.0 > 0 { 0 } else { 1 }
+            }
+
+            open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+                if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the heap must move as `allocate_next` says")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_dealloc_must_preserve ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::atomic_ghost::*;
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
+        use vstd::alloc_heap::*;
+        use vstd::resource::Loc;
+        use vstd::resource::preorder_auth::Preorder;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Free(pub nat);
+        impl Preorder for Free {
+            open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+            proof fn le_refl(a: Self) {}
+            proof fn le_trans(a: Self, b: Self, c: Self) {}
+        }
+
+        pub struct PoolPred;
+        impl AtomicInvariantPredicate<Loc, u64, AllocAuth<Free>> for PoolPred {
+            open spec fn atomic_inv(k: Loc, v: u64, g: AllocAuth<Free>) -> bool {
+                g@ == Free(v as nat) && g.id() == k
+            }
+        }
+
+        /// A pool that hands out `remaining` blocks without asking the global allocator (it returns
+        /// `Err` for them here, to keep the example small), and then asks the global allocator
+        pub struct Pool {
+            remaining: AtomicU64<Loc, AllocAuth<Free>, PoolPred>,
+            reg: Tracked<Registered<Free>>,
+        }
+
+        impl Pool {
+            #[verifier::type_invariant]
+            spec fn inv(&self) -> bool {
+                self.remaining.well_formed() && self.remaining.constant() == self.reg@.loc()
+            }
+
+            pub closed spec fn id(&self) -> Loc { self.reg@.loc() }
+
+            fn new(n: u64) -> (p: Self)
+                ensures
+                    allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+            {
+                let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
+                let ghost l = reg.loc();
+                let remaining = AtomicU64::new(Ghost(l), n, Tracked(auth));
+                Pool { remaining, reg: Tracked(reg) }
+            }
+        }
+
+        unsafe impl Allocator for Pool {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                proof { use_type_invariant(self); }
+                let tracked reg = self.reg.borrow();
+                let ghost s = heap_state::<Free>(allocator_heap(), reg.loc());
+                let v = atomic_with_ghost!(&self.remaining => load(); ghost g => {
+                    g.lower_bound(reg);
+                });
+                if v > 0 {
+                    atomic_with_ghost!(&self.remaining => store(v - 1); ghost g => {
+                        g.step(reg, Free((v - 1) as nat), if s.0 > 0 { Free((s.0 - 1) as nat) } else { s });
+                    });
+                    Err(AllocError)
+                } else {
+                    Global.allocate(layout)
+                }
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+                let _ = self.allocate(layout);
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Pool {}
+
+        unsafe impl BoundedAllocator for Pool {
+            open spec fn max_cost() -> int { 1 }
+        }
+
+        unsafe impl StatefulAllocator for Pool {
+            type State = Free;
+
+            open spec fn loc(&self) -> Loc { self.id() }
+
+            proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) {
+                self.reg.borrow()
+            }
+
+            open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+                if s.0 > 0 { 0 } else { 1 }
+            }
+
+            open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+                if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "may change the allocator heap")
+}

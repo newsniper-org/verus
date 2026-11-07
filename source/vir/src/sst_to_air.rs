@@ -1885,7 +1885,9 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             // `call_requires(f, (args...))` and `call_ensures(f, (args...), ret)`
             // We don't want to do this all the time though --- only when the generic
             // FnDef types exist post-pruning.
-            let emit_generic_conditions = ctx.fndef_types.contains(fun);
+            // (a heap-aware function cannot be used as a function value: alloc_heap.rs)
+            let heap_aware = ctx.global.alloc_heap.as_ref().is_some_and(|i| i.aware.contains(fun));
+            let emit_generic_conditions = ctx.fndef_types.contains(fun) && !heap_aware;
             let resolved_fun = resolved_method.as_ref().map(|(f, _)| f).cloned();
 
             assert!(split.is_none());

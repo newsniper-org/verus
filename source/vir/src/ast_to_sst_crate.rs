@@ -22,6 +22,10 @@ pub fn ast_to_sst_krate(
             continue;
         }
 
+        let function = &match &ctx.global.alloc_heap {
+            Some(info) => crate::alloc_heap::prepare_function(info, function)?,
+            None => function.clone(),
+        };
         let function_sst = function_to_sst(ctx, diagnostics, bucket_funs, function)?;
 
         assert!(!func_workmap.contains_key(&function.x.name));

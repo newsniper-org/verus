@@ -227,8 +227,66 @@ fn push_fits(v: &mut Vec<u64, Chunked>)
   `BoundedAllocator`의 supertrait이므로, 할당기 자체를 drop할 때도 할당하면 안 됩니다.
 * 컨테이너를 clone하면(`split_off`도) 할당기도 clone하며, 그 비용은 `allocator_clone_cost::<A>()`입니다.
   전역 할당기와 참조에서는 0이고, 다른 할당기에서는 해석되지 않는 항입니다.
-* 비용은 할당기의 값과 인자에만 의존할 수 있습니다. 메서드가 받는 `&self` 뒤의 가변 상태에는 의존할 수
-  없습니다.
+* `BoundedAllocator`만으로는 비용이 할당기의 값과 인자에만 의존할 수 있습니다. 메서드가 받는 `&self` 뒤의
+  가변 상태에는 의존할 수 없습니다. 이 제한은 다음 절에서 풉니다.
+
+### 상태 있는 할당기
+
+이미 가진 블록을 먼저 내주는 풀이나, 다 쓰면 바닥나는 arena는 상태에 따라 비용이 다릅니다.
+`vstd::alloc_heap::StatefulAllocator`(`BoundedAllocator` 위의 trait)는 상태의 타입, 그 위의 preorder
+("적어도 그만큼 좋다"), 한 상태에서 `allocate`의 비용(`allocate_cost_at`)과 그 뒤의 상태(`allocate_next`)를
+줍니다:
+
+```rust
+pub struct Free(pub nat);          // 남은 블록 수; 많을수록 좋다
+
+impl Preorder for Free {
+    open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+    proof fn le_refl(a: Self) {}
+    proof fn le_trans(a: Self, b: Self, c: Self) {}
+}
+
+unsafe impl StatefulAllocator for Pool {
+    type State = Free;
+    open spec fn loc(&self) -> Loc { self.reg@.loc() }
+    proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) { self.reg.borrow() }
+    open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+        if s.0 > 0 { 0 } else { 1 }
+    }
+    open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+        if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+    }
+}
+
+fn two(p: &Pool, l: Layout)
+    requires allocator_state(p).0 >= 2,
+    ensures allocator_state(p).0 == old_allocator_state(p).0 - 2,
+    allocates 0
+{
+    let _ = p.allocate(l);
+    let _ = p.allocate(l);
+}
+```
+
+Verus는 스레드마다 이 상태들의 하한을 담은 ghost heap을 둡니다. 명세에서는 `allocator_state(a)`(`ensures`에서는
+호출 뒤, `requires`와 본문에서는 현재 상태)와 `old_allocator_state(a)`(함수가 불렸을 때의 상태. `allocates`
+상한에서는 이 형태만 쓸 수 있습니다)로 읽습니다. `a.allocate(layout)` 호출은
+`allocate_cost_at(allocator_state(a), layout)`(`max_cost()`로 자름)만큼 청구되고, 상태를 `allocate_next`로
+옮깁니다. impl의 `allocate`는 같은 두 사실에 대해 검증됩니다.
+
+* 구현은 실제 상태를 `AllocAuth<S>`(자기 불변식 안)에 둡니다. `AllocAuth::register(s)`가 이것을 만들고,
+  할당기가 가지고 있어야 하는 증인 `Registered<S>`도 돌려줍니다(`witness`). `AllocAuth::step`은 실제 상태와
+  heap의 하한을 함께 옮기고(할당), `AllocAuth::raise`는 실제 상태만 올립니다(해제).
+* heap은 상태가 아니라 하한을 담습니다. `deallocate`는 Verus가 보지 못하는 곳(컨테이너를 drop할 때)에서
+  실행되므로 상태를 올리기만 할 수 있습니다. heap을 바꿀 수 있는 `deallocate`나 `Drop::drop`은 거부됩니다.
+* `Registered`는 `Send`도 `Sync`도 아니므로, 이것을 가진 할당기도 그렇습니다. 상태와 그 하한은 한 스레드에
+  머뭅니다.
+* 명세에서 heap을 언급하는 함수는 그 변화를 호출자에게 전합니다. heap을 바꿀 수 있는 다른 함수(상태 있는
+  할당기에서 할당하거나, Verus가 효과를 볼 수 없는 코드: 타입 매개변수의 trait 메서드, 클로저, 다른 crate의
+  함수를 부르는 함수)를 부른 뒤에는 상태를 모르게 되고, 그때 비용은 `max_cost()`입니다. heap을 바꾸는 proof
+  함수는 `ensures`에서 어떻게 바꾸는지 밝혀야 합니다.
+* 아직 안 되는 것: 상태 있는 할당기의 `grow`와 `shrink`는 상태 없는 비용으로 청구되고 상태를 모르게 만듭니다.
+  컨테이너의 명세는 상태를 말하지 않습니다.
 
 ## 콜백, 클로저, trait
 

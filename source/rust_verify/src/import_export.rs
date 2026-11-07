@@ -77,9 +77,21 @@ pub(crate) fn export_crate(
     if let Some(file_path) = export.as_ref().or(export_vir_path_via_cargo.as_ref()) {
         // for efficiency's sake, prune out elements of AST that won't be needed by importers:
         let mut kratex = (*vir_crate).clone();
+        // (computed while the bodies are still there)
+        let touching = vir::alloc_heap::exported_touching(&vir_crate);
         kratex.functions.retain(|f| f.x.visibility.restricted_to.is_none());
         for func in kratex.functions.iter_mut() {
             let mut functionx = func.x.clone();
+            if let Some(touching) = &touching {
+                if functionx.mode == Mode::Exec
+                    && functionx.body.is_some()
+                    && !touching.contains(&functionx.name)
+                {
+                    let mut attrs = (*functionx.attrs).clone();
+                    attrs.heap_preserving = true;
+                    functionx.attrs = Arc::new(attrs);
+                }
+            }
             if !alloc_checked {
                 let mut attrs = (*functionx.attrs).clone();
                 attrs.alloc_checked_crate = false;

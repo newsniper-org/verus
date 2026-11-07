@@ -238,8 +238,70 @@ nothing.
 * Cloning a container (and `split_off`) also clones its allocator, at the cost
   `allocator_clone_cost::<A>()`. That cost is 0 for the global allocator and for references.
   For other allocators it is uninterpreted.
-* A cost cannot depend on the allocator's mutable state (behind `&self`, which the methods take),
-  only on its value and the arguments.
+* With `BoundedAllocator` alone, a cost depends only on the allocator's value and the arguments,
+  not on its mutable state (behind `&self`, which the methods take). The next section lifts this.
+
+### Allocators with a state
+
+A pool that first hands out blocks it already holds, or an arena that runs out, costs
+different amounts depending on its state. `vstd::alloc_heap::StatefulAllocator` (on top of
+`BoundedAllocator`) gives the state's type, a preorder on it ("at least as good as"), the cost
+of `allocate` in a state (`allocate_cost_at`) and the state after it (`allocate_next`):
+
+```rust
+pub struct Free(pub nat);          // blocks left; more is better
+
+impl Preorder for Free {
+    open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+    proof fn le_refl(a: Self) {}
+    proof fn le_trans(a: Self, b: Self, c: Self) {}
+}
+
+unsafe impl StatefulAllocator for Pool {
+    type State = Free;
+    open spec fn loc(&self) -> Loc { self.reg@.loc() }
+    proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) { self.reg.borrow() }
+    open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+        if s.0 > 0 { 0 } else { 1 }
+    }
+    open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+        if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+    }
+}
+
+fn two(p: &Pool, l: Layout)
+    requires allocator_state(p).0 >= 2,
+    ensures allocator_state(p).0 == old_allocator_state(p).0 - 2,
+    allocates 0
+{
+    let _ = p.allocate(l);
+    let _ = p.allocate(l);
+}
+```
+
+Verus keeps, per thread, a ghost heap of lower bounds of these states. Specifications read it
+with `allocator_state(a)` (in `ensures`, after the call; in `requires` and in a body, the
+current state) and `old_allocator_state(a)` (when the function was called, which is the only
+form an `allocates` bound may use). A call `a.allocate(layout)` is charged
+`allocate_cost_at(allocator_state(a), layout)` (cut down to `max_cost()`) and moves the state to
+`allocate_next`. The impl's `allocate` is verified against the same two facts.
+
+* The implementation keeps the actual state in an `AllocAuth<S>` (in its own invariant), made by
+  `AllocAuth::register(s)`, which also returns the `Registered<S>` witness the allocator must keep
+  (`witness`). `AllocAuth::step` moves the actual state and the heap's lower bound together
+  (allocation); `AllocAuth::raise` moves the actual state up alone (deallocation).
+* The heap holds lower bounds, not the states: `deallocate` runs where Verus does not see it
+  (when a container is dropped), so it may only raise the state. A `deallocate` or `Drop::drop`
+  that may change the heap is rejected.
+* `Registered` is neither `Send` nor `Sync`, so neither is an allocator that keeps it: the state
+  and its lower bound stay in one thread.
+* A function whose specification mentions the heap passes it on to its callers. After a call to
+  any other function that may change the heap (it allocates from an allocator with a state, or
+  calls code that Verus cannot see the effect of: a trait method on a type parameter, a closure,
+  a function of another crate), the states are unknown, and then cost `max_cost()`. A proof
+  function that changes the heap must say how in its `ensures`.
+* Not yet: `grow` and `shrink` of an allocator with a state are charged their stateless costs
+  and leave the states unknown; the containers' specifications do not name the states.
 
 ## Callbacks, closures and traits
 

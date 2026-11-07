@@ -513,6 +513,46 @@ fn traverse_reachable(ctxt: &Ctxt, state: &mut State) {
                 reach_atomic_update_ops(state, ctxt);
             }
 
+            // The ghost allocator heap (alloc_heap.rs): every exec and proof body has heap
+            // variables, and the heap specification functions become `*_in` functions
+            {
+                use crate::ast::CrateId;
+                if matches!(function.x.mode, crate::ast::Mode::Exec | crate::ast::Mode::Proof) {
+                    let h = crate::fun!(CrateId::Vstd => "alloc_heap"; "allocator_heap");
+                    if ctxt.function_map.contains_key(&h) {
+                        reach_function(ctxt, state, &h);
+                    }
+                }
+                if crate::alloc_heap::is_allocate_method(&f) {
+                    for n in ["cost", "heap", "tracked"] {
+                        let g = crate::alloc_heap::stateful_fun(n);
+                        if ctxt.function_map.contains_key(&g) {
+                            reach_function(ctxt, state, &g);
+                        }
+                    }
+                }
+                if f.path.krate == CrateId::Vstd {
+                    match crate::ast_util::fun_as_friendly_rust_name(&f).as_str() {
+                        "vstd::alloc_heap::allocator_state"
+                        | "vstd::alloc_heap::old_allocator_state" => {
+                            reach_function(
+                                ctxt,
+                                state,
+                                &crate::fun!(CrateId::Vstd => "alloc_heap"; "allocator_state_in"),
+                            );
+                        }
+                        "vstd::alloc_heap::allocator_tracked" => {
+                            reach_function(
+                                ctxt,
+                                state,
+                                &crate::fun!(CrateId::Vstd => "alloc_heap"; "allocator_tracked_in"),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             // note: the types in typ_bounds are handled below by map_function_visitor_env
             traverse_generic_bounds(ctxt, state, &function.x.typ_bounds, false);
             let fe = |state: &mut State, _: &mut VisitorScopeMap, e: &Expr| {

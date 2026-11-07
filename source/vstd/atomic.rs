@@ -158,6 +158,7 @@ macro_rules! atomic_common_methods {
         pub const fn new(i: $value_ty) -> (res: ($at_ident, Tracked<$p_ident>))
             ensures
                 equal(res.1@.view(), $p_data_ident{ patomic: res.0.id(), value: i }),
+            allocates 0
         {
             let p = $at_ident { ato: <$rust_ty>::new(i) };
             (p, Tracked::assume_new())
@@ -172,6 +173,7 @@ macro_rules! atomic_common_methods {
             ensures equal(perm.view().value, ret),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.load(Ordering::SeqCst)
         }
@@ -185,6 +187,7 @@ macro_rules! atomic_common_methods {
             ensures equal(final(perm).view().value, v) && equal(self.id(), final(perm).view().patomic),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.store(v, Ordering::SeqCst)
         }
@@ -209,6 +212,7 @@ macro_rules! atomic_common_methods {
                 },
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.compare_exchange(current, new, Ordering::SeqCst, Ordering::SeqCst)
         }
@@ -232,6 +236,7 @@ macro_rules! atomic_common_methods {
                 },
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.compare_exchange_weak(current, new, Ordering::SeqCst, Ordering::SeqCst)
         }
@@ -248,6 +253,7 @@ macro_rules! atomic_common_methods {
                 && equal(self.id(), final(perm).view().patomic),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.swap(v, Ordering::SeqCst)
         }
@@ -260,6 +266,7 @@ macro_rules! atomic_common_methods {
             ensures equal(perm.view().value, ret),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.into_inner()
         }
@@ -286,6 +293,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value as int == $modname::wrapping_add(old(perm).view().value, n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_add(n, Ordering::SeqCst)
         }
@@ -301,6 +309,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value as int == $modname::wrapping_sub(old(perm).view().value, n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_sub(n, Ordering::SeqCst)
         }
@@ -321,6 +330,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == old(perm).view().value + n,
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.fetch_add_wrapping(Tracked(&mut *perm), n)
         }
@@ -338,6 +348,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == old(perm).view().value - n,
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.fetch_sub_wrapping(Tracked(&mut *perm), n)
         }
@@ -353,6 +364,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == (old(perm).view().value & n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_and(n, Ordering::SeqCst)
         }
@@ -368,6 +380,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == (old(perm).view().value | n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_or(n, Ordering::SeqCst)
         }
@@ -383,6 +396,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == (old(perm).view().value ^ n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_xor(n, Ordering::SeqCst)
         }
@@ -398,6 +412,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == !(old(perm).view().value & n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_nand(n, Ordering::SeqCst)
         }
@@ -413,6 +428,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == (if old(perm).view().value > n { old(perm).view().value } else { n }),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_max(n, Ordering::SeqCst)
         }
@@ -428,6 +444,7 @@ macro_rules! atomic_integer_methods {
                 final(perm).view().value == (if old(perm).view().value < n { old(perm).view().value } else { n }),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_min(n, Ordering::SeqCst)
         }
@@ -452,6 +469,7 @@ macro_rules! atomic_bool_methods {
                 && final(perm).view().value == (old(perm).view().value && n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_and(n, Ordering::SeqCst)
         }
@@ -468,6 +486,7 @@ macro_rules! atomic_bool_methods {
                 && final(perm).view().value == (old(perm).view().value || n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_or(n, Ordering::SeqCst)
         }
@@ -484,6 +503,7 @@ macro_rules! atomic_bool_methods {
                 && final(perm).view().value == ((old(perm).view().value && !n) || (!old(perm).view().value && n)),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_xor(n, Ordering::SeqCst)
         }
@@ -500,6 +520,7 @@ macro_rules! atomic_bool_methods {
                 && final(perm).view().value == !(old(perm).view().value && n),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             self.ato.fetch_nand(n, Ordering::SeqCst)
         }
@@ -552,6 +573,7 @@ macro_rules! ptr_atomic_methods {
                 final(perm).is_init(),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             unsafe { $rust_ty::from_ptr(ptr).store(value, Ordering::SeqCst) }
         }
@@ -568,6 +590,7 @@ macro_rules! ptr_atomic_methods {
                 ret == perm.value(),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             unsafe { $rust_ty::from_ptr(ptr).load(Ordering::SeqCst) }
         }
@@ -590,6 +613,7 @@ macro_rules! ptr_atomic_methods {
                 ptr == final(perm).ptr(),
             opens_invariants none
             no_unwind
+            allocates 0
         {
             unsafe {
                 $rust_ty::from_ptr(ptr).swap(v, Ordering::SeqCst)}

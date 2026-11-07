@@ -1637,6 +1637,9 @@ pub struct FunctionAttrsX {
     /// The crate defining this function was verified with -V alloc-check, so its `allocates`
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,
+    /// The function's body (in the crate that defined it) cannot change the ghost allocator heap
+    /// (alloc_heap.rs). Computed when the crate is exported; false (may change it) otherwise.
+    pub heap_preserving: bool,
     /// `-V alloc-check`: the function (or its impl) has trait bounds that do not appear in
     /// `typ_bounds` (auto traits such as `Send`), so its `call_allocates` axiom cannot be guarded
     /// by them and is not emitted

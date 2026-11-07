@@ -120,6 +120,9 @@ pub(crate) struct State<'a> {
 
     /// `-V alloc-check`: the ghost local counting allocation-source calls in this function
     pub(crate) alloc_counter: Option<VarIdent>,
+    /// The current ghost allocator heap (`alloc%heap`, see alloc_heap.rs) in an exec or proof
+    /// function body
+    pub(crate) alloc_heap: Option<VarIdent>,
     /// `-V alloc-check`: the body of a `#[verifier::fip]` function (whose calls must not
     /// deallocate)
     pub(crate) fip: bool,
@@ -270,6 +273,7 @@ impl<'a> State<'a> {
             loop_result_dests: HashMap::new(),
             mask: None,
             alloc_counter: None,
+            alloc_heap: None,
             fip: false,
             au_pred_args: Vec::new(),
             au_var_exp_to_resolve: None,
@@ -1480,6 +1484,99 @@ fn stm_call(
         }
     }
 
+    // The ghost allocator heap (alloc_heap.rs): a heap-aware callee gets the current heap and a
+    // fresh one, which is the current heap after the call; after any other exec call, the heap
+    // is unknown (MVP: no effect analysis yet)
+    let mut heap_after: Option<Stm> = None;
+    // `a.allocate(layout)` on an allocator with a state: charged by the state (before the call),
+    // which then moves as the allocator says (see vstd::alloc_heap::StatefulAllocator)
+    let mut stateful_charge: Option<Exp> = None;
+    let stateful = match (&ctx.global.alloc_heap, &state.alloc_heap) {
+        (Some(info), Some(cur)) if crate::alloc_heap::is_allocate_method(&name) => {
+            info.stateful_self(&typs).map(|t| (info.clone(), cur.clone(), t))
+        }
+        _ => None,
+    };
+    if let Some((info, cur, self_typ)) = &stateful {
+        let int_typ = Arc::new(TypX::Int(IntRange::Int));
+        let bool_typ = Arc::new(TypX::Bool);
+        let st_typs = Arc::new(vec![self_typ.clone()]);
+        let cur_exp = SpannedTyped::new(span, &info.typ, ExpX::Var(cur.clone()));
+        let (pre_id, pre_exp) = state.declare_temp_var_stm(
+            span,
+            &info.typ,
+            PreLocalDeclKind::Immutable(Immutable(LocalDeclKind::Nondeterministic)),
+        );
+        let _ = pre_id;
+        stms.push(Spanned::new(
+            span.clone(),
+            StmX::Assume(crate::sst_util::sst_equal(span, &pre_exp, &cur_exp)),
+        ));
+        let call = |f: &str, extra: Vec<Exp>, t: &Typ| {
+            let mut a = vec![pre_exp.clone(), small_args[0].clone()];
+            a.extend(extra);
+            SpannedTyped::new(
+                span,
+                t,
+                ExpX::Call(
+                    CallFun::Fun(crate::alloc_heap::stateful_fun(f), None),
+                    st_typs.clone(),
+                    Arc::new(a),
+                ),
+            )
+        };
+        stms.push(Spanned::new(span.clone(), StmX::Assume(call("tracked", vec![], &bool_typ))));
+        stateful_charge = Some(call("cost", vec![small_args[1].clone()], &int_typ));
+        if let Some(Dest { dest, .. }) = &dest {
+            if let ExpX::VarLoc(x) = &dest.x {
+                let r = SpannedTyped::new(span, &dest.typ, ExpX::Var(x.clone()));
+                let next = call("heap", vec![small_args[1].clone(), r], &info.typ);
+                let lhs = Dest { dest: var_loc_exp(span, &info.typ, cur.clone()), is_init: false };
+                heap_after = Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: next }));
+            }
+        }
+        if heap_after.is_none() {
+            return Err(error(
+                span,
+                "internal error: allocate on an allocator with a state needs its result",
+            ));
+        }
+    }
+    if let (Some(info), None) = (&ctx.global.alloc_heap, &stateful) {
+        let aware = info.aware.contains(&name);
+        match &state.alloc_heap {
+            Some(cur) => {
+                let cur = cur.clone();
+                let touch = !aware && fun.x.mode == Mode::Exec && {
+                    let resolved = resolved_method.as_ref().map(|(f, _)| f);
+                    let dynamic = resolved.is_none()
+                        && matches!(fun.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. });
+                    info.call_may_touch(&name, &typs, resolved, dynamic)
+                };
+                if aware || touch {
+                    let (_next_id, next_exp) = state.declare_temp_var_stm(
+                        span,
+                        &info.typ,
+                        PreLocalDeclKind::Immutable(Immutable(LocalDeclKind::Nondeterministic)),
+                    );
+                    if aware {
+                        small_args.push(SpannedTyped::new(span, &info.typ, ExpX::Var(cur.clone())));
+                        small_args.push(next_exp.clone());
+                    }
+                    let lhs = Dest { dest: var_loc_exp(span, &info.typ, cur), is_init: false };
+                    heap_after =
+                        Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: next_exp }));
+                }
+            }
+            None if aware => {
+                return Err(error(
+                    span,
+                    "a function whose specification mentions the allocator heap can only be called from the body of an exec or proof function",
+                ));
+            }
+            None => {}
+        }
+    }
     let small_args = Arc::new(small_args);
     if !state.checking_recommends(ctx) {
         match &state.mask {
@@ -1529,9 +1626,36 @@ fn stm_call(
         stms.push(stm);
     }
     stms.push(Spanned::new(span.clone(), call));
+    if let Some(stm) = heap_after {
+        stms.push(stm);
+    }
     if let Some(counter) = state.alloc_counter.clone() {
         if fun.x.mode == Mode::Exec {
-            stms.push(alloc_count_after_call(ctx, span, &counter, &alloc_target, &small_args)?);
+            match stateful_charge {
+                Some(bound) => {
+                    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+                    let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter.clone()));
+                    let sum = SpannedTyped::new(
+                        span,
+                        &int_typ,
+                        ExpX::Binary(
+                            crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add),
+                            current,
+                            bound,
+                        ),
+                    );
+                    let lhs =
+                        Dest { dest: var_loc_exp(span, &int_typ, counter.clone()), is_init: false };
+                    stms.push(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum }));
+                }
+                None => stms.push(alloc_count_after_call(
+                    ctx,
+                    span,
+                    &counter,
+                    &alloc_target,
+                    &small_args,
+                )?),
+            }
         }
     }
     if let Some(assume) = fmt_assume {
@@ -5102,6 +5226,15 @@ fn exec_closure_body_stms(
     let outer_alloc_counter = state.alloc_counter.take();
     // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function)
     let outer_fip = std::mem::replace(&mut state.fip, false);
+    // The closure body runs later, with whatever the heap is then
+    let outer_heap = match (&ctx.global.alloc_heap, &state.alloc_heap) {
+        (Some(info), Some(_)) => {
+            let (id, _) =
+                state.declare_temp_var_stm(&body.span, &info.typ, PreLocalDeclKind::StmtLet);
+            state.alloc_heap.replace(id)
+        }
+        _ => state.alloc_heap.take(),
+    };
     let result = exec_closure_body_stms_inner(
         ctx,
         state,
@@ -5117,6 +5250,7 @@ fn exec_closure_body_stms(
     );
     state.alloc_counter = outer_alloc_counter;
     state.fip = outer_fip;
+    state.alloc_heap = outer_heap;
     result.map(|stms| (stms, Arc::new(typ_inv_vars)))
 }
 

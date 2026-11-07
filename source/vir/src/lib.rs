@@ -27,6 +27,7 @@
 //! To ensure that VIR stays simple and easy to use, the vir crate does not depend on rustc.
 
 pub mod alloc_check;
+pub mod alloc_heap;
 pub mod assoc_types_to_air;
 pub mod ast;
 pub mod ast_simplify;

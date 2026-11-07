@@ -665,6 +665,11 @@ where
         if let FunctionKind::TraitMethodImpl { method, trait_typ_args, .. } = &function.x.kind {
             // Inherit requires/ensures from trait method declaration
             let trait_function = ctx.func_map[method].clone();
+            let trait_function = match &ctx.global.alloc_heap {
+                Some(info) => crate::alloc_heap::prepare_function(info, &trait_function)
+                    .unwrap_or(trait_function),
+                None => trait_function,
+            };
             let typ_args = crate::traits::trait_method_impl_typ_args(
                 &trait_function,
                 trait_typ_args,
@@ -847,6 +852,39 @@ pub fn func_def_to_sst(
         state.declare_var_stm(&param.x.name, &param.x.typ, PreLocalDeclKind::Param, false);
     }
 
+    // The ghost allocator heap (alloc_heap.rs): `alloc%heap_pre` is the heap on entry (a hidden
+    // parameter of a heap-aware function, otherwise unknown), `alloc%heap` the current heap
+    let mut heap_init: Option<crate::sst::Stm> = None;
+    let heap_aware =
+        ctx.global.alloc_heap.as_ref().is_some_and(|i| i.aware.contains(&function.x.name));
+    if let Some(info) = &ctx.global.alloc_heap {
+        if matches!(function.x.mode, Mode::Exec | Mode::Proof)
+            && !function.x.attrs.bit_vector
+            && !function.x.attrs.integer_ring
+        {
+            let pre = crate::alloc_heap::heap_pre();
+            if !heap_aware {
+                state.declare_var_stm(
+                    &pre,
+                    &info.typ,
+                    PreLocalDeclKind::Immutable(crate::ast_to_sst::Immutable(
+                        LocalDeclKind::Nondeterministic,
+                    )),
+                    false,
+                );
+            }
+            let cur = state.declare_var_stm(
+                &crate::alloc_heap::heap_cur(),
+                &info.typ,
+                PreLocalDeclKind::StmtLet,
+                false,
+            );
+            let pre_exp = SpannedTyped::new(&function.span, &info.typ, crate::sst::ExpX::Var(pre));
+            heap_init = Some(crate::ast_to_sst::init_var(&function.span, &cur, &pre_exp));
+            state.alloc_heap = Some(cur);
+        }
+    }
+
     // When emitting an expression that refers to input variables, but which is embedded
     // in the body of the function, we need to redirect to the pre-snapshot version of the variable.
     // Specifically, we need to do this for any variable that isn't an old-style mut ref param.
@@ -1021,6 +1059,45 @@ pub fn func_def_to_sst(
         reqs.extend(exps);
     }
 
+    // The heap after the call (`alloc%heap_post` in the ensures) is the current heap where the
+    // ensures are checked. A proof function that is not heap-aware must leave the heap as it
+    // was (its callers assume so).
+    if let (Some(info), Some(cur)) = (&ctx.global.alloc_heap, &state.alloc_heap) {
+        let cur_exp =
+            SpannedTyped::new(&function.span, &info.typ, crate::sst::ExpX::Var(cur.clone()));
+        if heap_aware {
+            let post = crate::alloc_heap::heap_post();
+            enss = enss
+                .iter()
+                .map(|e| {
+                    crate::sst_visitor::map_exp_visitor(e, &mut |x: &Exp| match &x.x {
+                        crate::sst::ExpX::Var(v) | crate::sst::ExpX::VarAt(v, _) if *v == post => {
+                            cur_exp.clone()
+                        }
+                        _ => x.clone(),
+                    })
+                })
+                .collect();
+        } else if function.x.mode == Mode::Proof && !ctx.checking_spec_preconditions() {
+            let pre_exp = SpannedTyped::new(
+                &function.span,
+                &info.typ,
+                crate::sst::ExpX::Var(crate::alloc_heap::heap_pre()),
+            );
+            let eq = crate::sst_util::sst_equal(&function.span, &cur_exp, &pre_exp);
+            let label = crate::ast::ProofNoteLabel {
+                text: Arc::new("this proof function changes the allocator heap: say how in its `ensures` (with `allocator_state`)".to_string()),
+                is_custom_err: true,
+            };
+            let eq = SpannedTyped::new(
+                &eq.span,
+                &eq.typ,
+                crate::sst::ExpX::UnaryOpr(crate::ast::UnaryOpr::ProofNote(label), eq.clone()),
+            );
+            enss.push(eq);
+        }
+    }
+
     // `-V alloc-check`: count allocation-source calls in a ghost local, starting at 0, and check
     // `count <= allocates-bound` (bound evaluated in the pre-state) at every normal return.
     // A trait method impl must also stay within the trait method's own bound, if it has one,
@@ -1125,8 +1202,91 @@ pub fn func_def_to_sst(
         }
     }
 
+    let mut heap_entry_assume: Option<crate::sst::Stm> = None;
+    // The impl of `Allocator::allocate` (or `allocate_zeroed`) of an allocator with a state: its
+    // allocations are within the cost at the state on entry, and the heap moves as it says
+    if let (Some(info), Some(cur), FunctionKind::TraitMethodImpl { method, trait_typ_args, .. }) =
+        (&ctx.global.alloc_heap, &state.alloc_heap, &function.x.kind)
+    {
+        if crate::alloc_heap::is_allocate_method(method) && !check_api_safety {
+            if let Some(self_typ) = info.stateful_self(trait_typ_args) {
+                if !ens_has_return {
+                    return Err(crate::messages::error(
+                        &function.span,
+                        "the `allocate` of an allocator with a state must name its result (`-> (r: Result<..>)`)",
+                    ));
+                }
+                let span = &function.span;
+                let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+                let bool_typ = Arc::new(TypX::Bool);
+                let var = |x: &VarIdent, t: &Typ| {
+                    SpannedTyped::new(span, t, crate::sst::ExpX::Var(x.clone()))
+                };
+                let pre = var(&crate::alloc_heap::heap_pre(), &info.typ);
+                let a = var(&function.x.params[0].x.name, &function.x.params[0].x.typ);
+                let layout = var(&function.x.params[1].x.name, &function.x.params[1].x.typ);
+                let ParamX { name: rname, typ: rtyp, .. } = &function.x.inner_ret.x;
+                let r = var(rname, rtyp);
+                let typs = Arc::new(vec![self_typ.clone()]);
+                let call = |f: &str, args: Vec<Exp>, t: &Typ| {
+                    SpannedTyped::new(
+                        span,
+                        t,
+                        crate::sst::ExpX::Call(
+                            crate::sst::CallFun::Fun(crate::alloc_heap::stateful_fun(f), None),
+                            typs.clone(),
+                            Arc::new(args),
+                        ),
+                    )
+                };
+                heap_entry_assume = Some(Spanned::new(
+                    span.clone(),
+                    StmX::Assume(call("tracked", vec![pre.clone(), a.clone()], &bool_typ)),
+                ));
+                let next = call("heap", vec![pre.clone(), a.clone(), layout.clone(), r], &info.typ);
+                let eq = crate::sst_util::sst_equal(span, &var(cur, &info.typ), &next);
+                let label = crate::ast::ProofNoteLabel {
+                    text: Arc::new("the heap must move as `allocate_next` says".to_string()),
+                    is_custom_err: true,
+                };
+                enss.push(SpannedTyped::new(
+                    span,
+                    &bool_typ,
+                    crate::sst::ExpX::UnaryOpr(crate::ast::UnaryOpr::ProofNote(label), eq),
+                ));
+                if let Some(counter) = &state.alloc_counter {
+                    let cost = call("cost", vec![pre.clone(), a.clone(), layout.clone()], &int_typ);
+                    let le = SpannedTyped::new(
+                        span,
+                        &bool_typ,
+                        crate::sst::ExpX::Binary(
+                            crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                            var(counter, &int_typ),
+                            cost,
+                        ),
+                    );
+                    let label = crate::ast::ProofNoteLabel {
+                        text: Arc::new("the allocations must be within `allocate_cost_at` of the state on entry".to_string()),
+                        is_custom_err: true,
+                    };
+                    enss.push(SpannedTyped::new(
+                        span,
+                        &bool_typ,
+                        crate::sst::ExpX::UnaryOpr(crate::ast::UnaryOpr::ProofNote(label), le),
+                    ));
+                }
+            }
+        }
+    }
+
     // AST --> SST
     let mut stm = expr_to_one_stm_with_post(ctx, &mut state, &body, &function.span)?;
+    if let Some(assume) = heap_entry_assume {
+        stm = stms_to_one_stm(&body.span, vec![assume, stm]);
+    }
+    if let Some(init) = heap_init {
+        stm = stms_to_one_stm(&body.span, vec![init, stm]);
+    }
     if let Some(init) = alloc_init {
         stm = stms_to_one_stm(&body.span, vec![init, stm]);
     }
