@@ -111,6 +111,10 @@ pub(crate) struct Visitor {
     inside_impl: Option<Box<(Generics, Box<Type>)>>,
     // A place to put items that are emitted while visiting
     additional_items: Vec<Item>,
+    /// `struct S<T: Tr with { .. }>`: the bound specifications of each struct's type parameters (by
+    /// struct name, then parameter index), applied to its inherent impl blocks (bound_spec.rs)
+    pub(crate) struct_bound_specs:
+        std::collections::HashMap<String, Vec<(usize, proc_macro2::TokenStream)>>,
 }
 
 // For exec "let pat = init" declarations, recursively find Tracked(x), Ghost(x), x in pat
@@ -5327,6 +5331,9 @@ impl VisitMut for Visitor {
     }
 
     fn visit_item_impl_mut(&mut self, imp: &mut ItemImpl) {
+        // `impl<T: Tr with { .. }>`, `impl<T> .. where T: Tr with { .. }`, and the struct's own
+        // bound specifications: requires of every exec and proof method (bound_spec.rs)
+        self.impl_bound_specs(imp);
         let impl_info = (imp.generics.clone(), imp.self_ty.clone());
         let outer_impl = self.inside_impl.replace(Box::new(impl_info));
         imp.attrs.push(mk_verus_attr(imp.span(), quote! { verus_macro }));
@@ -5633,6 +5640,87 @@ impl quote::ToTokens for MacroInvokeExplicitExpr {
     }
 }
 
+impl Visitor {
+    fn impl_bound_specs(&mut self, imp: &mut ItemImpl) {
+        let span = imp.impl_token.span;
+        let builtin = Builtin(span);
+        let builtin = quote! { #builtin };
+        let alloc_check = match crate::vstd_kind() {
+            crate::VstdKind::IsVstd => quote_spanned! { span => crate::alloc_check },
+            _ => quote_spanned! { span => ::vstd::alloc_check },
+        };
+        let mut reqs =
+            match crate::bound_spec::take_bound_specs(&mut imp.generics, &builtin, &alloc_check) {
+                Ok(r) => r,
+                Err(err) => {
+                    self.additional_items.push(Item::Verbatim(err.to_compile_error()));
+                    return;
+                }
+            };
+        if let (None, Type::Path(tp)) = (&imp.trait_, &*imp.self_ty) {
+            if let Some(last) = tp.path.segments.last() {
+                if let Some(specs) = self.struct_bound_specs.get(&last.ident.to_string()).cloned() {
+                    let tys: Vec<verus_syn::Type> = match &last.arguments {
+                        verus_syn::PathArguments::AngleBracketed(args) => args
+                            .args
+                            .iter()
+                            .filter_map(|a| match a {
+                                verus_syn::GenericArgument::Type(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => vec![],
+                    };
+                    for (i, tokens) in specs {
+                        // (the struct's i-th generic parameter, among type parameters only)
+                        let Some(t) = tys.get(i) else { continue };
+                        let t = quote! { #t };
+                        let r = crate::bound_spec::spec_reqs(&t, tokens, &builtin, &alloc_check)
+                            .and_then(|rs| {
+                                rs.into_iter()
+                                    .map(|r| verus_syn::parse2::<Expr>(r))
+                                    .collect::<verus_syn::Result<Vec<_>>>()
+                            });
+                        match r {
+                            Ok(rs) => reqs.extend(rs),
+                            Err(err) => {
+                                self.additional_items.push(Item::Verbatim(err.to_compile_error()));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if reqs.is_empty() {
+            return;
+        }
+        if imp.trait_.is_some() {
+            let err = verus_syn::Error::new(
+                span,
+                "a bound specification (`with { .. }`) is not supported on a trait impl (its methods cannot have requires)",
+            );
+            self.additional_items.push(Item::Verbatim(err.to_compile_error()));
+            return;
+        }
+        for item in imp.items.iter_mut() {
+            if let ImplItem::Fn(f) = item {
+                if matches!(f.sig.mode, FnMode::Spec(_) | FnMode::SpecChecked(_)) {
+                    continue;
+                }
+                let token = Token![requires](span);
+                let requires = f.sig.spec.requires.get_or_insert_with(|| verus_syn::Requires {
+                    token,
+                    exprs: verus_syn::Specification { exprs: Punctuated::new() },
+                });
+                for r in reqs.iter() {
+                    requires.exprs.exprs.push(r.clone());
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn rewrite_items(
     stream: proc_macro::TokenStream,
     erase_ghost: EraseGhost,
@@ -5661,8 +5749,26 @@ pub(crate) fn rewrite_items_inner(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     visitor.visit_items_prefilter(items);
+    // (`struct S<T: Tr with { .. }>`: take the specifications off the struct first, so that its
+    // impl blocks get them wherever they are)
+    for item in items.iter_mut() {
+        if let Item::Struct(st) = item {
+            let mut specs = Vec::new();
+            for (i, p) in st.generics.params.iter_mut().enumerate() {
+                if let verus_syn::GenericParam::Type(tp) = p {
+                    for t in crate::bound_spec::take_param_specs(tp) {
+                        specs.push((i, t));
+                    }
+                }
+            }
+            if !specs.is_empty() {
+                visitor.struct_bound_specs.insert(st.ident.to_string(), specs);
+            }
+        }
+    }
     let mut index = 0;
     while index < items.len() {
         let item = &mut items[index];
@@ -5703,6 +5809,7 @@ pub(crate) fn rewrite_impl_items(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     visitor.visit_impl_items_prefilter(&mut items.items, for_trait);
     for mut item in &mut items.items {
@@ -5739,6 +5846,7 @@ pub(crate) fn rewrite_expr(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     visitor.visit_expr_mut(&mut expr);
     expr.to_tokens(&mut new_stream);
@@ -5773,6 +5881,7 @@ pub(crate) fn rewrite_proof_decl(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     for mut ss in stmts {
         match ss {
@@ -5829,6 +5938,7 @@ pub(crate) fn rewrite_expr_node(erase_ghost: EraseGhost, inside_ghost: bool, exp
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     visitor.visit_expr_mut(expr);
 }
@@ -6078,6 +6188,7 @@ pub(crate) fn sig_specs_attr(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
 
     if let Some(pat) = &ret_pat {
@@ -6129,6 +6240,7 @@ pub(crate) fn while_loop_spec_attr(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     let mut spec_attr = spec_attr;
     visitor.visit_loop_spec(&mut spec_attr);
@@ -6164,6 +6276,7 @@ pub(crate) fn for_loop_spec_attr(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     let mut spec_attr = spec_attr;
     visitor.visit_loop_spec(&mut spec_attr);
@@ -6225,6 +6338,7 @@ pub(crate) fn proof_block(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     visitor.visit_block_mut(&mut invoke);
     invoke.to_tokens(&mut new_stream);
@@ -6252,6 +6366,7 @@ pub(crate) fn proof_macro_exprs(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     for element in &mut invoke.elements.elements {
         match element {
@@ -6285,6 +6400,7 @@ pub(crate) fn inv_au_macro_exprs(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
 
     invoke
@@ -6329,6 +6445,7 @@ pub(crate) fn proof_macro_explicit_exprs(
         rustdoc: env_rustdoc(),
         inside_impl: None,
         additional_items: Vec::new(),
+        struct_bound_specs: std::collections::HashMap::new(),
     };
     for element in &mut invoke.elements.elements {
         match element {

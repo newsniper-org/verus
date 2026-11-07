@@ -73,8 +73,80 @@ fn replace_idents(ts: TokenStream, from: &str, to: &TokenStream) -> TokenStream 
         .collect()
 }
 
-/// Take the `#[verus_bound_spec{..}]` attributes off `generics`' type parameters, and return the
-/// `requires` expressions they stand for
+/// The `requires` expressions that a bound specification `tokens` (the inside of `with { .. }`)
+/// on the type `t` stands for
+pub(crate) fn spec_reqs(
+    t: &TokenStream,
+    tokens: TokenStream,
+    builtin: &TokenStream,
+    vstd_alloc_check: &TokenStream,
+) -> verus_syn::Result<Vec<TokenStream>> {
+    let fns: BoundFns = verus_syn::parse2(tokens)?;
+    let mut reqs = Vec::new();
+    for f in fns.0 {
+        match f {
+            BoundFn::Drop(e) => {
+                let span = e.span();
+                reqs.push(quote_spanned! { span =>
+                    (#e == 0int && #vstd_alloc_check::bound_drop_alloc_free::<#t>())
+                });
+            }
+            BoundFn::Method(sig) => {
+                reqs.extend(method_reqs(&sig, t, builtin)?);
+            }
+        }
+    }
+    Ok(reqs)
+}
+
+/// The specification tokens of a type parameter's `#[verus_bound_spec{..}]` attributes (removed)
+pub(crate) fn take_param_specs(tp: &mut verus_syn::TypeParam) -> Vec<TokenStream> {
+    let mut specs = Vec::new();
+    tp.attrs.retain(|a| {
+        if a.path().is_ident("verus_bound_spec") {
+            if let Meta::List(list) = &a.meta {
+                specs.push(list.tokens.clone());
+            }
+            false
+        } else {
+            true
+        }
+    });
+    specs
+}
+
+/// The specification tokens of the `where` predicates' `verus_bound_spec { .. }` bounds (removed),
+/// with their bounded types
+pub(crate) fn take_where_specs(
+    where_clause: &mut Option<verus_syn::WhereClause>,
+) -> Vec<(TokenStream, TokenStream)> {
+    let mut out = Vec::new();
+    let Some(wc) = where_clause else { return out };
+    for pred in wc.predicates.iter_mut() {
+        let verus_syn::WherePredicate::Type(pt) = pred else { continue };
+        let ty = &pt.bounded_ty;
+        let ty = quote! { #ty };
+        let mut kept = verus_syn::punctuated::Punctuated::new();
+        for b in pt.bounds.iter() {
+            if let verus_syn::TypeParamBound::Verbatim(ts) = b {
+                let mut it = ts.clone().into_iter();
+                if let (Some(TokenTree::Ident(id)), Some(TokenTree::Group(g))) = (it.next(), it.next())
+                {
+                    if id == "verus_bound_spec" {
+                        out.push((ty.clone(), g.stream()));
+                        continue;
+                    }
+                }
+            }
+            kept.push(b.clone());
+        }
+        pt.bounds = kept;
+    }
+    out
+}
+
+/// Take the bound specifications off `generics` (its type parameters and its `where` clause), and
+/// return the `requires` expressions they stand for
 pub(crate) fn take_bound_specs(
     generics: &mut verus_syn::Generics,
     builtin: &TokenStream,
@@ -84,33 +156,13 @@ pub(crate) fn take_bound_specs(
     for param in generics.params.iter_mut() {
         let GenericParam::Type(tp) = param else { continue };
         let t = tp.ident.clone();
-        let t_toks = quote! { #t };
-        let mut specs = Vec::new();
-        tp.attrs.retain(|a| {
-            if a.path().is_ident("verus_bound_spec") {
-                specs.push(a.clone());
-                false
-            } else {
-                true
-            }
-        });
-        for a in specs {
-            let Meta::List(list) = &a.meta else { continue };
-            let fns: BoundFns = verus_syn::parse2(list.tokens.clone())?;
-            for f in fns.0 {
-                match f {
-                    BoundFn::Drop(e) => {
-                        let span = e.span();
-                        reqs.push(quote_spanned! { span =>
-                            (#e == 0int && #vstd_alloc_check::bound_drop_alloc_free::<#t>())
-                        });
-                    }
-                    BoundFn::Method(sig) => {
-                        reqs.extend(method_reqs(&sig, &t_toks, builtin)?);
-                    }
-                }
-            }
+        let t = quote! { #t };
+        for tokens in take_param_specs(tp) {
+            reqs.extend(spec_reqs(&t, tokens, builtin, vstd_alloc_check)?);
         }
+    }
+    for (t, tokens) in take_where_specs(&mut generics.where_clause) {
+        reqs.extend(spec_reqs(&t, tokens, builtin, vstd_alloc_check)?);
     }
     reqs.into_iter().map(|r| verus_syn::parse2::<Expr>(r)).collect()
 }
@@ -153,7 +205,7 @@ fn method_reqs(
             }
         }
     }
-    let callee = quote_spanned! { span => #t::#m };
+    let callee = quote_spanned! { span => <#t>::#m };
     let tuple = quote! { (#(#args,)*) };
     let fix = |e: &Expr| -> TokenStream { replace_idents(quote! { #e }, "self", &self_ident) };
     let mut out = Vec::new();

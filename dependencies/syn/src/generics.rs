@@ -1076,6 +1076,24 @@ pub(crate) mod parsing {
                             let punct = input.parse()?;
                             bounds.push_punct(punct);
                         }
+                        // Verus: `where T: Tr with { .. }` (see TypeParam): carried as a verbatim
+                        // bound `verus_bound_spec { .. }`, which builtin_macros removes
+                        if input.peek(Token![with]) && input.peek2(token::Brace) {
+                            let with_token: Token![with] = input.parse()?;
+                            let content;
+                            let _brace = braced!(content in input);
+                            let tokens: proc_macro2::TokenStream = content.parse()?;
+                            let id = Ident::new("verus_bound_spec", with_token.span);
+                            if !bounds.empty_or_trailing() {
+                                bounds.push_punct(Token![+](with_token.span));
+                            }
+                            let group = proc_macro2::Group::new(proc_macro2::Delimiter::Brace, tokens);
+                            bounds.push_value(TypeParamBound::Verbatim(
+                                [proc_macro2::TokenTree::Ident(id), proc_macro2::TokenTree::Group(group)]
+                                    .into_iter()
+                                    .collect(),
+                            ));
+                        }
                         bounds
                     },
                 }))

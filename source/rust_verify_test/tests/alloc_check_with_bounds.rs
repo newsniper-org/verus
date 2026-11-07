@@ -126,3 +126,79 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+test_verify_one_file_with_options! {
+    #[test] with_bound_where_impl_struct ["vstd", "-V alloc-check"] => DUP.to_string() + verus_code_str! {
+        // in a `where` clause
+        fn dup2<T>(x: &T) -> (r: (T, T))
+            where T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }
+            allocates 0
+        {
+            (x.clone(), x.clone())
+        }
+
+        // on an impl block: every exec and proof method gets it
+        pub struct Pair<T> { pub a: T }
+
+        impl<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }> Pair<T> {
+            fn twice(&self) -> (r: (T, T))
+                allocates 0
+            {
+                (self.a.clone(), self.a.clone())
+            }
+        }
+
+        // on a struct: its inherent impl blocks get it
+        pub struct Holder<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }> { pub a: T }
+
+        impl<T: Clone> Holder<T> {
+            fn get(&self) -> (r: T)
+                allocates 0
+            {
+                self.a.clone()
+            }
+        }
+
+        fn caller(p: &P)
+            allocates 0
+        {
+            let _ = dup2(p);
+            let q = Pair { a: P(1) };
+            let _ = q.twice();
+            let h = Holder { a: P(2) };
+            let _ = h.get();
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] with_bound_impl_checked_at_call ["vstd", "-V alloc-check"] => DUP.to_string() + verus_code_str! {
+        pub struct Pair<T> { pub a: T }
+
+        impl<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0; }> Pair<T> {
+            fn twice(&self) -> (r: (T, T))
+                allocates 0
+            {
+                (self.a.clone(), self.a.clone())
+            }
+        }
+
+        fn caller(v: Vec<u8>)
+            allocates 10
+        {
+            let q = Pair { a: v };
+            let _ = q.twice(); // FAILS: Vec::clone allocates
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] with_bound_trait_impl_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub trait Tr { fn m(&self); }
+        pub struct S<T>(pub T);
+        impl<T: Clone with { fn clone(&self) -> Self allocates 0; }> Tr for S<T> {
+            fn m(&self) {}
+        }
+    } => Err(err) => assert_vir_error_msg(err, "not supported on a trait impl")
+}
