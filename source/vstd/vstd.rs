@@ -139,6 +139,7 @@ pub broadcast group group_vstd_default {
     std_specs::range::group_range_axioms,
     std_specs::rust_1_100::group_rust_1_100_core_axioms,
     alloc_heap::group_alloc_heap_axioms,
+    alloc_heap::group_allocator_in_axioms,
     #[cfg(not(verus_verify_core))]
     alloc_check::group_alloc_check_axioms,
     std_specs::slice::group_std_slice_alloc_axioms,

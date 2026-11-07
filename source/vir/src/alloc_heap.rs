@@ -710,10 +710,15 @@ fn call_effect_with(
     resolved: Option<&Fun>,
     dynamic: bool,
 ) -> Effect {
-    if aware.contains(callee) || resolved.is_some_and(|r| aware.contains(r)) {
-        return Effect::Always;
-    }
     let target = resolved.unwrap_or(callee);
+    if aware.contains(callee) || resolved.is_some_and(|r| aware.contains(r)) {
+        // (a trusted specification, like `Vec::push`'s, describes the change, which it can make
+        // only through its type arguments; a verified heap-aware function may change anything)
+        let trusted = funs.get(target).is_some_and(|f| {
+            f.x.proxy.is_some() || (f.x.attrs.is_external_body && f.x.body.is_none())
+        }) || trusted_crate(target);
+        return if trusted { typs_effect(typs) } else { Effect::Always };
+    }
     let Some(func) = funs.get(target) else {
         // not in the crate (pruned): only trusted crates are known
         return if trusted_crate(target) { typs_effect(typs) } else { Effect::Always };

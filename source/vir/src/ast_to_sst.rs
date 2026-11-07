@@ -1655,9 +1655,6 @@ fn stm_call(
         stms.push(stm);
     }
     stms.push(Spanned::new(span.clone(), call));
-    if let Some(stm) = heap_after {
-        stms.push(stm);
-    }
     if let Some(counter) = state.alloc_counter.clone() {
         if fun.x.mode == Mode::Exec {
             match stateful_charge {
@@ -1686,6 +1683,10 @@ fn stm_call(
                 )?),
             }
         }
+    }
+    // (after the charge, which reads the heap before the call)
+    if let Some(stm) = heap_after {
+        stms.push(stm);
     }
     if let Some(assume) = fmt_assume {
         stms.push(Spanned::new(span.clone(), StmX::Assume(assume)));

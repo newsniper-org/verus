@@ -615,3 +615,41 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_vec_push ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        use vstd::std_specs::vec::*;
+
+        // a push that grows a vector with no buffer yet allocates once through the pool
+        fn push_new<'a>(p: &'a Pool, v: &mut Vec<u64, &'a Pool>)
+            requires
+                allocator_state(p).0 >= 1,
+                spec_vec_capacity(&*old(v)) == 0,
+                *spec_vec_allocator(&*old(v)) == *p,
+            ensures
+                allocator_state(p).0 == old_allocator_state(p).0 - 1,
+            allocates 0
+        {
+            v.push(7);
+        }
+
+        // and a push that does not grow leaves the pool alone
+        fn push_room<'a>(p: &'a Pool, v: &mut Vec<u64, &'a Pool>)
+            requires
+                old(v)@.len() < spec_vec_capacity(&*old(v)),
+            ensures
+                allocator_state(p) == old_allocator_state(p),
+            allocates 0
+        {
+            v.push(7);
+        }
+
+        // a global-allocator vector keeps the pool's state
+        fn push_global(p: &Pool, v: &mut Vec<u64>)
+            requires allocator_state(p).0 >= 1,
+            ensures allocator_state(p) == old_allocator_state(p),
+        {
+            v.push(7);
+        }
+    } => Ok(())
+}

@@ -424,4 +424,242 @@ pub unsafe trait StatefulAllocator: crate::alloc_check::BoundedAllocator {
     }
 }
 
+
+// ---- The cost and the heap after an allocator call, for any allocator type (the containers'
+// specifications use these; see `std_specs::vec`)
+
+use super::std_specs::rust_1_100::{allocator_allocate_cost, allocator_grow_cost};
+
+/// The allocations of `a.allocate(layout)` in heap `h`: at most the stateless cost, and at most
+/// the cost at the state for an allocator with a state
+pub uninterp spec fn allocator_allocate_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    layout: core::alloc::Layout,
+) -> int;
+
+/// The allocations of `a.grow(ptr, old_layout, new_layout)` in heap `h` (see
+/// `allocator_allocate_cost_in`)
+pub uninterp spec fn allocator_grow_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+) -> int;
+
+/// The heap after `a.allocate(layout)` returned `r`, in heap `h`: the same for the global and the
+/// system allocator, moved by `allocate_next` for an allocator with a state, and unknown otherwise
+pub uninterp spec fn allocator_allocate_heap_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+) -> AllocHeap;
+
+/// The heap after `a.grow(ptr, old_layout, new_layout)` returned `r` (see
+/// `allocator_allocate_heap_in`)
+pub uninterp spec fn allocator_grow_heap_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+) -> AllocHeap;
+
+pub broadcast axiom fn axiom_allocator_allocate_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    layout: core::alloc::Layout,
+)
+    ensures
+        0 <= #[trigger] allocator_allocate_cost_in::<A>(h, a, layout) <= allocator_allocate_cost::<
+            A,
+        >(a, layout),
+;
+
+pub broadcast axiom fn axiom_allocator_grow_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+)
+    ensures
+        0 <= #[trigger] allocator_grow_cost_in::<A>(h, a, ptr, old_layout, new_layout)
+            <= allocator_grow_cost::<A>(a, ptr, old_layout, new_layout),
+;
+
+pub broadcast axiom fn axiom_stateful_allocate_cost_in<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_allocate_cost_in::<A>(h, a, layout) <= stateful_allocate_cost::<A>(
+            h,
+            a,
+            layout,
+        ),
+;
+
+pub broadcast axiom fn axiom_stateful_allocate_heap_in<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_allocate_heap_in::<A>(h, a, layout, r) == stateful_allocate_heap::<A>(
+            h,
+            a,
+            layout,
+            r,
+        ),
+;
+
+pub broadcast axiom fn axiom_stateful_grow_in<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_grow_cost_in::<A>(h, a, ptr, old_layout, new_layout)
+            <= stateful_grow_cost::<A>(h, a, ptr, old_layout, new_layout),
+;
+
+pub broadcast axiom fn axiom_stateful_grow_heap_in<A: StatefulAllocator + ?Sized>(
+    h: AllocHeap,
+    a: &A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_grow_heap_in::<A>(h, a, ptr, old_layout, new_layout, r)
+            == stateful_grow_heap::<A>(h, a, ptr, old_layout, new_layout, r),
+;
+
+// (the global and the system allocator have no state in the heap, and cost what they always do)
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_global_allocate_in(
+    h: AllocHeap,
+    a: &alloc::alloc::Global,
+    layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_allocate_heap_in::<alloc::alloc::Global>(h, a, layout, r) == h,
+;
+
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_global_allocate_cost_in(
+    h: AllocHeap,
+    a: &alloc::alloc::Global,
+    layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_allocate_cost_in::<alloc::alloc::Global>(h, a, layout)
+            == allocator_allocate_cost::<alloc::alloc::Global>(a, layout),
+;
+
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_global_grow_in(
+    h: AllocHeap,
+    a: &alloc::alloc::Global,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_grow_heap_in::<alloc::alloc::Global>(h, a, ptr, old_layout, new_layout, r)
+            == h,
+;
+
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_global_grow_cost_in(
+    h: AllocHeap,
+    a: &alloc::alloc::Global,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_grow_cost_in::<alloc::alloc::Global>(h, a, ptr, old_layout, new_layout)
+            == allocator_grow_cost::<alloc::alloc::Global>(a, ptr, old_layout, new_layout),
+;
+
+// (`&A` forwards every method to `A`)
+pub broadcast axiom fn axiom_ref_allocate_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &&A,
+    layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_allocate_heap_in::<&A>(h, a, layout, r)
+            == allocator_allocate_heap_in::<A>(h, *a, layout, r),
+;
+
+pub broadcast axiom fn axiom_ref_allocate_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &&A,
+    layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_allocate_cost_in::<&A>(h, a, layout)
+            == allocator_allocate_cost_in::<A>(h, *a, layout),
+;
+
+pub broadcast axiom fn axiom_ref_grow_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &&A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+    r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+)
+    ensures
+        #[trigger] allocator_grow_heap_in::<&A>(h, a, ptr, old_layout, new_layout, r)
+            == allocator_grow_heap_in::<A>(h, *a, ptr, old_layout, new_layout, r),
+;
+
+pub broadcast axiom fn axiom_ref_grow_cost_in<A: ?Sized>(
+    h: AllocHeap,
+    a: &&A,
+    ptr: core::ptr::NonNull<u8>,
+    old_layout: core::alloc::Layout,
+    new_layout: core::alloc::Layout,
+)
+    ensures
+        #[trigger] allocator_grow_cost_in::<&A>(h, a, ptr, old_layout, new_layout)
+            == allocator_grow_cost_in::<A>(h, *a, ptr, old_layout, new_layout),
+;
+
+pub broadcast group group_allocator_in_axioms {
+    axiom_allocator_allocate_cost_in,
+    axiom_allocator_grow_cost_in,
+    axiom_stateful_allocate_cost_in,
+    axiom_stateful_allocate_heap_in,
+    axiom_stateful_grow_in,
+    axiom_stateful_grow_heap_in,
+    #[cfg(feature = "alloc")]
+    axiom_global_allocate_in,
+    #[cfg(feature = "alloc")]
+    axiom_global_allocate_cost_in,
+    #[cfg(feature = "alloc")]
+    axiom_global_grow_in,
+    #[cfg(feature = "alloc")]
+    axiom_global_grow_cost_in,
+    axiom_ref_allocate_in,
+    axiom_ref_allocate_cost_in,
+    axiom_ref_grow_in,
+    axiom_ref_grow_cost_in,
+}
+
 } // verus!

@@ -311,7 +311,10 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   `shrink_cost_at`/`shrink_next`. By default these are what std's default bodies do (one
   `allocate` with the new layout); an allocator may change them only for methods its `Allocator`
   impl defines. A call through `&A` is a call of `A`'s method.
-* Not yet: the containers' specifications do not name the states.
+* `Vec::push` and `Vec::reserve` name the states: their cost is the allocator call's cost at
+  its state, and the state moves as the allocator says (and not at all for the global allocator,
+  or when the vector has room). The other containers' specifications do not name the states
+  yet: calling them with an allocator with a state makes the states unknown.
 
 ## Callbacks, closures and traits
 
