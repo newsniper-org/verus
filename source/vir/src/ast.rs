@@ -1013,6 +1013,8 @@ pub enum BuiltinSpecFun {
     ClosureReqHeap,
     /// `closure_ens(f, args, r)` at given allocator heaps before and after the call
     ClosureEnsHeap,
+    /// `closure_alloc(f, args)` at a given allocator heap when the call starts
+    ClosureAllocHeap,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]

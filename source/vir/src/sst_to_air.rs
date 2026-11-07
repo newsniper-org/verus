@@ -1002,6 +1002,7 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 | InternalFun::ClosureEns
                 | InternalFun::ClosureReqHeap
                 | InternalFun::ClosureEnsHeap
+                | InternalFun::ClosureAllocHeap
                 | InternalFun::ClosureOpensInvariants
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc => true,
@@ -1021,6 +1022,7 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                     InternalFun::ClosureEns => str_ident(crate::def::CLOSURE_ENS),
                     InternalFun::ClosureReqHeap => str_ident(crate::def::CLOSURE_REQ_HEAP),
                     InternalFun::ClosureEnsHeap => str_ident(crate::def::CLOSURE_ENS_HEAP),
+                    InternalFun::ClosureAllocHeap => str_ident(crate::def::CLOSURE_ALLOC_HEAP),
                     InternalFun::ClosureOpensInvariants => {
                         str_ident(crate::def::CLOSURE_OPENS_INVARIANTS)
                     }

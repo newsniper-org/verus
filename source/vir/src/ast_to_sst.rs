@@ -2255,6 +2255,7 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::ClosureEns => InternalFun::ClosureEns,
                 BuiltinSpecFun::ClosureReqHeap => InternalFun::ClosureReqHeap,
                 BuiltinSpecFun::ClosureEnsHeap => InternalFun::ClosureEnsHeap,
+                BuiltinSpecFun::ClosureAllocHeap => InternalFun::ClosureAllocHeap,
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,
                 BuiltinSpecFun::DefaultEns => InternalFun::DefaultEns,
                 BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,

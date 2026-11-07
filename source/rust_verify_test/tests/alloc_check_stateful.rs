@@ -755,3 +755,156 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_allocates_heap ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn direct(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 0
+        {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_state(p).0 == if old_allocator_state(p).0 > 0 {
+                        (old_allocator_state(p).0 - 1) as nat
+                    } else {
+                        old_allocator_state(p).0
+                    },
+                allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+            {
+                p.allocate(l)
+            };
+            let _ = f(0);
+            let _ = f(1);
+        }
+
+        fn take(p: &Pool, l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            ensures
+                allocator_state(p).0 == if old_allocator_state(p).0 > 0 {
+                    (old_allocator_state(p).0 - 1) as nat
+                } else {
+                    old_allocator_state(p).0
+                },
+            allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+        {
+            p.allocate(l)
+        }
+
+        fn by_value(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 0
+        {
+            let g = take;
+            let _ = g(p, l);
+            let _ = g(p, l);
+        }
+
+        fn apply<F: Fn(u8) -> u8>(f: &F) -> u8
+            requires call_requires(*f, (0u8,)), call_allocates(*f, (0u8,)) <= 0,
+            allocates 0
+        {
+            f(0)
+        }
+
+        fn generic_heap_free() -> u8
+            allocates 0
+        {
+            let f = |x: u8| -> u8 allocates 0 { 1 };
+            apply(&f)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_allocates_heap_body ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn too_small(p: &Pool, l: Layout) {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates if old_allocator_state(p).0 >= 0 { 0int } else { 1int } // FAILS: 1 when the pool is empty
+            {
+                p.allocate(l)
+            };
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_allocates_heap_not_generic ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn apply<F: Fn(u8) -> Result<NonNull<[u8]>, AllocError>>(f: F)
+            requires forall|x: u8| call_requires(f, (x,)),
+        {
+            let _ = f(0);
+        }
+
+        fn generic_bad(p: &Pool, l: Layout) {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+            {
+                p.allocate(l)
+            };
+            apply(f); // FAILS: its bound needs the heap
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_allocates_heap_consistent ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        // The two calls cost 0 and 1 with the same argument: the bound depends on the heap, so
+        // nothing may equate it with one heap-free `call_allocates(f, (0,))`
+        fn no_false(p: &Pool, l: Layout)
+            requires allocator_state(p).0 == 1,
+            allocates 1
+        {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_state(p).0 == if old_allocator_state(p).0 > 0 {
+                        (old_allocator_state(p).0 - 1) as nat
+                    } else {
+                        old_allocator_state(p).0
+                    },
+                allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+            {
+                p.allocate(l)
+            };
+            let _ = f(0);
+            let _ = f(0);
+            assert(false); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_closure_allocates_plain_heap ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn plain(p: &Pool, l: Layout) {
+            let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates if allocator_state(p).0 > 0 { 0int } else { 1int }
+            {
+                p.allocate(l)
+            };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "use `old_allocator_state(a)`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] stateful_fn_value_allocates_heap_consistent ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn take(p: &Pool, l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            ensures
+                allocator_state(p).0 == if old_allocator_state(p).0 > 0 {
+                    (old_allocator_state(p).0 - 1) as nat
+                } else {
+                    old_allocator_state(p).0
+                },
+            allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
+        {
+            p.allocate(l)
+        }
+
+        fn no_false(p: &Pool, l: Layout)
+            requires allocator_state(p).0 == 1,
+            allocates 1
+        {
+            let g = take;
+            let _ = g(p, l);
+            let _ = g(p, l);
+            assert(false); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}

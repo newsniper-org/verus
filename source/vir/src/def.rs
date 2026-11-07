@@ -225,6 +225,7 @@ pub const CLOSURE_REQ: &str = "closure_req";
 pub const CLOSURE_ENS: &str = "closure_ens";
 pub const CLOSURE_REQ_HEAP: &str = "closure_req_heap";
 pub const CLOSURE_ENS_HEAP: &str = "closure_ens_heap";
+pub const CLOSURE_ALLOC_HEAP: &str = "closure_alloc_heap";
 pub const CLOSURE_OPENS_INVARIANTS: &str = "closure_opens_invariants";
 pub const CLOSURE_ALLOC: &str = "closure_alloc";
 pub const DEFAULT_ENS: &str = "default_ens";

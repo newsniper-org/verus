@@ -61,6 +61,7 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let closure_ens = str_to_node(CLOSURE_ENS);
     let closure_req_heap = str_to_node(CLOSURE_REQ_HEAP);
     let closure_ens_heap = str_to_node(CLOSURE_ENS_HEAP);
+    let closure_alloc_heap = str_to_node(CLOSURE_ALLOC_HEAP);
     let closure_opens_invariants = str_to_node(CLOSURE_OPENS_INVARIANTS);
     let closure_alloc = str_to_node(CLOSURE_ALLOC);
     let default_ens = str_to_node(DEFAULT_ENS);
@@ -1063,6 +1064,24 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
             :pattern (([closure_alloc] t1 d2 t2 f a))
             :qid prelude_closure_alloc_nonneg
             :skolemid skolem_prelude_closure_alloc_nonneg
+        )))
+        // closure_alloc at a given allocator heap when the call starts (alloc_heap.rs). Where the
+        // heap-free closure_req holds, it is the heap-free closure_alloc. (A closure or function
+        // whose allocates bound depends on the heap gets no heap-free closure_req axiom, so
+        // closure_req may be false for it, and this axiom does not force its bound to be the
+        // same at every heap.)
+        (declare-fun [closure_alloc_heap] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Int)
+        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (h [Poly])) (!
+            (<= 0 ([closure_alloc_heap] tf d ta f a h))
+            :pattern (([closure_alloc_heap] tf d ta f a h))
+            :qid prelude_closure_alloc_heap_nonneg
+            :skolemid skolem_prelude_closure_alloc_heap_nonneg
+        )))
+        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (h [Poly])) (!
+            (=> ([closure_req] tf d ta f a) (= ([closure_alloc_heap] tf d ta f a h) ([closure_alloc] tf d ta f a)))
+            :pattern (([closure_alloc_heap] tf d ta f a h))
+            :qid prelude_closure_alloc_heap
+            :skolemid skolem_prelude_closure_alloc_heap
         )))
 
         // Decreases

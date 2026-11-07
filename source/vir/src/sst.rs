@@ -54,6 +54,7 @@ pub enum InternalFun {
     /// (alloc_heap.rs) closure_req/closure_ens at given allocator heaps
     ClosureReqHeap,
     ClosureEnsHeap,
+    ClosureAllocHeap,
     ClosureOpensInvariants,
     DefaultEns,
     CheckDecreaseHeight,

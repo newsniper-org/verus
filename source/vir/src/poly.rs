@@ -540,6 +540,7 @@ fn visit_exp(ctx: &Ctx, state: &mut State, exp: &Exp) -> Exp {
                 | InternalFun::ClosureEns
                 | InternalFun::ClosureReqHeap
                 | InternalFun::ClosureEnsHeap
+                | InternalFun::ClosureAllocHeap
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc,
             ) => {

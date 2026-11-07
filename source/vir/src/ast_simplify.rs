@@ -988,12 +988,15 @@ fn exec_closure_spec_param(
     (tuple_ident, tuple_var)
 }
 
+/// (`alloc_mentions_heap`: the `allocates` bound depends on the heap, see
+/// exec_closure_spec_allocates)
 fn exec_closure_spec_requires(
     state: &mut State,
     span: &Span,
     closure_var: &Expr,
     params: &VarBinders<Typ>,
     requires: &Exprs,
+    alloc_mentions_heap: bool,
 ) -> Result<Vec<Expr>, VirErr> {
     // For requires:
 
@@ -1038,7 +1041,8 @@ fn exec_closure_spec_requires(
     let heap_ident = crate::ast_util::air_unique_var("closure%heap");
     let heap_typ = state.closure_heap_typ.clone();
     let heap_var = SpannedTyped::new(span, &heap_typ, ExprX::Var(heap_ident.clone()));
-    let mentions = state.alloc_heap.is_some() && crate::alloc_heap::mentions_heap(&reqs_body);
+    let mentions = (state.alloc_heap.is_some() && crate::alloc_heap::mentions_heap(&reqs_body))
+        || alloc_mentions_heap;
     let reqs_at_h = rewrite_closure_heap(state, &reqs_body, &heap_var, &heap_var)?;
     let bool_typ = Arc::new(TypX::Bool);
     let forall = Quant { quant: air::ast::Quant::Forall };
@@ -1066,7 +1070,9 @@ fn exec_closure_spec_requires(
     let req_forall_heap =
         SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, req_heap_body));
     // (a specification that mentions the heap says nothing about `closure_req` for every heap:
-    // such a closure cannot be passed where only `call_requires` is known)
+    // such a closure cannot be passed where only `call_requires` is known. That includes an
+    // `allocates` bound that depends on the heap: the prelude equates `closure_alloc_heap` at
+    // every heap with `closure_alloc` where `closure_req` holds, which such a bound contradicts.)
     if mentions { Ok(vec![req_forall_heap]) } else { Ok(vec![req_forall_old, req_forall_heap]) }
 }
 
@@ -1229,12 +1235,15 @@ fn exec_closure_spec_allocates(
     closure_var: &Expr,
     params: &VarBinders<Typ>,
     bound: &Expr,
-) -> Result<Expr, VirErr> {
+) -> Result<Vec<Expr>, VirErr> {
     // `-V alloc-check`: for `|a0, a1| allocates f(a0, a1) { .. }` emit
     //
     //      forall x :: closure_alloc(closure, x) == f(x.0, x.1)
+    //      forall x, h :: closure_alloc_heap(closure, x, h) == f(x.0, x.1)
     //
-    // with `closure_alloc(closure, x)` as the trigger. The closure body is checked against `f`.
+    // with `closure_alloc(closure, x)` (`closure_alloc_heap(closure, x, h)`) as the trigger. The
+    // closure body is checked against `f`. If `f` mentions the heap (`old_allocator_state(a)`:
+    // the heap when the closure is called, alloc_heap.rs), only the second, with `f` at `h`.
     let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, params);
     let tuple_typ = tuple_var.typ.clone();
 
@@ -1255,41 +1264,68 @@ fn exec_closure_spec_allocates(
     let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
     // compared as `int`, and clamped at 0 like a function's bound: `call_allocates` is never
     // negative, so an unclamped negative bound would contradict that
-    let raw_bound = SpannedTyped::new(
-        &bound.span,
-        &int_typ,
-        ExprX::Block(Arc::new(decls), Some(bound.clone())),
-    );
-    let zero = SpannedTyped::new(
-        span,
-        &int_typ,
-        ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
-    );
-    let nonneg = crate::ast_util::mk_ineq(span, &zero, &raw_bound, crate::ast::InequalityOp::Le);
-    let bound_body = SpannedTyped::new(span, &int_typ, ExprX::If(nonneg, raw_bound, Some(zero)));
-
-    let alloc_call = wrap_in_trigger(&SpannedTyped::new(
-        span,
-        &int_typ,
-        ExprX::Call {
-            target: CallTarget::BuiltinSpecFun(
-                BuiltinSpecFun::ClosureAlloc,
-                closure_trait_call_typ_args(state, closure_var, params),
-                Arc::new(vec![]),
-            ),
-            args: Arc::new(vec![closure_var.clone(), tuple_var.clone()]),
-            post_args: None,
-            body: None,
-        },
-    ));
-    let quant_body = mk_eq(span, &alloc_call, &bound_body);
-
+    let clamp = |b: &Expr| -> Expr {
+        let raw_bound =
+            SpannedTyped::new(&b.span, &int_typ, ExprX::Block(Arc::new(decls.clone()), Some(b.clone())));
+        let zero = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        let nonneg =
+            crate::ast_util::mk_ineq(span, &zero, &raw_bound, crate::ast::InequalityOp::Le);
+        SpannedTyped::new(span, &int_typ, ExprX::If(nonneg, raw_bound, Some(zero)))
+    };
+    let mk_alloc_call = |state: &mut State, f: &Expr, heap: Option<&Expr>| -> Expr {
+        let mut args = vec![f.clone(), tuple_var.clone()];
+        args.extend(heap.cloned());
+        wrap_in_trigger(&SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    if heap.is_some() {
+                        BuiltinSpecFun::ClosureAllocHeap
+                    } else {
+                        BuiltinSpecFun::ClosureAlloc
+                    },
+                    closure_trait_call_typ_args(state, f, params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(args),
+                post_args: None,
+                body: None,
+            },
+        ))
+    };
     let bool_typ = Arc::new(TypX::Bool);
     let forall = Quant { quant: air::ast::Quant::Forall };
+    let mut out = Vec::new();
+
+    // at the heap h when the call starts
+    if state.alloc_heap.is_some() {
+        let heap_ident = crate::ast_util::air_unique_var("closure%heap");
+        let heap_typ = state.closure_heap_typ.clone();
+        let heap_var = SpannedTyped::new(span, &heap_typ, ExprX::Var(heap_ident.clone()));
+        let bound_at_h = rewrite_closure_heap(state, bound, &heap_var, &heap_var)?;
+        let call = mk_alloc_call(state, closure_var, Some(&heap_var));
+        let body = mk_eq(span, &call, &clamp(&bound_at_h));
+        let binders = Arc::new(vec![
+            Arc::new(VarBinderX { name: tuple_ident.clone(), a: tuple_typ.clone() }),
+            Arc::new(VarBinderX { name: heap_ident, a: heap_typ }),
+        ]);
+        out.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders, body)));
+        if crate::alloc_heap::mentions_heap(bound) {
+            return Ok(out);
+        }
+    }
+
+    let bound_body = clamp(bound);
+    let alloc_call = mk_alloc_call(state, closure_var, None);
+    let quant_body = mk_eq(span, &alloc_call, &bound_body);
     let binders =
         Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident.clone(), a: tuple_typ.clone() })]);
-    let value_level =
-        SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders, quant_body));
+    out.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders, quant_body)));
 
     // When the bound mentions only the parameters, it is the same for every value of the closure
     // type (all of them come from this closure expression, and a closure's captures do not
@@ -1300,34 +1336,20 @@ fn exec_closure_spec_allocates(
         free.remove(&p.name);
     }
     if !free.is_empty() {
-        return Ok(value_level);
+        return Ok(out);
     }
     let (c_ident, c_var) = {
         let ident = state.next_temp();
         (ident.clone(), SpannedTyped::new(span, &closure_var.typ, ExprX::Var(ident)))
     };
-    let alloc_call_c = wrap_in_trigger(&SpannedTyped::new(
-        span,
-        &int_typ,
-        ExprX::Call {
-            target: CallTarget::BuiltinSpecFun(
-                BuiltinSpecFun::ClosureAlloc,
-                closure_trait_call_typ_args(state, &c_var, params),
-                Arc::new(vec![]),
-            ),
-            args: Arc::new(vec![c_var.clone(), tuple_var.clone()]),
-            post_args: None,
-            body: None,
-        },
-    ));
+    let alloc_call_c = mk_alloc_call(state, &c_var, None);
     let type_level_body = mk_eq(span, &alloc_call_c, &bound_body);
     let type_binders = Arc::new(vec![
         Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ }),
         Arc::new(VarBinderX { name: c_ident, a: closure_var.typ.clone() }),
     ]);
-    let type_level =
-        SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, type_binders, type_level_body));
-    Ok(conjoin(span, &vec![value_level, type_level]))
+    out.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, type_binders, type_level_body)));
+    Ok(out)
 }
 
 fn exec_closure_spec(
@@ -1342,8 +1364,16 @@ fn exec_closure_spec(
     allocates: &Option<Expr>,
     is_proof: bool,
 ) -> Result<Expr, VirErr> {
-    let mut exprs: Vec<Expr> =
-        exec_closure_spec_requires(state, span, closure_var, params, requires)?;
+    let alloc_mentions_heap = state.alloc_heap.is_some()
+        && allocates.as_ref().is_some_and(|b| crate::alloc_heap::mentions_heap(b));
+    let mut exprs: Vec<Expr> = exec_closure_spec_requires(
+        state,
+        span,
+        closure_var,
+        params,
+        requires,
+        alloc_mentions_heap,
+    )?;
 
     if ensures.len() > 0 {
         exprs.extend(exec_closure_spec_ensures(
@@ -1365,7 +1395,7 @@ fn exec_closure_spec(
         exprs.push(ens_mask);
     }
     if let Some(bound) = allocates {
-        exprs.push(exec_closure_spec_allocates(state, span, closure_var, params, bound)?);
+        exprs.extend(exec_closure_spec_allocates(state, span, closure_var, params, bound)?);
     }
     Ok(conjoin(span, &exprs))
 }
@@ -1473,6 +1503,18 @@ fn add_fndef_axioms_to_function(
 
     let mut fndef_axioms = vec![];
 
+    // A function (not a trait method) whose `allocates` bound depends on the allocator heap gets
+    // `closure_alloc_heap` at the heap when the call starts, and no heap-free `closure_req` or
+    // `closure_alloc` (see exec_closure_spec_allocates). (A trait method's bound stays as it is:
+    // `old_allocator_state` is uninterpreted there, so its heap-free axioms say nothing wrong.)
+    let alloc_at_heap = alloc_check
+        && state.alloc_heap.is_some()
+        && !matches!(
+            function.x.kind,
+            FunctionKind::TraitMethodDecl { .. } | FunctionKind::TraitMethodImpl { .. }
+        )
+        && function.x.allocates.as_ref().is_some_and(|b| crate::alloc_heap::mentions_heap(b));
+
     // Don't need to repeat the 'requires' for a trait impl fn because requires can't change
     if !is_trait_method_impl {
         let req_forall = exec_closure_spec_requires(
@@ -1481,6 +1523,7 @@ fn add_fndef_axioms_to_function(
             &fndef_singleton,
             &params,
             &function.x.require,
+            alloc_at_heap,
         )?;
         fndef_axioms.extend(req_forall);
     }
@@ -1526,7 +1569,15 @@ fn add_fndef_axioms_to_function(
     // Without -V alloc-check no bound is checked, so none may be assumed either: a trait
     // declaration's bound and an impl's own bound would otherwise be two unchecked axioms that
     // can contradict each other.
-    if let (true, Some(alloc_expr)) = (alloc_check, &function.x.allocates) {
+    if let (true, Some(alloc_expr)) = (alloc_at_heap, &function.x.allocates) {
+        fndef_axioms.extend(exec_closure_spec_allocates(
+            state,
+            &function.span,
+            &fndef_singleton,
+            &params,
+            alloc_expr,
+        )?);
+    } else if let (true, Some(alloc_expr)) = (alloc_check, &function.x.allocates) {
         let span = &function.span;
         let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
         let tuple_typ = tuple_var.typ.clone();
