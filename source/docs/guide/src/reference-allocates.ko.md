@@ -75,7 +75,7 @@ reallocate(grow·shrink)입니다. deallocate는 세지 않습니다.
 문서로 정해져 있습니다.
 * LLVM LangRef(main @932a5ca)는 할당 생략을 허용합니다. `realloc`을 할당과 해제로 나누고
   그중 하나를 생략하는 것도 허용합니다.
-* rustc 1.99.1의 `core::alloc::GlobalAlloc` 문서(`core/src/alloc/global.rs`, rust-lang/rust#159720)는
+* rustc 1.100의 `core::alloc::GlobalAlloc` 문서(`core/src/alloc/global.rs`, rust-lang/rust#159720)는
   할당을 합치는 것도 허용합니다.
 
 소스에 없는 할당기 호출을 컴파일러가 *새로 만드는 것*을 허용하거나 금지하는 현행 문서는 없습니다.
@@ -187,7 +187,9 @@ impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데
 `allocate_zeroed`를 한 번 호출합니다. 그래서 표시 trait은 impl이 `grow`, `grow_zeroed`, `shrink`를 정의할
 때만 `grow_cost`, `grow_zeroed_cost`, `shrink_cost`를 정의할 수 있습니다.
 
-`Vec<T, A>`와 `Box<T, A>`는 실제로 하는 호출의 비용을 청구합니다. 성장하는 `Vec::push`에는 벡터의
+`Vec<T, A>`와 `Box<T, A>`는 실제로 하는 호출의 비용을 청구합니다. 버퍼가 없는(capacity 0) 벡터가
+성장할 때는 대신 `allocate`를 부르므로 새 layout의 `allocate_cost`가 청구됩니다. 크기 0인 `T`(그리고
+그런 `T`의 `Box::new_in`)는 아무것도 부르지 않습니다. 기존 버퍼를 키우는 `Vec::push`에는 벡터의
 할당기(`spec_vec_allocator`), 버퍼 포인터, 이전 capacity의 layout, 그리고 std의 성장 정책이 고르는
 capacity(`vec_amortized_cap`, std 1.100의 정책)의 layout으로 계산한 `grow_cost`가 청구됩니다. 성장한 뒤
 벡터의 capacity는 정확히 그 값이고, 할당기는 바뀌지 않습니다. 그래서 설정이나 요청 크기에 따라 비용이
@@ -402,7 +404,7 @@ fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0;
 함수 안에서는 그 메서드를 부르면 bound의 명세를 씁니다. 호출자는 `T`를 인스턴스화한 타입이 그 명세를
 만족함을 보여야 합니다. 메서드 명세에는 `requires`(impl이 받아들여야 함), `ensures`(impl이 보장해야 함),
 `allocates`를 쓸 수 있습니다. `fn drop allocates 0;`은 `T`를 drop해도 할당하지 않는다는 뜻이고, Verus가
-인스턴스의 drop glue로 확인하므로 위의 `P`에는 `AllocFreeDrop` impl이 필요 없습니다. 이 블록은
+인스턴스의 drop glue로 확인하므로 `T`를 인스턴스화하는 타입에는 `AllocFreeDrop` impl이 필요 없습니다. 이 블록은
 `requires`(`call_requires`, `call_ensures`, `call_allocates`)로 풀립니다. 함수의 타입 매개변수 말고도
 `where` 절(`where T: Clone with { .. }`, 매개변수가 아닌 타입에도), inherent impl 블록(그 안의 모든 exec·proof
 메서드가 받음), struct의 타입 매개변수(같은 `verus!` 블록에 있는 그 struct의 모든 inherent impl 블록이,
@@ -414,7 +416,8 @@ fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0;
 FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되는 함수를 구분합니다. 그 용어로
 말하면 `allocates n` 상한은 `fbip(n)`의 힙 부분입니다. 할당은 최대 `n`번이고 해제는 몇 번이든
 됩니다. `#[verifier::fip]`는 `fip(n)`입니다. 이 함수는 정상 반환할 때 메모리를 전혀 해제하지 않습니다.
-`allocates` 상한이 없으면 `fip`이고, 할당도 하지 않는다는 뜻입니다(`allocates 0`).
+`allocates` 상한이 없으면 `fip`이고, 할당도 하지 않는다는 뜻입니다(`allocates 0`). 이 속성에는
+`-V alloc-check`가 필요하며, 한 함수에는 `#[verifier::fip]`와 `#[verifier::fip(strict)]` 중 하나만 붙일 수 있습니다.
 
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
@@ -450,6 +453,10 @@ fn push_spare(v: &mut Vec<u64>)
   구현해야 합니다. 제네릭 타입에는 `T: NoDeallocDrop` bound가 필요합니다. `Box` 안의 내용을 밖으로
   move하면 그 `Box`가 해제됩니다. 제자리에 머무르려면 대신 `Box`를 재사용하세요(`*b = ..`, 또는
   필드 갱신).
+
+`core::mem::forget`은 해제하지 않으므로, fip 함수는 자신이 가진 값을 forget할 수 있습니다. 그러면 그
+값의 메모리가 샙니다. FP²의 선형 규율과 달리 `#[verifier::fip]`는 아무것도 해제하지 않는다는 뜻일 뿐,
+가진 모든 셀을 재사용한다는 뜻은 아닙니다.
 
 `unsafe impl NoDeallocDrop for X`는 다음 조건을 모두 만족할 때만 받습니다. `X`가 `Box`가 아니고,
 `X` 자신의 `Drop`이 있다면 그것이 `#[verifier::fip]`이며, 각 필드가 drop glue가 없거나 `NoDeallocDrop`이어야
@@ -490,6 +497,10 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 * 호출 대상은 다른 엄격한 함수이거나 std나 vstd의 함수일 수 있습니다. std와 vstd의 함수는 호출자의
   코드로 되돌아 부르지 않습니다. 그렇게 할 수 있는 호출(콜백을 통한 호출)은 위의 검사가 거부하기
   때문입니다. 다른 crate의 함수 호출과 callee를 알 수 없는 호출(제네릭 호출, 함수 값)은 거부합니다.
+* 소멸자도 호출로 칩니다. 그 함수의 drop이 실행하는 소멸자와, std나 vstd 호출이 인스턴스화된 타입의
+  소멸자(std는 `Vec::<T>::clear`처럼 호출 안에서 그런 값을 drop할 수 있습니다)입니다. 타입 매개변수,
+  associated 타입이나 불투명 타입, `dyn`이 관련되어 소멸자를 여기서 알 수 없는 drop(또는 그런 호출)은
+  거부합니다. `Copy` bound가 있으면 소멸자가 없습니다.
 * 엄격한 함수들 사이의 호출 순환은 `become` 호출로만 이루어져야 합니다. 꼬리가 아닌 호출은 frame을
   하나 더하므로, 그런 호출을 거치는 순환은 스택을 키웁니다.
 
@@ -506,7 +517,12 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 생성자 안의 재귀에는 루프로 바꾸는 재작성이 경고에 suggestion으로 붙습니다. 편집기(verus-analyzer)는
 이것을 quick fix로 보여 줍니다. `-V fip-lint=fix`는 대신 재작성을 소스 파일에 씁니다. 재작성은 crate가
 여전히 검증될 때만 남습니다. 검증이 성공한 뒤 Verus는 재작성을 하나씩 쓰고 crate를 다시 검증하며,
-실패하면 파일을 되돌립니다. 따라서 재작성에 대해 신뢰하는 것은 없습니다.
+실패하면 파일을 되돌립니다. 따라서 재작성에 대해 신뢰하는 것은 없습니다. 그래서 `=fix`는 crate의 일부만
+검증하거나 검사를 건너뛰는 옵션(`--no-verify`, `--verify-root`, `--verify-module`, `--verify-only-module`,
+`--verify-function`, `--no-lifetime`, `--no-erasure-check`, `--no-trait-conflicts`, `-V allow-inline-air`,
+`-V ignore-unexpected-smt`)과 함께 쓸 수 없습니다. 실행하는 동안 원본은 `<file>.fip-lint-orig`에 보관되며,
+SIGINT, SIGTERM, SIGHUP을 받으면 원본을 복원합니다. 프로세스가 강제로 죽으면 백업이 남고, 다음 `=fix`
+실행은 백업을 복원하거나 지울 때까지 시작하지 않습니다.
 
 재작성은 호출 그래프의 강하게 연결된 성분(SCC) 단위로 이루어지므로 상호 재귀도 재작성됩니다. 성분 안의
 모든 재귀 호출은 꼬리 호출이거나, 꼬리 위치에 있는 생성자 안의 유일한 재귀 호출이어야 합니다(`Box::new`나
@@ -517,7 +533,10 @@ fn sum(n: u64, acc: u64) -> (r: u64)
   enum이며, 각 variant는 그 함수의 인자와 구멍을 담습니다. 그래서 함수들의 반환 타입이 달라도 됩니다.
   각 함수는 자기 상태에서 루프를 시작합니다.
 
-재작성한 코드는 생성자의 필드와 호출의 인자를 원래 코드와 같은 순서로 평가합니다. 루프 불변식은 두 가지를
+재작성한 코드는 생성자의 필드와 호출의 인자를 원래 코드와 같은 순서로 평가합니다. 재귀 호출 뒤에 오는
+필드는 원래 코드에서는 호출이 돌아온 뒤에, 루프에서는 다음 반복 전에 평가되므로, 그런 필드가 리터럴이나
+이름일 때만 재작성을 제안합니다. 마찬가지로 drop이 사용자 코드를 실행하는 값(std 밖의 `Drop` impl, 또는 타입
+매개변수)은 루프에서 다른 시점에 drop되므로, 그런 타입의 바인딩이 있는 함수는 재작성하지 않습니다. 루프 불변식은 두 가지를
 말합니다.
 
 * 구멍의 최종 값(`*final(hole)`)이 현재 인자에 대한 `ensures`를 만족하면, 결과는 원래 인자에 대한
@@ -534,6 +553,10 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 
 * 함수가 자유 함수가 아닌 경우(예: 메서드)
 * 매개변수가 `&mut`, ghost, tracked이거나, 이름이 아닌 패턴인 경우
+* 본문이 매개변수 이름을 다시 바인딩하는 경우(`let mut k = k + 1;`): 루프는 매개변수에 이름으로 대입합니다
+* 함수가 매크로 확장에서 나온 경우
+* 재귀 호출 뒤의 생성자 필드가 리터럴이나 이름이 아니거나, 어떤 바인딩의 drop이 사용자 코드를 실행하는
+  경우(위 참고)
 * 함수에 `decreases`가 없거나(루프의 `decreases`가 됩니다), `returns`를 쓰거나, `?`로 일찍 반환하는 경우
 * 반환 타입이 필드 없는 variant를 가진 enum이 아닌 경우
 * 함수가 여럿일 때, 제네릭 매개변수가 서로 다르거나, `decreases` 식이 함수마다 둘 이상이거나, 모두가
@@ -574,12 +597,16 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
   `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
-* `drop`이 아닌 `external_body` 함수
+* `drop`이 아닌 `external_body` 함수, 그리고 `external_body` 타입(숨은 필드의 drop은 vstd가 선언한 std
+  타입에 대해서만 신뢰)
+* 이름으로 알아보는 crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를
+  통해서만 사용자 코드에 닿고, 유한한 스택 공간을 씁니다
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
-알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하는 쪽이며, 불건전하지는 않습니다.
-* 할당기가 전역 할당기도 참조도 아닌 컨테이너의 clone, 그리고 자신이 가진 할당기에 위임하는
-  할당기(`Box`, `Rc`, `Arc`, `Pin`을 할당기로 쓰는 경우)
+알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.
+* 할당기가 전역 할당기도, 참조도, `BoundedAllocator`도 아닌 컨테이너의 clone, 그리고 자신이 가진 할당기에
+  위임하는 할당기(`Box`, `Rc`, `Arc`, `Pin`을 할당기로 쓰는 경우): 비용이 해석되지 않는 항
+  (`allocator_clone_cost::<A>()`, `allocator_max_cost::<A>()`)이므로 그 항을 그대로 쓰는 상한만 검증됩니다
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop
 * drop glue 안의 projection 타입(예: `Cow`)
 * 구조체의 필드 하나만 캡처하는 클로저를 구조체 전체를 캡처한 것처럼 검사하는 점

@@ -78,7 +78,7 @@ The compiled program may make fewer calls. The compiler is documented to be free
 allocations and to merge them:
 * LLVM LangRef (main @932a5ca) allows allocation elision, and allows splitting `realloc` into
   an allocation and a free, one of which may be elided.
-* The `core::alloc::GlobalAlloc` docs at rustc 1.99.1 (`core/src/alloc/global.rs`,
+* The `core::alloc::GlobalAlloc` docs at rustc 1.100 (`core/src/alloc/global.rs`,
   rust-lang/rust#159720) also allow merging allocations.
 
 No current document either allows or forbids the compiler to *introduce* an allocator call that
@@ -194,8 +194,10 @@ calls `allocate` or `allocate_zeroed` once with the new layout. So the marker ma
 `grow_cost`, `grow_zeroed_cost` or `shrink_cost` only if the impl defines `grow`, `grow_zeroed` or
 `shrink`.
 
-`Vec<T, A>` and `Box<T, A>` charge the cost of the very call they make. A `Vec::push` that grows
-is charged `grow_cost` with the vector's allocator (`spec_vec_allocator`), its buffer pointer, the
+`Vec<T, A>` and `Box<T, A>` charge the cost of the very call they make. A vector without a buffer
+(capacity 0) that grows calls `allocate` instead, and is charged `allocate_cost` of the new
+layout; a zero-sized `T` (and `Box::new_in` of one) calls nothing. A `Vec::push` that grows an
+existing buffer is charged `grow_cost` with the vector's allocator (`spec_vec_allocator`), its buffer pointer, the
 layout of its old capacity, and the layout of the capacity that std's growth policy picks
 (`vec_amortized_cap`, the policy of std 1.100). After the growth the vector has exactly that
 capacity, and its allocator does not change. An allocator whose cost depends on its
@@ -423,7 +425,7 @@ Inside the function, a call of the method gets the bound's specification; a call
 that the type it instantiates `T` with meets it. A method's specification may have `requires`
 (which the impl must accept), `ensures` (which the impl must give) and `allocates`.
 `fn drop allocates 0;` says that dropping a `T` allocates nothing; Verus checks it against the
-instantiation's drop glue, so `P` above needs no `AllocFreeDrop` impl. The block stands for
+instantiation's drop glue, so the type that instantiates `T` needs no `AllocFreeDrop` impl. The block stands for
 `requires` clauses (`call_requires`, `call_ensures`, `call_allocates`). Besides a function's
 type parameters, it may appear in a `where` clause (`where T: Clone with { .. }`, also for a type
 that is not a parameter), on an inherent impl block (every exec and proof method gets it), and
@@ -437,7 +439,8 @@ The FP² paper (Lorenzen, Leijen and Swierstra, ICFP 2023) distinguishes functio
 place. In its terms, an `allocates n` bound is the heap part of `fbip(n)`: at most `n`
 allocations, with any number of deallocations. `#[verifier::fip]` is `fip(n)`: the function also
 never deallocates memory on a normal return. Without an `allocates` bound it is `fip`, which
-means no allocation either (`allocates 0`).
+means no allocation either (`allocates 0`). The attribute needs `-V alloc-check`, and a function
+may carry only one of `#[verifier::fip]` and `#[verifier::fip(strict)]`.
 
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
@@ -474,6 +477,10 @@ Two things are checked:
   implements the unsafe marker trait `vstd::alloc_check::NoDeallocDrop`. A generic type needs
   the bound `T: NoDeallocDrop`. Moving the contents out of a `Box` frees the box. To stay in
   place, reuse the box instead (`*b = ..`, or field updates).
+
+`core::mem::forget` does not deallocate, so a fip function may forget a value it owns. That leaks
+the value's memory: unlike FP²'s linear discipline, `#[verifier::fip]` only says that nothing is
+freed, not that every owned cell is reused.
 
 An `unsafe impl NoDeallocDrop for X` is accepted only if `X` is not a `Box`, its own `Drop` (if
 any) is `#[verifier::fip]`, and each of its fields has no drop glue or is `NoDeallocDrop`. Every
@@ -516,6 +523,11 @@ elaboration. This includes the destructors that its drops run.
   into the caller's code, because the calls that could do so (through callbacks) are rejected by
   the checks above. Calls of functions of other crates, and calls whose callee is not known
   (generic calls, function values), are rejected.
+* Destructors count as calls: those that the function's drops run, and those of the types that
+  a std or vstd call is instantiated with (std may drop such values inside the call, as
+  `Vec::<T>::clear` does). A drop (or such a call) whose destructors are not known here, because
+  it involves a type parameter, an associated or opaque type, or `dyn`, is rejected; a `Copy`
+  bound rules out a destructor.
 * A cycle of calls between strict functions must consist of `become` calls only. A non-tail call
   adds a frame, so a cycle through one grows the stack.
 
@@ -535,7 +547,13 @@ For recursion modulo a constructor, the warning comes with the rewrite into a lo
 suggestion, which an editor (verus-analyzer) offers as a quick fix. `-V fip-lint=fix` writes the
 rewrite to the source files instead. A rewrite is kept only if the crate still verifies: after a
 successful verification, Verus writes each rewrite, verifies the crate again, and restores the
-file if that fails. So nothing about the rewrite is trusted.
+file if that fails. So nothing about the rewrite is trusted. For that reason `=fix` cannot be
+combined with options that verify only part of the crate or skip checks (`--no-verify`,
+`--verify-root`, `--verify-module`, `--verify-only-module`, `--verify-function`, `--no-lifetime`,
+`--no-erasure-check`, `--no-trait-conflicts`, `-V allow-inline-air`, `-V ignore-unexpected-smt`).
+While it runs, the originals are kept in `<file>.fip-lint-orig`; SIGINT, SIGTERM or SIGHUP
+restore them. If the process is killed outright, the backup stays, and the next `=fix` run
+refuses to start until it is restored or deleted.
 
 The rewrite works on a strongly connected component of the call graph, so mutual recursion is
 rewritten too. Every recursive call in the component must be either a tail call or the only
@@ -548,7 +566,11 @@ constructors).
   return different types. Each function starts the loop in its own state.
 
 The rewritten code evaluates the constructor's fields and the call's arguments in the same order
-as the original. The loop invariant states two things:
+as the original. A field after the recursive call is evaluated after the call returns in the
+original, but before the next iteration in the loop, so the rewrite is offered only when such
+fields are literals or names. Likewise, a value whose drop runs user code (a `Drop` impl outside
+std, or a type parameter) is dropped at a different time in the loop, so a function with a
+binding of such a type is not rewritten. The loop invariant states two things:
 
 * If the hole's final value (`*final(hole)`) satisfies the `ensures` for the current arguments,
   then the result satisfies the `ensures` for the original arguments.
@@ -565,6 +587,11 @@ The rewrite is not offered, and the warning says why, when:
 
 * a function is not a free function (for example, it is a method);
 * a parameter is `&mut`, ghost or tracked, or is a pattern rather than a name;
+* the body binds a parameter's name again (`let mut k = k + 1;`): the loop assigns the
+  parameters by name;
+* the function comes from a macro expansion;
+* a constructor field after the recursive call is not a literal or a name, or a binding's drop
+  runs user code (see above);
 * a function has no `decreases` (it becomes the loop's), uses `returns`, or returns early with `?`;
 * the return type is not an enum with a variant without fields;
 * several functions have different generic parameters, have more than one `decreases` expression
@@ -604,13 +631,19 @@ What `-V alloc-check` trusts:
   `#[verifier::fip(strict)]`, that std's and vstd's functions use bounded stack space and that
   rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
   `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
-* `external_body` functions other than `drop`;
+* `external_body` functions other than `drop`, and `external_body` types (their hidden fields'
+  drops are trusted only for std types that vstd declares);
+* the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`, recognized by name: their
+  functions reach user code only through their type arguments, and use bounded stack space;
 * the toolchain's std (its trusted drops and opaque types).
 
-Known limitations, all of which make Verus reject programs (they are not unsound):
-* cloning a container whose allocator is neither the global allocator nor a reference, and
-  allocators that forward to an allocator they hold (`Box`, `Rc`, `Arc` and `Pin` used as
-  allocators);
+Known limitations, all of which make Verus reject programs or give weaker bounds (they are not
+unsound):
+* cloning a container whose allocator is neither the global allocator, a reference nor a
+  `BoundedAllocator`, and allocators that forward to an allocator they hold (`Box`, `Rc`, `Arc`
+  and `Pin` used as allocators): their cost is an uninterpreted term
+  (`allocator_clone_cost::<A>()`, `allocator_max_cost::<A>()`), so only a bound that names it
+  verifies;
 * `dyn` values and opaque `impl Trait` values being dropped;
 * projected types in drop glue (for example `Cow`);
 * a closure that captures one field of a struct is checked as if it captured the whole struct;
