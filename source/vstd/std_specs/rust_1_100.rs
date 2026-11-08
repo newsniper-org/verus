@@ -5,7 +5,8 @@
 //!
 //! - core (also `no_std`): `bool::toggle`, `mem::DropGuard` (`new`,
 //!   `dismiss`, `Deref`, `DerefMut`), `cell::UnsafeCell::{as_ref_unchecked, as_mut_unchecked,
-//!   replace}`, and `alloc::{Allocator, AllocError, Layout}` and `ptr::NonNull` as types
+//!   replace}`, and `alloc::{Allocator, AllocError, Layout}` as types (`ptr::NonNull` is in
+//!   `std_specs::ptr`)
 //! - alloc (also `no_std` with `alloc`): `Vec::from_fn`, `Vec::allocator`, `Box::allocator`,
 //!   `Box::new_in`, `Box::take`, `Box::map`, `Rc::map`, `Arc::map`, `Allocator for
 //!   alloc::alloc::Global`
@@ -161,11 +162,6 @@ pub struct ExLayout(Layout);
 
 #[verifier::external_type_specification]
 pub struct ExAllocError(AllocError);
-
-#[verifier::external_type_specification]
-#[verifier::external_body]
-#[verifier::reject_recursive_types(T)]
-pub struct ExNonNull<T: core::marker::PointeeSized>(NonNull<T>);
 
 /// A model of `Layout`: its size and alignment (the two fields of a `Layout`)
 pub uninterp spec fn spec_layout(size: nat, align: nat) -> Layout;
