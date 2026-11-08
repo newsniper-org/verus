@@ -728,6 +728,9 @@ fn trusted_crate(fun: &Fun) -> bool {
     }
 }
 
+/// Datatypes of the trusted crates: their methods are trusted code. (Not Verus's internal
+/// datatypes: a closure's type is one, `crate::t%anonymous_closure%N`, and calling it runs the
+/// closure's body, user code.)
 fn trusted_dt(dt: &crate::ast::Dt) -> bool {
     match dt {
         crate::ast::Dt::Tuple(_) => true,
@@ -736,7 +739,7 @@ fn trusted_dt(dt: &crate::ast::Dt) -> bool {
                 true
             }
             crate::ast::CrateId::Id(name, _) => &**name == "std",
-            crate::ast::CrateId::Internal => true,
+            crate::ast::CrateId::Internal => false,
         },
     }
 }
@@ -888,6 +891,35 @@ pub(crate) fn function_effects(krate: &Krate, aware: &HashSet<Fun>) -> HashMap<F
     effects
 }
 
+/// May an impl of the (user) trait method `method` change the heap?
+fn user_trait_impls_may_touch(
+    funs: &HashMap<Fun, Function>,
+    aware: &HashSet<Fun>,
+    effects: &HashMap<Fun, Effect>,
+    method: &Fun,
+) -> bool {
+    funs.values().any(|g| {
+        let FunctionKind::TraitMethodImpl { method: m, .. } = &g.x.kind else { return false };
+        if m != method {
+            return false;
+        }
+        if aware.contains(&g.x.name) {
+            return true;
+        }
+        if g.x.body.is_some() {
+            return effects.get(&g.x.name).map_or(true, |e| e.may_touch());
+        }
+        if g.x.proxy.is_some() || g.x.attrs.is_external_body {
+            // (trusted, like its specification)
+            return false;
+        }
+        match &g.x.attrs.heap_effect_params {
+            Some(ps) => !ps.is_empty(),
+            None => true,
+        }
+    })
+}
+
 /// The effect of a call, over the caller's type parameters
 fn call_effect_with(
     funs: &HashMap<Fun, Function>,
@@ -916,8 +948,15 @@ fn call_effect_with(
         return Effect::none();
     }
     if dynamic && resolved.is_none() {
-        // (the impl is the one of the instantiation's type, which is among `typs`; an impl for a
-        // trusted type is trusted, and reaches user code only through its type arguments)
+        // The impl is the one of the instantiation's type, which is among `typs`. An impl of a
+        // trusted crate's trait for a trusted type is trusted code, and reaches user code only
+        // through its type arguments. A user trait's impls are user code even for a trusted type
+        // (`impl Tr for u8`): by the orphan rule, those for trusted types are all in the trait's
+        // own crate, so they are among `funs` (an impl for a user type is covered by
+        // `typs_effect`).
+        if !trusted_crate(callee) && user_trait_impls_may_touch(funs, aware, effects, callee) {
+            return Effect::Always;
+        }
         return typs_effect(typs);
     }
     let callee_typs = if resolved.is_some() { None } else { Some(&func.x.typ_params) };

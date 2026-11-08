@@ -157,7 +157,31 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] once_default_conjure_zst_unsafe_cell ["vstd", "-V alloc-check"] => verus_code! {
+    // std requires more than a zero size (the type must be inhabited, the value valid), which a
+    // precondition cannot state: a zero-sized type whose invariant is `false` would prove anything
+    #[test] conjure_zst_not_specified ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+        pub struct Never { ghost g: int }
+        impl Never {
+            #[verifier::type_invariant]
+            spec fn inv(&self) -> bool { false }
+        }
+        fn wrong() -> (r: u8)
+            ensures r == 7
+        {
+            if core::mem::size_of::<Never>() == 0 {
+                let n: Never = unsafe { core::mem::conjure_zst::<Never>() };
+                proof { use_type_invariant(&n); }
+                8
+            } else {
+                7
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "conjure_zst")
+}
+
+test_verify_one_file_with_options! {
+    #[test] once_default_unsafe_cell ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         use std::sync::Once;
         use core::cell::UnsafeCell;
@@ -165,11 +189,6 @@ test_verify_one_file_with_options! {
             allocates 0
         {
             Once::default()
-        }
-        fn g() -> (r: ())
-            allocates 0
-        {
-            unsafe { core::mem::conjure_zst::<()>() }
         }
         fn h(c: &UnsafeCell<u64>) -> (r: u64)
             allocates 0

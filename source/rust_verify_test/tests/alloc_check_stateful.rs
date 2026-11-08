@@ -511,6 +511,74 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
+    // a user trait's impl for a std type is user code: a generic call that reaches it may change
+    // the heap
+    #[test] stateful_user_trait_impl_for_std_type ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        pub trait Tr {
+            fn m(&self, p: &Pool, l: Layout) allocates 1;
+        }
+        impl Tr for u8 {
+            fn m(&self, p: &Pool, l: Layout) allocates 1 {
+                let _ = p.allocate(l);
+            }
+        }
+        fn g<T: Tr>(x: &T, p: &Pool, l: Layout) allocates 1 {
+            x.m(p, l)
+        }
+        fn client(p: &Pool, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 1
+        {
+            g(&0u8, p, l);
+            assert(allocator_state(p).0 >= 2); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    // a closure passed to std code runs the closure's body, user code
+    #[test] stateful_closure_through_std ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn client(p: &Pool, o: Option<u8>, l: Layout)
+            requires allocator_state(p).0 >= 2,
+            allocates 1
+        {
+            let r = o.map(|x: u8| -> (y: u8) allocates 1 { let _ = p.allocate(l); x });
+            assert(allocator_state(p).0 >= 2); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    // `try_reserve` fails with `CapacityOverflow` before calling the allocator
+    #[test] stateful_try_reserve_overflow ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn client(p: &Pool)
+            requires allocator_state(p).0 == 1,
+            allocates 1
+        {
+            let mut v: Vec<u8, &Pool> = Vec::new_in(p);
+            let r = v.try_reserve(usize::MAX);
+            assert(allocator_state(p).0 == 0); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    // a zero-sized box does not call the allocator
+    #[test] stateful_box_new_in_zst ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        fn client(p: &Pool)
+            requires allocator_state(p).0 == 1,
+            allocates 0
+        {
+            let b = Box::new_in((), p);
+            assert(allocator_state(p).0 == 1);
+            // (the pool's one free slot serves this one)
+            let c = Box::new_in(5u64, p);
+            assert(allocator_state(p).0 == 0);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
     // a `BoundedAllocator`'s `clone` runs inside std's containers, where Verus does not see it
     #[test] stateful_allocator_clone_must_preserve ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
         pub struct Fwd<'a> { p: &'a Pool, l: Layout }

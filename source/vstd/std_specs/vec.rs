@@ -391,7 +391,10 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve ](
         spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         result is Ok ==> vec_reserved(old(vec), final(vec), additional as int),
-        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), additional as int),
+        // (std 1.100 `RawVecInner::grow_amortized` fails with `CapacityOverflow` before calling
+        // the allocator when the new capacity overflows, leaving the heap as it was)
+        vec_reserve_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), additional as int)
+            || (result is Err && crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap()),
     allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), additional as int), vec_regrows(old(vec), additional as int))
 ;
 
@@ -410,7 +413,10 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
             - old(vec)@.len() < additional ==> spec_vec_capacity(final(vec)) == old(vec)@.len()
             + additional,
         spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional ==> crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
-        spec_vec_capacity(old(vec)) - old(vec)@.len() < additional ==> vec_grow_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), old(vec)@.len() + additional),
+        // (`RawVecInner::grow_exact` fails with `CapacityOverflow` before calling the allocator
+        // when the new capacity overflows, leaving the heap as it was)
+        spec_vec_capacity(old(vec)) - old(vec)@.len() < additional ==> (vec_grow_heap(crate::alloc_heap::old_allocator_heap(), crate::alloc_heap::allocator_heap(), old(vec), old(vec)@.len() + additional)
+            || (result is Err && crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap())),
     allocates deallocates_when(if spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional {
         0int
     } else {

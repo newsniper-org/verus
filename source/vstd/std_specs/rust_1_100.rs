@@ -3,7 +3,7 @@
 //! Collected in one module so that they can be compared with, or replaced by, upstream Verus's
 //! own support for 1.100 when it lands. Covered here:
 //!
-//! - core (also `no_std`): `bool::toggle`, `mem::conjure_zst`, `mem::DropGuard` (`new`,
+//! - core (also `no_std`): `bool::toggle`, `mem::DropGuard` (`new`,
 //!   `dismiss`, `Deref`, `DerefMut`), `cell::UnsafeCell::{as_ref_unchecked, as_mut_unchecked,
 //!   replace}`, and `alloc::{Allocator, AllocError, Layout}` and `ptr::NonNull` as types
 //! - alloc (also `no_std` with `alloc`): `Vec::from_fn`, `Vec::allocator`, `Box::allocator`,
@@ -11,7 +11,10 @@
 //!   alloc::alloc::Global`
 //! - std: `Allocator for std::alloc::System`, `Default for std::sync::Once`
 //!
-//! Not covered (Verus cannot use them in verified code yet): `str::{trim_prefix, trim_suffix}`
+//! Not covered: `mem::conjure_zst` (std requires `T` to be zero-sized *and* inhabited, with
+//! every value valid, which a precondition cannot state: conjuring a zero-sized type whose
+//! invariant is `false` would prove anything). Also not covered (Verus cannot use them in
+//! verified code yet): `str::{trim_prefix, trim_suffix}`
 //! and the slice ones (vstd has no `Pattern`/`SlicePattern` specification), `Path::trim_prefix`
 //! (no `Path` specification), `PartialEq` between slices and `Cow<[U]>`, the `Allocator` impls
 //! that forward to an allocator they hold (`Box`, `Rc`, `Arc`, `Pin`: their cost is
@@ -19,7 +22,9 @@
 //! constructors and destructors with an allocator (`Box::from_raw_in`,
 //! `Vec::into_raw_parts_with_allocator`, ...: vstd has no raw `Box`/`Vec` specifications), the
 //! Windows process extensions, and the `alloc::fmt::NumBuffer` re-export. The never type `!` (now
-//! stable) needs no specification; `core::convert::Infallible` is now an alias of it.
+//! stable) needs no specification; `core::convert::Infallible` is now an alias of it, so Verus
+//! now rejects a datatype with a field of type `Infallible` ("never-to-any coercion is not allowed
+//! in spec mode"), which it accepted with 1.99.1.
 //!
 //! Every function has an `allocates` bound (for `-V alloc-check`): an upper bound on the calls to
 //! the allocator that obtain memory, see `vir/src/alloc_check.rs`. A call of an allocator's
@@ -54,16 +59,6 @@ verus! {
 pub assume_specification[ bool::toggle ](b: &mut bool)
     ensures
         *final(b) == !*old(b),
-    opens_invariants none
-    no_unwind
-    allocates
-        0,
-;
-
-/// `conjure_zst::<T>()` is only defined for zero-sized `T`
-pub assume_specification<T>[ core::mem::conjure_zst::<T> ]() -> T
-    requires
-        super::super::layout::size_of::<T>() == 0,
     opens_invariants none
     no_unwind
     allocates
@@ -689,7 +684,13 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::new_in ](x: T, alloc: A)
     ensures
         *b == x,
         spec_box_allocator(&b) == alloc,
-        exists|r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>|
+        // (std 1.100 `Box::try_new_uninit_in`: a zero-sized `T` gets a dangling pointer, without
+        // calling the allocator)
+        crate::layout::size_of::<T>() == 0 ==> crate::alloc_heap::allocator_heap()
+            == crate::alloc_heap::old_allocator_heap(),
+        crate::layout::size_of::<T>() > 0 ==> exists|
+            r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
+        |
             crate::alloc_heap::allocator_heap()
                 == #[trigger] crate::alloc_heap::allocator_allocate_heap_in::<A>(
                 crate::alloc_heap::old_allocator_heap(),
@@ -698,11 +699,15 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::new_in ](x: T, alloc: A)
                 r,
             ),
     allocates
-        crate::alloc_heap::allocator_allocate_cost_in::<A>(
-            crate::alloc_heap::old_allocator_heap(),
-            &alloc,
-            spec_array_layout::<T>(1),
-        ),
+        (if crate::layout::size_of::<T>() == 0 {
+            0int
+        } else {
+            crate::alloc_heap::allocator_allocate_cost_in::<A>(
+                crate::alloc_heap::old_allocator_heap(),
+                &alloc,
+                spec_array_layout::<T>(1),
+            )
+        }),
 ;
 
 /// `Box::take` moves the value out and keeps the allocation (with uninitialized contents)
