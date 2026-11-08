@@ -16,8 +16,8 @@ use common::*;
 // several optimization levels with a counting `#[global_allocator]`, run them, and compare the
 // counts each call actually made with its verified bound. A count above the bound would mean a
 // specification in vstd is wrong or the compiler introduced an allocator call. They also run a
-// user allocator through std's containers, and count the deallocations of `#[verifier::fip]`
-// functions (which must make none).
+// user allocator, and an allocator with a state, through std's containers, and count the
+// deallocations of `#[verifier::fip]` functions (which must make none).
 
 const COUNTING_PRELUDE: &str = r#"
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -70,6 +70,10 @@ fn measure_fip(name: &str, bound: usize, f: impl FnOnce()) {
 const CASES: &str = r#"
 use vstd::prelude::*;
 use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, FipAllocator, NoDeallocDrop};
+use vstd::alloc_heap::*;
+use vstd::atomic_ghost::*;
+use vstd::resource::Loc;
+use vstd::resource::preorder_auth::Preorder;
 use vstd::std_specs::vec::spec_vec_capacity;
 use std::alloc::{AllocError, Allocator, Global, Layout};
 use std::collections::BTreeMap;
@@ -305,6 +309,129 @@ fn vec_clone_fwd(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
     v.clone()
 }
 
+// An allocator with a state: a pool that hands out `remaining` blocks from a chunk it already
+// holds (standing in for an arena: `from_chunk` uses the system allocator, which the counting
+// global allocator does not see), and then asks the global allocator. Its costs depend on the
+// state (`vstd::alloc_heap::StatefulAllocator`).
+pub struct Free(pub nat);
+impl Preorder for Free {
+    open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
+    proof fn le_refl(a: Self) {}
+    proof fn le_trans(a: Self, b: Self, c: Self) {}
+}
+
+pub struct PoolPred;
+impl AtomicInvariantPredicate<Loc, u64, AllocAuth<Free>> for PoolPred {
+    open spec fn atomic_inv(k: Loc, v: u64, g: AllocAuth<Free>) -> bool {
+        g@ == Free(v as nat) && g.id() == k
+    }
+}
+
+pub struct Pool {
+    remaining: AtomicU64<Loc, AllocAuth<Free>, PoolPred>,
+    reg: Tracked<Registered<Free>>,
+}
+
+impl Pool {
+    #[verifier::type_invariant]
+    spec fn inv(&self) -> bool {
+        self.remaining.well_formed() && self.remaining.constant() == self.reg@.loc()
+    }
+
+    pub closed spec fn id(&self) -> Loc { self.reg@.loc() }
+
+    fn new(n: u64) -> (p: Self)
+        ensures
+            allocator_heap() == heap_register::<Free>(old_allocator_heap(), p.id(), Free(n as nat)),
+        allocates 0
+    {
+        let tracked (auth, reg) = AllocAuth::register(Free(n as nat));
+        let ghost l = reg.loc();
+        let remaining = AtomicU64::new(Ghost(l), n, Tracked(auth));
+        Pool { remaining, reg: Tracked(reg) }
+    }
+}
+
+#[verifier::external_body]
+fn from_chunk(layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+    allocates 0
+{
+    std::alloc::System.allocate(layout)
+}
+
+unsafe impl Allocator for Pool {
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        allocates 1
+    {
+        proof { use_type_invariant(self); }
+        let tracked reg = self.reg.borrow();
+        let ghost s = heap_state::<Free>(allocator_heap(), reg.loc());
+        let v = atomic_with_ghost!(&self.remaining => load(); ghost g => {
+            g.lower_bound(reg);
+        });
+        if v > 0 {
+            atomic_with_ghost!(&self.remaining => store(v - 1); ghost g => {
+                g.step(reg, Free((v - 1) as nat), if s.0 > 0 { Free((s.0 - 1) as nat) } else { s });
+            });
+            from_chunk(layout)
+        } else {
+            Global.allocate(layout)
+        }
+    }
+
+    // (blocks are not returned: the memory of the chunk and of the global allocator would have
+    // to be told apart)
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+        allocates 0
+    {
+    }
+}
+
+unsafe impl AllocFreeDrop for Pool {}
+
+unsafe impl BoundedAllocator for Pool {
+    open spec fn max_cost() -> int { 1 }
+}
+
+unsafe impl StatefulAllocator for Pool {
+    type State = Free;
+
+    open spec fn loc(&self) -> Loc { self.id() }
+
+    proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) {
+        self.reg.borrow()
+    }
+
+    open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
+        if s.0 > 0 { 0 } else { 1 }
+    }
+
+    open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
+        if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
+    }
+}
+
+// two boxes come from the pool, the third from the global allocator
+fn pool_boxes() -> (r: u64)
+    allocates 1
+{
+    let p = Pool::new(2);
+    let a = Box::new_in(1u64, &p);
+    let b = Box::new_in(2u64, &p);
+    let c = Box::new_in(3u64, &p);
+    *a + *b + *c
+}
+
+// an empty pool: every box comes from the global allocator
+fn pool_empty_boxes() -> (r: u64)
+    allocates 2
+{
+    let p = Pool::new(0);
+    let a = Box::new_in(1u64, &p);
+    let b = Box::new_in(2u64, &p);
+    *a + *b
+}
+
 fn main() {
 }
 
@@ -328,6 +455,8 @@ fn run_cases() {
     w.push(1);
     w.push(2);
     measure("vec_clone_fwd", 1, || vec_clone_fwd(&w));
+    measure("pool_boxes", 1, || pool_boxes());
+    measure("pool_empty_boxes", 2, || pool_empty_boxes());
     measure("vec_push_grow", 2, || vec_push_grow());
     measure("vec_new_push", 1, || vec_new_push());
     measure("vec_reserve_then_push", 1, || vec_reserve_then_push(3));
@@ -413,7 +542,7 @@ fn run_at(opt_level: &str) {
         );
         n += 1;
     }
-    assert_eq!(n, 18, "expected 18 cases, got:\n{}", stdout);
+    assert_eq!(n, 20, "expected 20 cases, got:\n{}", stdout);
     assert_eq!(fips, 2, "expected 2 fip cases, got:\n{}", stdout);
     assert_eq!(caps, 3, "expected 3 capacity cases, got:\n{}", stdout);
 }
