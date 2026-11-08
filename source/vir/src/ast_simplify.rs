@@ -385,6 +385,7 @@ fn simplify_one_expr(
                 autospec: *autospec,
                 const_var: true,
                 assume_external_allowed: false,
+                trusted_call: false,
             };
             let call = ExprX::Call {
                 target: CallTarget::Fun(

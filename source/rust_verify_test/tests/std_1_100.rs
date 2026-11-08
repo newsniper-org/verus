@@ -193,7 +193,7 @@ test_verify_one_file_with_options! {
         fn h(c: &UnsafeCell<u64>) -> (r: u64)
             allocates 0
         {
-            unsafe { c.replace(3) }
+            #[verifier::trusted_call] { unsafe { c.replace(3) } }
         }
     } => Ok(())
 }

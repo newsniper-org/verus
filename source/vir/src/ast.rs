@@ -1039,6 +1039,9 @@ pub struct CallTargetAttrs {
     pub const_var: bool,
     /// If the expected Fun is undeclared, enable replacing Fun with AssumeExternal
     pub assume_external_allowed: bool,
+    /// The call is inside a `#[verifier::trusted_call]` block (it may call a
+    /// `#[verifier::trusted_only]` function)
+    pub trusted_call: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToDebugSNode)]
@@ -1640,6 +1643,11 @@ pub struct FunctionAttrsX {
     /// memory on a normal return (its calls are checked here; its implicit drops in the compiled
     /// program, by rust_verify on the MIR)
     pub fip: bool,
+    /// `#[verifier::trusted_only]`: std's (or the author's) conditions for calling the function
+    /// safely cannot be written as a precondition, so verified code may call it (or an
+    /// implementation of it, if it is a trait method) only inside a `#[verifier::trusted_call]`
+    /// block, whose calls are trusted
+    pub trusted_only: bool,
     /// The crate defining this function was verified with -V alloc-check, so its `allocates`
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,

@@ -1138,6 +1138,23 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
     let mk_expr =
         move |x: ExprX| Ok(ExprOrPlace::Expr(bctx.spanned_typed_new(expr.span, &expr_typ()?, x)));
 
+    if bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(expr.hir_id))?.trusted_call {
+        // a block whose calls of `#[verifier::trusted_only]` functions are trusted (the rest of
+        // the block is verified as usual)
+        if bctx.ctxt.cmd_line_args.no_cheating {
+            return err_span(
+                expr.span,
+                "`#[verifier::trusted_call]` cannot be used with --no-cheating",
+            );
+        }
+        if bctx.in_ghost {
+            return err_span(expr.span, "`#[verifier::trusted_call]` is only for executable code");
+        }
+        let bctx = &BodyCtxt { in_trusted_call: true, ..bctx.clone() };
+        let block = block_to_vir(bctx, body, &expr.span, &expr_typ()?)?;
+        return Ok(ExprOrPlace::Expr(block));
+    }
+
     if let Some(g_attr) = get_ghost_block_opt(bctx.ctxt.tcx.hir_attrs(expr.hir_id)) {
         let bctx = &BodyCtxt { in_ghost: true, ..bctx.clone() };
         let block = block_to_vir(bctx, body, &expr.span, &expr_typ()?)?;
@@ -2353,6 +2370,7 @@ pub(crate) fn expr_to_vir_with_adjustments<'tcx>(
                     autospec: autospec_usage,
                     const_var: false,
                     assume_external_allowed: false,
+                    trusted_call: bctx.in_trusted_call,
                 };
                 let call_target = CallTarget::Fun(
                     vir::ast::CallTargetKind::Static,
@@ -2765,6 +2783,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                             autospec: AutospecUsage::Final,
                             const_var: false,
                             assume_external_allowed: false,
+                            trusted_call: bctx.in_trusted_call,
                         };
                         (
                             CallTarget::Fun(
@@ -2838,6 +2857,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                     autospec: autospec_usage,
                     const_var: false,
                     assume_external_allowed: false,
+                    trusted_call: bctx.in_trusted_call,
                 };
                 let call_target = CallTarget::Fun(
                     vir::ast::CallTargetKind::Static,
@@ -2950,6 +2970,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         autospec: autospec_usage,
                         const_var: false,
                         assume_external_allowed: false,
+                        trusted_call: bctx.in_trusted_call,
                     };
                     let call_target = CallTarget::Fun(
                         vir::ast::CallTargetKind::Static,
@@ -3900,6 +3921,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         autospec: AutospecUsage::Final,
                         const_var: false,
                         assume_external_allowed: false,
+                        trusted_call: bctx.in_trusted_call,
                     };
                     // special fast path
                     let call_target = CallTarget::Fun(
@@ -4981,6 +5003,7 @@ pub(crate) fn maybe_do_ptr_cast<'tcx>(
                 autospec: autospec_usage,
                 const_var: false,
                 assume_external_allowed: false,
+                trusted_call: bctx.in_trusted_call,
             };
             let call_target = CallTarget::Fun(
                 vir::ast::CallTargetKind::Static,

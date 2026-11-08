@@ -165,7 +165,9 @@ unsafe impl Allocator for Fwd {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
         allocates 0
     {
-        unsafe { Global.deallocate(ptr, layout) }
+        #[verifier::trusted_call] {
+            unsafe { Global.deallocate(ptr, layout) }
+        }
     }
 }
 
@@ -181,6 +183,14 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
     v.push(x);
 }
 ```
+
+`deallocate`, `grow`, `grow_zeroed` and `shrink` are `#[verifier::trusted_only]`. std requires
+that the pointer is a live block of this allocator with a fitting layout, and a precondition cannot
+say that. So verified code may call them (for any allocator, also through a generic
+`A: Allocator`) only inside a `#[verifier::trusted_call]` block, like the forwarding call above.
+That call is trusted; the rest of the function is still verified. `--no-cheating` rejects the
+block. Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc`
+permission instead.
 
 The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
 `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.
@@ -631,6 +641,8 @@ What `-V alloc-check` trusts:
   `#[verifier::fip(strict)]`, that std's and vstd's functions use bounded stack space and that
   rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
   `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
+* calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
+  `deallocate`);
 * `external_body` functions other than `drop`, and `external_body` types (their hidden fields'
   drops are trusted only for std types that vstd declares);
 * the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`, recognized by name: their

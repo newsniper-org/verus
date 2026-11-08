@@ -254,6 +254,7 @@ fn rewrite_async_ens_vir(function: &Function, specs: &Vec<Expr>) -> Result<Vec<E
             autospec: AutospecUsage::Final,
             const_var: false,
             assume_external_allowed: false,
+            trusted_call: false,
         };
 
         let future_typ = function.x.outer_ret.x.typ.clone();

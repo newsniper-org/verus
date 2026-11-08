@@ -506,6 +506,20 @@ fn check_function_access<'a>(
     }
 }
 
+/// `#[verifier::trusted_only]`, on the function itself or, for a trait method implementation, on
+/// the trait's method
+fn is_trusted_only(ctxt: &Ctxt, fun: &Fun) -> bool {
+    let Some(f) = ctxt.funs.get(fun) else { return false };
+    f.x.attrs.trusted_only
+        || match &f.x.kind {
+            FunctionKind::TraitMethodImpl { method, .. }
+            | FunctionKind::ForeignTraitMethodImpl { method, .. } => {
+                ctxt.funs.get(method).is_some_and(|m| m.x.attrs.trusted_only)
+            }
+            _ => false,
+        }
+}
+
 fn check_one_expr(
     ctxt: &Ctxt,
     function: &Function,
@@ -542,6 +556,23 @@ fn check_one_expr(
                 assert!(emit.has_fatal_errors());
                 return Ok(());
             };
+            if !attrs.trusted_call {
+                let resolved = match kind {
+                    CallTargetKind::DynamicResolved { resolved, .. } => Some(resolved),
+                    _ => None,
+                };
+                for g in std::iter::once(x).chain(resolved) {
+                    if is_trusted_only(ctxt, g) {
+                        return Err(error(
+                            &expr.span,
+                            format!(
+                                "`{}` may be called only inside a `#[verifier::trusted_call]` block: the conditions for calling it safely cannot be written as a precondition",
+                                fun_as_friendly_rust_name(g)
+                            ),
+                        ));
+                    }
+                }
+            }
             match kind {
                 CallTargetKind::Static => {}
                 CallTargetKind::ProofFn(..) => {}
@@ -751,6 +782,17 @@ fn check_one_expr(
                 assert!(emit.has_fatal_errors());
                 return Ok(());
             };
+            // (a value could be called anywhere, so it is not allowed even in a
+            // `#[verifier::trusted_call]` block)
+            if is_trusted_only(ctxt, fun) {
+                return Err(error(
+                    &expr.span,
+                    format!(
+                        "`{}` cannot be used as a value: it may be called only inside a `#[verifier::trusted_call]` block",
+                        fun_as_friendly_rust_name(fun)
+                    ),
+                ));
+            }
         }
         ExprX::ProofInSpec(_) => {
             // At the moment, spec termination checking is the only place set up to handle

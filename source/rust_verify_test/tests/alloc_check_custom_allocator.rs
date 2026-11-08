@@ -28,7 +28,7 @@ const ALLOCATORS: &str = verus_code_str! {
         unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
             allocates 0
         {
-            unsafe { Global.deallocate(ptr, layout) }
+            #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
         }
     }
 

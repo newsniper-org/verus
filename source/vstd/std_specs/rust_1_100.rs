@@ -121,12 +121,16 @@ pub assume_specification<T, F: FnOnce(T)>[ <DropGuard<T, F> as core::ops::DerefM
 ;
 
 /// `UnsafeCell` as a type (its contents are not modeled); the methods stabilized in 1.100 are
-/// `unsafe` and only access the contents
+/// `unsafe` and only access the contents. Their safety conditions (no other live reference to
+/// the contents) cannot be written as preconditions, so they are `#[verifier::trusted_only]`:
+/// verified code calls them only in a `#[verifier::trusted_call]` block (`vstd::cell::PCell` is
+/// the verified alternative).
 #[verifier::external_type_specification]
 #[verifier::external_body]
 #[verifier::reject_recursive_types(T)]
 pub struct ExUnsafeCell<T: ?Sized>(core::cell::UnsafeCell<T>);
 
+#[verifier::trusted_only]
 pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_ref_unchecked ](
     cell: &core::cell::UnsafeCell<T>,
 ) -> &T
@@ -136,6 +140,7 @@ pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_ref_uncheck
         0,
 ;
 
+#[verifier::trusted_only]
 pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_mut_unchecked ](
     cell: &core::cell::UnsafeCell<T>,
 ) -> &mut T
@@ -145,6 +150,7 @@ pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_mut_uncheck
         0,
 ;
 
+#[verifier::trusted_only]
 pub assume_specification<T>[ core::cell::UnsafeCell::<T>::replace ](
     cell: &core::cell::UnsafeCell<T>,
     value: T,
@@ -442,7 +448,11 @@ pub broadcast group group_rust_1_100_core_axioms {
     axiom_ref_allocator_clone_cost,
 }
 
-/// The allocator trait. -V alloc-check: `deallocate` allocates nothing (the drop rule relies on
+/// The allocator trait. `deallocate`, `grow`, `grow_zeroed` and `shrink` need a live block of
+/// this allocator with a fitting layout, which a precondition cannot say: they are
+/// `#[verifier::trusted_only]` (so are their implementations), and verified code calls them only
+/// in a `#[verifier::trusted_call]` block (`vstd::raw_ptr::deallocate` frees with a `Dealloc`
+/// permission instead). -V alloc-check: `deallocate` allocates nothing (the drop rule relies on
 /// this: dropping a container calls it), and the others cost what `allocator_allocate_cost`,
 /// `allocator_grow_cost`, `allocator_grow_zeroed_cost` and `allocator_shrink_cost` say for the
 /// allocator and the arguments. These bounds hold for the std allocators and for every
@@ -464,11 +474,13 @@ pub unsafe trait ExAllocator {
             allocator_allocate_cost::<Self>(self, layout),
     ;
 
+    #[verifier::trusted_only]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
         allocates
             0,
     ;
 
+    #[verifier::trusted_only]
     unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<
         NonNull<[u8]>,
         AllocError,
@@ -477,6 +489,7 @@ pub unsafe trait ExAllocator {
             allocator_grow_cost::<Self>(self, ptr, old_layout, new_layout),
     ;
 
+    #[verifier::trusted_only]
     unsafe fn grow_zeroed(
         &self,
         ptr: NonNull<u8>,
@@ -487,6 +500,7 @@ pub unsafe trait ExAllocator {
             allocator_grow_zeroed_cost::<Self>(self, ptr, old_layout, new_layout),
     ;
 
+    #[verifier::trusted_only]
     unsafe fn shrink(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<
         NonNull<[u8]>,
         AllocError,
@@ -523,6 +537,7 @@ macro_rules! std_allocator_specs {
                 allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
             ;
 
+            #[verifier::trusted_only]
             pub assume_specification[ <$a as core::alloc::Allocator>::deallocate ](
                 a: &$a,
                 ptr: NonNull<u8>,
@@ -531,6 +546,7 @@ macro_rules! std_allocator_specs {
                 allocates 0
             ;
 
+            #[verifier::trusted_only]
             pub assume_specification[ <$a as core::alloc::Allocator>::grow ](
                 a: &$a,
                 ptr: NonNull<u8>,
@@ -539,6 +555,7 @@ macro_rules! std_allocator_specs {
             ) -> Result<NonNull<[u8]>, AllocError>
             ;
 
+            #[verifier::trusted_only]
             pub assume_specification[ <$a as core::alloc::Allocator>::grow_zeroed ](
                 a: &$a,
                 ptr: NonNull<u8>,
@@ -547,6 +564,7 @@ macro_rules! std_allocator_specs {
             ) -> Result<NonNull<[u8]>, AllocError>
             ;
 
+            #[verifier::trusted_only]
             pub assume_specification[ <$a as core::alloc::Allocator>::shrink ](
                 a: &$a,
                 ptr: NonNull<u8>,

@@ -656,7 +656,7 @@ test_verify_one_file_with_options! {
             ensures allocator_state(p).0 == old_allocator_state(p).0 - 1,
             allocates 0
         {
-            let _ = unsafe { p.grow(ptr, l1, l2) };
+            let _ = #[verifier::trusted_call] { unsafe { p.grow(ptr, l1, l2) } };
         }
 
         // `&A` forwards every method to `A`

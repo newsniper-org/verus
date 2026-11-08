@@ -134,6 +134,8 @@ pub(crate) struct BodyCtxt<'tcx> {
     pub(crate) mode: Mode,
     pub(crate) external_body: bool,
     pub(crate) in_ghost: bool,
+    /// inside a `#[verifier::trusted_call]` block
+    pub(crate) in_trusted_call: bool,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

@@ -2688,7 +2688,7 @@ test_verify_one_file_with_options! {
             unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
                 allocates 0
             {
-                unsafe { Global.deallocate(ptr, layout) }
+                #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
             }
         }
 
@@ -2835,7 +2835,7 @@ test_verify_one_file! {
         impl Clone for MyA { fn clone(&self) -> Self { MyA } }
         unsafe impl Allocator for MyA {
             fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
-            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
+            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { #[verifier::trusted_call] { unsafe { Global.deallocate(p, l) } } }
         }
         unsafe impl AllocatorClone for MyA {}
         verus! {

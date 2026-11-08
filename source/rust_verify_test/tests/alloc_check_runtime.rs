@@ -263,7 +263,7 @@ unsafe impl Allocator for Fwd {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
         allocates 0
     {
-        unsafe { Global.deallocate(ptr, layout) }
+        #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
     }
 }
 

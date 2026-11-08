@@ -292,6 +292,24 @@ already elided if the enclosing function body has no legitimate verification err
 
 **Aside.** When truncation is intended, [the bit-vector solver mode](./reference-prover-mode-bit-vector.md) is often useful for writing proofs about truncation.
 
+## `#[verifier::trusted_only]` and `#[verifier::trusted_call]`
+
+`#[verifier::trusted_only]` marks a function (or an `assume_specification`, or a method of an
+`external_trait_specification`) whose conditions for a safe call cannot be written as a
+precondition. Verified code may call it, or an implementation of it if it is a trait method, only
+inside a block marked `#[verifier::trusted_call]`:
+
+```rust
+#[verifier::trusted_call] {
+    unsafe { Global.deallocate(ptr, layout) }
+}
+```
+
+The calls in that block are trusted; everything else in it is verified as usual. A
+`trusted_only` function cannot be used as a value, even inside the block. `--no-cheating` rejects
+`#[verifier::trusted_call]`. vstd marks `Allocator::{deallocate, grow, grow_zeroed, shrink}` and
+`UnsafeCell::{as_ref_unchecked, as_mut_unchecked, replace}` this way.
+
 ## `#[verifier::type_invariant]`
 
 Declares that a spec function is a type invariant for some datatype. See [type invariants](./reference-type-invariants.md).

@@ -160,7 +160,9 @@ unsafe impl Allocator for Fwd {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
         allocates 0
     {
-        unsafe { Global.deallocate(ptr, layout) }
+        #[verifier::trusted_call] {
+            unsafe { Global.deallocate(ptr, layout) }
+        }
     }
 }
 
@@ -176,6 +178,13 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
     v.push(x);
 }
 ```
+
+`deallocate`, `grow`, `grow_zeroed`, `shrink`는 `#[verifier::trusted_only]`입니다. std는 포인터가 이
+할당기의 살아 있는 블록이고 layout이 맞을 것을 요구하는데, 이 조건은 전제조건으로 쓸 수 없습니다.
+그래서 검증된 코드는 이 메서드들을(어떤 할당기든, 제네릭 `A: Allocator`를 거치더라도) 위의 전달 호출처럼
+`#[verifier::trusted_call]` 블록 안에서만 부를 수 있습니다. 그 호출은 신뢰되고, 함수의 나머지는 그대로
+검증됩니다. `--no-cheating`은 이 블록을 거부합니다. 검증된 코드에서 메모리를 해제하려면 대신
+`vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다.
 
 `Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
 `grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의
@@ -597,6 +606,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
   `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
+* `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등)
 * `drop`이 아닌 `external_body` 함수, 그리고 `external_body` 타입(숨은 필드의 drop은 vstd가 선언한 std
   타입에 대해서만 신뢰)
 * 이름으로 알아보는 crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를

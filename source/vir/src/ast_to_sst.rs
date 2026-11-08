@@ -4313,6 +4313,7 @@ pub(crate) fn expr_to_stm_opt(
                 autospec: AutospecUsage::Final,
                 const_var: false,
                 assume_external_allowed: false,
+                trusted_call: false,
             };
             let call_expr = SpannedTyped::new(
                 &expr.span,

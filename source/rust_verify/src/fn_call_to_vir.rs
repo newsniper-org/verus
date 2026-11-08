@@ -357,7 +357,12 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
     let typ_args = mk_typ_args(bctx, node_substs, f, expr.span)?;
     let impl_paths = get_impl_paths(bctx, f, node_substs, None, const_var, expr.span)?;
     let call_target_attrs =
-        vir::ast::CallTargetAttrs { autospec: autospec_usage, assume_external_allowed, const_var };
+        vir::ast::CallTargetAttrs {
+            autospec: autospec_usage,
+            assume_external_allowed,
+            const_var,
+            trusted_call: bctx.in_trusted_call,
+        };
     let target = CallTarget::Fun(target_kind, name, typ_args, impl_paths, call_target_attrs);
     Ok(bctx.spanned_typed_new(
         expr.span,
@@ -502,6 +507,7 @@ pub(crate) fn call_overloaded_method<'tcx>(
     let call_target_attrs = vir::ast::CallTargetAttrs {
         autospec: autospec_usage,
         assume_external_allowed: false,
+        trusted_call: bctx.in_trusted_call,
         const_var: false,
     };
     let call_target =
