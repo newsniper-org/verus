@@ -4761,6 +4761,9 @@ pub(crate) fn closure_to_vir<'tcx>(
     is_spec_fn: bool,
     proof_fn_modes: Option<(Arc<Vec<Mode>>, Mode)>,
 ) -> Result<vir::ast::Expr, VirErr> {
+    // A closure made in a `#[verifier::trusted_call]` block may be called outside it, so its body
+    // does not inherit the block's trust
+    let bctx = &BodyCtxt { in_trusted_call: false, ..bctx.clone() };
     if let ExprKind::Closure(Closure { fn_decl, body: body_id, def_id, .. }) = &closure_expr.kind {
         unsupported_err_unless!(!fn_decl.c_variadic(), closure_expr.span, "C-variadic closures");
         internal_err_unless!(

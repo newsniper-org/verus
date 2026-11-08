@@ -237,3 +237,17 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "only for executable code")
 }
+
+test_verify_one_file_with_options! {
+    // a closure made in the block may be called outside it, so its body is not trusted
+    // (portable-fip, fip-beta 024ac7266, A1)
+    #[test] closure_from_trusted_call_not_trusted ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, Global, Layout};
+        use std::ptr::NonNull;
+        fn f(nn: NonNull<u8>, l: Layout) {
+            let g = #[verifier::trusted_call] { move |x: NonNull<u8>| unsafe { Global.deallocate(x, l) } };
+            g(nn)
+        }
+    } => Err(err) => assert_vir_error_msg(err, ERR)
+}

@@ -182,8 +182,10 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 `deallocate`, `grow`, `grow_zeroed`, `shrink`는 `#[verifier::trusted_only]`입니다. std는 포인터가 이
 할당기의 살아 있는 블록이고 layout이 맞을 것을 요구하는데, 이 조건은 전제조건으로 쓸 수 없습니다.
 그래서 검증된 코드는 이 메서드들을(어떤 할당기든, 제네릭 `A: Allocator`를 거치더라도) 위의 전달 호출처럼
-`#[verifier::trusted_call]` 블록 안에서만 부를 수 있습니다. 그 호출은 신뢰되고, 함수의 나머지는 그대로
-검증됩니다. `--no-cheating`은 이 블록을 거부합니다. 검증된 코드에서 메모리를 해제하려면 대신
+[`#[verifier::trusted_call]`](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) 블록
+안에서만 부를 수 있습니다. 그 호출은 신뢰되고, 함수의 나머지는 그대로 검증되며, 블록 안에서 만든 클로저는
+신뢰되지 않습니다. `--no-cheating`은 이 블록을 거부하므로, 그 아래에서는 할당기가 `deallocate`를 다른
+할당기에 넘길 수 없습니다. 검증된 코드에서 메모리를 해제하려면 대신
 `vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다.
 
 `Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
@@ -606,14 +608,19 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
   `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
-* `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등)
+* `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등). `--no-cheating`은 지금
+  검증하는 crate에만 적용됩니다. 그것 없이 검증된 의존 crate의 블록(과 `external_body` 함수)은 그대로
+  신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다
 * `drop`이 아닌 `external_body` 함수, 그리고 `external_body` 타입(숨은 필드의 drop은 vstd가 선언한 std
   타입에 대해서만 신뢰)
 * crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를 통해서만 사용자 코드에
   닿고, 유한한 스택 공간을 씁니다. 이름으로 알아보되, 이 이름의 crate는 진짜일 때만 받습니다. `std`,
-  `core`, `alloc`은 toolchain의 sysroot에서, `vstd`는 vstd로 검증된 것, `verus_builtin`은 Verus가
-  `--extern verus_builtin=..`으로 넘긴 파일이어야 하고, 각각 그 이름의 유일한 crate여야 합니다.
-  -V alloc-check로 검증하는 crate는 이 이름을 쓸 수 없습니다
+  `core`, `alloc`은 toolchain의 sysroot에서 온 그 이름의 유일한 crate여야 합니다. `vstd`와
+  `verus_builtin`은 Verus가 직접 `--extern vstd=..`, `--extern verus_builtin=..`으로 넘긴 파일이어야
+  하고(`--no-vstd`에서는 어떤 의존 crate도 `vstd`라는 이름일 수 없음), 가져온 `vstd`는 vstd로 검증된
+  것이어야 합니다. Verus는 이 파일들을 자신의 설치 위치에서 넘깁니다. `--is-core`, `--import-via-core`,
+  내부 테스트 모드에서는 넘기지 않으므로, 그때는 명령줄에 준 것을 신뢰합니다. -V alloc-check로 검증하는
+  crate는 이 이름을 쓸 수 없습니다
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.

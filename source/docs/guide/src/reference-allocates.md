@@ -187,9 +187,11 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 `deallocate`, `grow`, `grow_zeroed` and `shrink` are `#[verifier::trusted_only]`. std requires
 that the pointer is a live block of this allocator with a fitting layout, and a precondition cannot
 say that. So verified code may call them (for any allocator, also through a generic
-`A: Allocator`) only inside a `#[verifier::trusted_call]` block, like the forwarding call above.
-That call is trusted; the rest of the function is still verified. `--no-cheating` rejects the
-block. Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc`
+`A: Allocator`) only inside a
+[`#[verifier::trusted_call]`](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call)
+block, like the forwarding call above. That call is trusted; the rest of the function is still
+verified, and a closure made in the block is not trusted. `--no-cheating` rejects the block, so
+under it an allocator cannot forward `deallocate` to another allocator. Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc`
 permission instead.
 
 The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
@@ -642,15 +644,21 @@ What `-V alloc-check` trusts:
   rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
   `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
 * calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
-  `deallocate`);
+  `deallocate`). `--no-cheating` applies only to the crate being verified: the blocks (and the
+  `external_body` functions) of a dependency verified without it are trusted all the same, and a
+  `.vir` does not record whether it was;
 * `external_body` functions other than `drop`, and `external_body` types (their hidden fields'
   drops are trusted only for std types that vstd declares);
 * the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`: their functions reach user code
   only through their type arguments, and use bounded stack space. They are recognized by name,
   and a crate of one of these names is accepted only if it is the real one: `std`, `core` and
-  `alloc` from the toolchain's sysroot, `vstd` verified as vstd, `verus_builtin` from the file
-  Verus gives with `--extern verus_builtin=..`, each the only crate of its name. A crate being
-  verified with -V alloc-check cannot take one of these names;
+  `alloc` from the toolchain's sysroot, each the only crate of its name; `vstd` and
+  `verus_builtin` from the files that Verus itself gives with `--extern vstd=..` and
+  `--extern verus_builtin=..` (with `--no-vstd` no dependency may be named `vstd`), and an
+  imported `vstd` must also have been verified as vstd. Verus gives these files from its own
+  installation; with `--is-core`, `--import-via-core` or in its internal test mode it does not,
+  and the ones on the command line are then trusted. A crate being verified with -V alloc-check
+  cannot take one of these names;
 * the toolchain's std (its trusted drops and opaque types).
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not

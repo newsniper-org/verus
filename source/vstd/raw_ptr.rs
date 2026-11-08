@@ -911,6 +911,8 @@ impl Dealloc {
 /// Allocate with the global allocator.
 /// The precondition should be consistent with the [documented safety conditions on `alloc`](https://doc.rust-lang.org/alloc/alloc/trait.GlobalAlloc.html#tymethod.alloc).
 /// Returns a pointer with a corresponding [`PointsToRaw`] and [`Dealloc`] permissions.
+/// (-V alloc-check: one call of the global allocator; it frees nothing, so a `#[verifier::fip]`
+/// function may call it.)
 #[cfg(feature = "std")]
 #[verifier::external_body]
 pub fn allocate(size: usize, align: usize) -> (pt: (
@@ -933,6 +935,8 @@ pub fn allocate(size: usize, align: usize) -> (pt: (
         pt.0.addr() as int % align as int == 0,
         pt.0@.provenance == pt.1@.provenance(),
     opens_invariants none
+    allocates
+        deallocates_when(1int, false),
 {
     // SAFETY: valid_layout is a precondition
     let layout = unsafe { alloc::alloc::Layout::from_size_align_unchecked(size, align) };
@@ -968,6 +972,8 @@ pub fn deallocate(
         pt.is_range(dealloc.addr() as int, dealloc.size() as int),
         p@.provenance == dealloc.provenance(),
     opens_invariants none
+    allocates
+        0,
 {
     // SAFETY: ensured by dealloc token
     let layout = unsafe { alloc::alloc::Layout::from_size_align_unchecked(size, align) };

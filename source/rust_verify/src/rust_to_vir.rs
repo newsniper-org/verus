@@ -558,40 +558,53 @@ pub(crate) fn crate_to_vir<'a, 'tcx>(
         // (the default sysroot is the toolchain whose rustc Verus is linked with; a `--sysroot`
         // given on the command line is not trusted)
         let sysroot = canon(&ctxtx.tcx.sess.opts.sysroot.default);
-        // `verus_builtin` is trusted by name too (its functions are leaves for fip(strict)), so a
-        // dependency of that name must be the one Verus gives with `--extern verus_builtin=..`:
-        // loaded from that very file. (rustc refuses a second `--extern verus_builtin`, so a
-        // look-alike can only come in under another extern name, from another file.)
-        let builtin_files: Option<Vec<std::path::PathBuf>> =
-            ctxtx.tcx.sess.opts.externs.get("verus_builtin").and_then(|e| match &e.location {
-                rustc_session::config::ExternLocation::ExactPaths(ps) => {
-                    Some(ps.iter().filter_map(|p| canon(p.canonicalized())).collect())
+        // `verus_builtin` and `vstd` are trusted by name too (vstd's `Drop` impls and opaque types;
+        // both crates' functions are fip(strict) leaves), so a dependency of one of those names
+        // must be the one Verus gives with `--extern <name>=..`: loaded from that very file.
+        // (rustc refuses a second `--extern` of the same name, so a look-alike can only come in
+        // under another name, from another file. Verus gives `vstd` itself only when it imports
+        // vstd (not with `--no-vstd`, where a user's `--extern vstd=..` would be the only one), so
+        // in the other modes no dependency may be called `vstd`. A vstd's .vir must match its
+        // rlib: see `import`.)
+        for trusted_name in ["verus_builtin", "vstd"] {
+            let verus_gives_it = trusted_name != "vstd"
+                || matches!(ctxtx.cmd_line_args.vstd, crate::config::Vstd::Imported);
+            let given_files: Option<Vec<std::path::PathBuf>> = if !verus_gives_it {
+                None
+            } else {
+                ctxtx.tcx.sess.opts.externs.get(trusted_name).and_then(|e| match &e.location {
+                    rustc_session::config::ExternLocation::ExactPaths(ps) => {
+                        Some(ps.iter().filter_map(|p| canon(p.canonicalized())).collect())
+                    }
+                    rustc_session::config::ExternLocation::FoundInLibrarySearchDirectories => None,
+                })
+            };
+            for cnum in ctxtx.tcx.crates(()) {
+                if ctxtx.tcx.crate_name(*cnum).as_str() != trusted_name {
+                    continue;
                 }
-                rustc_session::config::ExternLocation::FoundInLibrarySearchDirectories => None,
-            });
-        for cnum in ctxtx.tcx.crates(()) {
-            if ctxtx.tcx.crate_name(*cnum).as_str() != "verus_builtin" {
-                continue;
-            }
-            let source = ctxtx.tcx.used_crate_source(*cnum);
-            let paths: Vec<_> = [&source.rlib, &source.rmeta, &source.dylib]
-                .into_iter()
-                .filter_map(|p| p.as_ref())
-                .collect();
-            let trusted = !paths.is_empty()
-                && paths.iter().all(|p| match (canon(p), &builtin_files) {
-                    (Some(p), Some(files)) => files.contains(&p),
-                    _ => false,
-                });
-            if !trusted {
-                let span = ctxtx.tcx.def_span(rustc_hir::def_id::CRATE_DEF_ID);
-                return Err((
-                    vec![vir::messages::error(
-                        &crate::spans::err_air_span(span),
-                        "-V alloc-check trusts a crate named `verus_builtin` only if it is the one Verus provides (`--extern verus_builtin=..`); this crate depends on another crate of that name",
-                    )],
-                    None,
-                ));
+                let source = ctxtx.tcx.used_crate_source(*cnum);
+                let paths: Vec<_> = [&source.rlib, &source.rmeta, &source.dylib]
+                    .into_iter()
+                    .filter_map(|p| p.as_ref())
+                    .collect();
+                let trusted = !paths.is_empty()
+                    && paths.iter().all(|p| match (canon(p), &given_files) {
+                        (Some(p), Some(files)) => files.contains(&p),
+                        _ => false,
+                    });
+                if !trusted {
+                    let span = ctxtx.tcx.def_span(rustc_hir::def_id::CRATE_DEF_ID);
+                    return Err((
+                        vec![vir::messages::error(
+                            &crate::spans::err_air_span(span),
+                            format!(
+                                "-V alloc-check trusts a crate named `{trusted_name}` only if it is the one Verus provides (`--extern {trusted_name}=..`); this crate depends on another crate of that name"
+                            ),
+                        )],
+                        None,
+                    ));
+                }
             }
         }
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();

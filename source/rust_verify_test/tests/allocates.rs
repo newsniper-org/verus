@@ -2328,7 +2328,9 @@ fn alloc_check_second_std_crate_rejected() {
     }
 }
 
-// An imported crate named `vstd` must have been verified as vstd
+// An imported crate named `vstd` must have been verified as vstd, and (V1, portable-fip, fip-beta
+// 024ac7266) be the one Verus provides: with `--no-vstd` there is none, so even a look-alike
+// built with `--is-vstd` is rejected
 #[test]
 fn alloc_check_fake_vstd_rejected() {
     let tempdir = tempfile::TempDir::new().expect("temp dir");
@@ -2413,6 +2415,52 @@ fn alloc_check_fake_vstd_rejected() {
     assert!(!out.status.success(), "should be rejected:\n{}", stderr);
     assert!(
         stderr.contains("does not belong to the crate named `vstd` that this crate is linked with"),
+        "unexpected error:\n{}",
+        stderr
+    );
+    // a look-alike built with `--is-vstd` and -V alloc-check (so it is marked as verified as vstd)
+    std::fs::write(dir.join("iv.rs"), std::fs::read_to_string(dir.join("fv.rs")).unwrap())
+        .expect("write");
+    let d = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "vstd",
+            "--is-vstd",
+            "-V",
+            "alloc-check",
+            "-C",
+            "metadata=isvstd",
+            "iv.rs",
+            "--export",
+            "iv.vir",
+            "--compile",
+            "--out-dir",
+            "iv",
+        ],
+        dir,
+    );
+    assert!(d.status.success(), "look-alike failed:\n{}", String::from_utf8_lossy(&d.stderr));
+    let out = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "--no-vstd",
+            "-V",
+            "alloc-check",
+            "--import",
+            "vstd=iv.vir",
+            "--extern",
+            "vstd=iv/libvstd.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains(
+            "-V alloc-check trusts a crate named `vstd` only if it is the one Verus provides"
+        ),
         "unexpected error:\n{}",
         stderr
     );
@@ -2870,4 +2918,27 @@ test_verify_one_file_with_options! {
             o
         }
     } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // `vstd::raw_ptr::allocate` is one call of the global allocator, `deallocate` none
+    #[test] raw_ptr_allocate_bounds ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::raw_ptr::*;
+        use vstd::layout::valid_layout;
+        fn ok()
+            requires valid_layout(8, 8),
+            allocates 1
+        {
+            let (p, Tracked(pt), Tracked(d)) = allocate(8, 8);
+            deallocate(p, 8, 8, Tracked(pt), Tracked(d));
+        }
+        fn too_low()
+            requires valid_layout(8, 8),
+            allocates 0 // FAILS
+        {
+            let (p, Tracked(pt), Tracked(d)) = allocate(8, 8);
+            deallocate(p, 8, 8, Tracked(pt), Tracked(d));
+        }
+    } => Err(err) => assert_one_fails(err)
 }
