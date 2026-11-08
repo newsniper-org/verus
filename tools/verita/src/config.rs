@@ -4,8 +4,15 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct RunConfigurationProject {
     pub name: String,
+    /// (unused with `use_verus_repo`)
+    #[serde(default)]
     pub git_url: String,
+    #[serde(default)]
     pub refspec: String,
+    /// Take the project from the Verus repository being tested (`--verus-repo`, the commit it has
+    /// checked out) instead of `git_url`: for vstd, whose sources must match the verifier
+    #[serde(default)]
+    pub use_verus_repo: bool,
     pub crate_roots: Vec<String>,
     pub extra_verus_args: Option<Vec<String>>,
     pub extra_cargo_args: Option<Vec<String>>,

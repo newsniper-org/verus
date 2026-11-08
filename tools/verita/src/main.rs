@@ -428,10 +428,31 @@ fn process_project(
 
     debug!("Cloning project");
     let repo_path = workdir.join(&project.name);
-    let project_repo = Repository::clone(&project.git_url, &repo_path)?;
+    let (project_repo, refspec) = if project.use_verus_repo {
+        // (a local clone of the commit checked out in the Verus repository; `git` handles a
+        // worktree as the source)
+        let src = ctx.verus_repo;
+        log_command(cmd!(ctx.sh, "git clone --quiet {src} {repo_path}").into())
+            .status()
+            .map_err(|e| anyhow!("cannot clone {}: {}", src.display(), e))?
+            .success()
+            .then_some(())
+            .ok_or_else(|| anyhow!("cannot clone {}", src.display()))?;
+        let head = Repository::open(src)?
+            .head()?
+            .peel_to_commit()?
+            .id()
+            .to_string();
+        (Repository::open(&repo_path)?, head)
+    } else {
+        (
+            Repository::clone(&project.git_url, &repo_path)?,
+            project.refspec.clone(),
+        )
+    };
     let (rev, _reference) = project_repo
-        .revparse_ext(&project.refspec)
-        .map_err(|e| anyhow!("failed to find {}: {}", project.refspec, e))?;
+        .revparse_ext(&refspec)
+        .map_err(|e| anyhow!("failed to find {}: {}", refspec, e))?;
     project_repo.checkout_tree(&rev, None)?;
     project_repo.set_head_detached(rev.id())?;
     let hash = rev.id().to_string();
@@ -594,7 +615,10 @@ fn main() -> anyhow::Result<()> {
     let mut active_projects: Vec<&RunConfigurationProject> = Vec::new();
     for project in run_configuration.projects.iter() {
         if !args.projects.is_empty() && !args.projects.contains(&project.name) {
-            debug!("Skipping project {} (not in --project filter)", project.name);
+            debug!(
+                "Skipping project {} (not in --project filter)",
+                project.name
+            );
             continue;
         }
         if project.ignore && !args.run_ignored {

@@ -73,8 +73,9 @@ NOTE: At present, when running with `cargo verus`, we use `cargo verus focus` to
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `name` | string | required | Display name; also used as the output filename stem |
-| `git_url` | string | required | Git URL of the project repository |
-| `refspec` | string | required | Git refspec (branch, tag, or commit) to check out |
+| `git_url` | string | required (unless `use_verus_repo`) | Git URL of the project repository |
+| `refspec` | string | required (unless `use_verus_repo`) | Git refspec (branch, tag, or commit) to check out |
+| `use_verus_repo` | boolean | `false` | When `true`, take the project from the Verus repository being tested (`--verus-repo`: a local clone of the commit it has checked out; uncommitted changes are not included) instead of `git_url`. Used for `vstd`, whose sources must match the verifier. |
 | `crate_roots` | list of strings | required | Paths to crate root files or directories, relative to the repo root. For projects using `cargo verus` these are subdirectory paths; for projects that directly invoke `verus` these are paths to `.rs` files. Multiple entries cause `verita` to run `verus` (or `cargo verus`) separately on each root. |
 | `extra_verus_args` | list of strings | `[]` | Additional arguments appended to the Verus command for this project |
 | `extra_cargo_args` | list of strings | `[]` | Additional arguments passed to `cargo verus` (before the `--` separator). Only valid when `cargo_verus = true`. |
