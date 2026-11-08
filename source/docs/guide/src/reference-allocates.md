@@ -268,7 +268,9 @@ nothing.
   `allocator_clone_cost::<A>()`. std's containers also clone their allocator where Verus does
   not see it: dropping a `BTreeMap` (or its `IntoIter`) clones it once for every node it frees.
   So the `Clone` impls of a `BoundedAllocator` must be ones that Verus checks, bounded by
-  `allocates 0`, and must not change the allocator heap (next section). `Allocator`'s contract
+  `allocates 0`, and must not change the allocator heap (next section). (So `#[derive(Clone)]` on
+  an allocator is rejected: the derived impl is not checked by Verus; write the impl in `verus!`.)
+  `Allocator`'s contract
   already requires a clone to behave like the same allocator. The cost is therefore 0 for a
   `BoundedAllocator`, as for the global allocator and for references. For other allocators it is
   uninterpreted.
@@ -328,7 +330,9 @@ form an `allocates` bound may use). A call `a.allocate(layout)` is charged
   (when a container is dropped), so it may only raise the state. A `deallocate` or `Drop::drop`
   that may change the heap is rejected.
 * `Registered` is neither `Send` nor `Sync`, so neither is an allocator that keeps it: the state
-  and its lower bound stay in one thread.
+  and its lower bound stay in one thread. This rests on the allocator not implementing `Send` or
+  `Sync` itself: an `unsafe impl Send`/`Sync` written outside `verus!` is not checked by Verus (as
+  with any `unsafe impl` of an auto trait), and would let the state move to another thread.
 * A function whose specification mentions the heap passes it on to its callers. After a call to
   any other function that may change the heap (it allocates from an allocator with a state, or
   calls code that Verus cannot see the effect of: a closure, a function of a crate verified
@@ -578,9 +582,16 @@ file if that fails. So nothing about the rewrite is trusted. For that reason `=f
 combined with options that verify only part of the crate or skip checks (`--no-verify`,
 `--verify-root`, `--verify-module`, `--verify-only-module`, `--verify-function`, `--no-lifetime`,
 `--no-erasure-check`, `--no-trait-conflicts`, `-V allow-inline-air`, `-V ignore-unexpected-smt`).
-While it runs, the originals are kept in `<file>.fip-lint-orig`; SIGINT, SIGTERM or SIGHUP
-restore them. If the process is killed outright, the backup stays, and the next `=fix` run
-refuses to start until it is restored or deleted.
+Each trial only verifies (without `--export`, `--compile`, `-o`, `--out-dir` and `--emit`); if a
+rewrite is kept, the run is repeated with all the options, so the outputs describe the rewritten
+files. A file is rewritten in place: through a symbolic link, keeping hard links and the file's
+mode. A file that cannot be written, or that has a byte-order mark or CRLF line endings, is left
+alone. While it runs, the originals are kept in `<file>.fip-lint-orig` (next to the file a link
+points to), listed in a journal `.fip-lint-journal` next to the crate root; SIGINT, SIGTERM or
+SIGHUP restore them. If the process is killed outright, the backups and the journal stay, and the
+next `=fix` run refuses to start (and lists the backups, also those of files outside the crate
+root's directory) until they are restored or deleted. The journal also keeps two `=fix` runs on
+one crate apart; other tools (an editor, `cargo build`) can still see a trial while it runs.
 
 The rewrite works on a strongly connected component of the call graph, so mutual recursion is
 rewritten too. Every recursive call in the component must be either a tail call or the only
@@ -597,7 +608,8 @@ as the original. A field after the recursive call is evaluated after the call re
 original, but before the next iteration in the loop, so the rewrite is offered only when such
 fields are literals or names. Likewise, a value whose drop runs user code (a `Drop` impl outside
 std, or a type parameter) is dropped at a different time in the loop, so a function with a
-binding of such a type is not rewritten. The loop invariant states two things:
+binding or an expression (a temporary: a `match` scrutinee, an argument) of such a type is not
+rewritten. The loop invariant states two things:
 
 * If the hole's final value (`*final(hole)`) satisfies the `ensures` for the current arguments,
   then the result satisfies the `ensures` for the original arguments.
@@ -615,10 +627,14 @@ The rewrite is not offered, and the warning says why, when:
 * a function is not a free function (for example, it is a method);
 * a parameter is `&mut`, ghost or tracked, or is a pattern rather than a name;
 * the body binds a parameter's name again (`let mut k = k + 1;`): the loop assigns the
-  parameters by name;
+  parameters by name. This is decided by name, so it also covers bindings that would be harmless:
+  a `match` arm binding the same name, or a local of the same name inside a macro;
+* the function's source mentions a name starting with `__trmc`, which the rewrite uses for its own
+  names;
 * the function comes from a macro expansion;
-* a constructor field after the recursive call is not a literal or a name, or a binding's drop
-  runs user code (see above);
+* a constructor field after the recursive call is not a literal or a name, or the drop of a
+  binding or a temporary runs user code (see above). A value of a type parameter counts, even if
+  nothing of that type is pending when the recursive call returns (`fn f<T>(l: G<T>)`);
 * a function has no `decreases` (it becomes the loop's), uses `returns`, or returns early with `?`;
 * the return type is not an enum with a variant without fields;
 * several functions have different generic parameters, have more than one `decreases` expression

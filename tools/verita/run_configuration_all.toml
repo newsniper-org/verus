@@ -50,24 +50,33 @@ extra_verus_args = [
     "--rlimit", "240",
 ]
 prepare_script = """
+set -euo pipefail
 pushd test_libc
 cargo clean
 cargo +beta-2026-11-05 build --release
 popd
-# (since Rust 1.100 cargo keeps dependency artifacts under target/release/build/, not deps/)
-LIBC_RLIB_NAME=$(find ./test_libc/target/release/ -name 'liblibc-*.rlib' | head -n 1)
+# (since Rust 1.100 cargo keeps dependency artifacts under target/release/build/, not deps/;
+# after `cargo clean` there must be exactly one)
+LIBC_RLIBS=$(find ./test_libc/target/release/ -name 'liblibc-*.rlib')
+if [ "$(printf '%s\n' "$LIBC_RLIBS" | grep -c .)" != 1 ]; then
+    echo "expected exactly one liblibc-*.rlib, found: $LIBC_RLIBS" >&2
+    exit 1
+fi
 mkdir -p build
-cp $LIBC_RLIB_NAME build/liblibc.rlib
+cp "$LIBC_RLIBS" build/liblibc.rlib
 """
 prepare_script_windows = """
 $ErrorActionPreference = 'Stop'
 Push-Location test_libc
 cargo clean
+if ($LASTEXITCODE -ne 0) { throw "cargo clean failed" }
 cargo +beta-2026-11-05 build --release
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 Pop-Location
-$libcRlib = Get-ChildItem -Path "./test_libc/target/release/" -Recurse -Filter "liblibc-*.rlib" | Select-Object -First 1
+$libcRlibs = @(Get-ChildItem -Path "./test_libc/target/release/" -Recurse -Filter "liblibc-*.rlib")
+if ($libcRlibs.Count -ne 1) { throw "expected exactly one liblibc-*.rlib, found $($libcRlibs.Count)" }
 New-Item -ItemType Directory -Path "build" -Force | Out-Null
-Copy-Item -Path $libcRlib.FullName -Destination "build/liblibc.rlib"
+Copy-Item -Path $libcRlibs[0].FullName -Destination "build/liblibc.rlib"
 """
 
 [[project]]
