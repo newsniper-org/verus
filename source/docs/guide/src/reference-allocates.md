@@ -645,8 +645,12 @@ What `-V alloc-check` trusts:
   `deallocate`);
 * `external_body` functions other than `drop`, and `external_body` types (their hidden fields'
   drops are trusted only for std types that vstd declares);
-* the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`, recognized by name: their
-  functions reach user code only through their type arguments, and use bounded stack space;
+* the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`: their functions reach user code
+  only through their type arguments, and use bounded stack space. They are recognized by name,
+  and a crate of one of these names is accepted only if it is the real one: `std`, `core` and
+  `alloc` from the toolchain's sysroot, `vstd` verified as vstd, `verus_builtin` from the file
+  Verus gives with `--extern verus_builtin=..`, each the only crate of its name. A crate being
+  verified with -V alloc-check cannot take one of these names;
 * the toolchain's std (its trusted drops and opaque types).
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not

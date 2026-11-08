@@ -749,3 +749,102 @@ test_verify_one_file_with_options! {
         assert!(msgs[0].contains("dropping this value"), "{:?}", msgs);
     }
 }
+
+// fip(strict) takes `verus_builtin`'s functions as leaves, so a dependency of that name must be
+// the one Verus provides: a look-alike (with a deep recursion) brought in under another extern
+// name is rejected (portable-fip, fip-beta 3eb69f3c3, N3)
+#[test]
+fn fip_strict_fake_verus_builtin_rejected() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("vb.rs"),
+        format!(
+            "{pre}verus!{{ pub fn deep(n: u64) -> u64 decreases n {{ if n == 0 {{ 0 }} else {{ let r = deep(n - 1); if r < u64::MAX {{ r + 1 }} else {{ r }} }} }} }}\n"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("c.rs"),
+        format!(
+            "{pre}verus!{{ #[verifier::fip(strict)] fn s(n: u64) -> u64 {{ fb::deep(n) }} }}\n"
+        ),
+    )
+    .expect("write");
+    // (built without -V alloc-check: with it, the name is refused outright, see below)
+    let fake = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "verus_builtin",
+            "-C",
+            "metadata=fake",
+            "--export",
+            "vb.vir",
+            "--compile",
+            "vb.rs",
+            "-o",
+            "libfakevb.rlib",
+        ],
+        dir,
+    );
+    assert!(fake.status.success(), "fake failed:\n{}", String::from_utf8_lossy(&fake.stderr));
+    let c = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "c.rs",
+            "-V",
+            "alloc-check",
+            "--import",
+            "fb=vb.vir",
+            "--extern",
+            "fb=libfakevb.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&c.stderr);
+    assert!(!c.status.success(), "c should be rejected:\n{}", stderr);
+    assert!(
+        stderr
+            .contains("trusts a crate named `verus_builtin` only if it is the one Verus provides"),
+        "unexpected:\n{}",
+        stderr
+    );
+    // and a crate of that name cannot itself be verified with -V alloc-check
+    let named = run_verus_raw(
+        &["--crate-type=lib", "--crate-name", "verus_builtin", "vb.rs", "-V", "alloc-check"],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&named.stderr);
+    assert!(!named.status.success(), "should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("a crate named `verus_builtin` cannot be verified with -V alloc-check"),
+        "unexpected:\n{}",
+        stderr
+    );
+}
+
+test_verify_one_file_with_options! {
+    // the real `verus_builtin` stays trusted: `Ghost(..)` in a strict function compiles to a call
+    // of `Ghost::assume_new_fallback`
+    #[test] fip_strict_ghost_wrappers_accepted ["vstd", "-V alloc-check", "--compile"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum L { Nil, Cons(u64, Box<L>) }
+        spec fn len(l: &L) -> nat decreases l { match l { L::Nil => 0, L::Cons(_, t) => 1 + len(t) } }
+        #[verifier::fip(strict)]
+        fn bump(l: L, Ghost(g): Ghost<int>) -> (r: L)
+            ensures len(&r) == len(&l)
+            allocates 0
+        {
+            match l {
+                L::Nil => L::Nil,
+                L::Cons(x, tl) => {
+                    let gh: Ghost<nat> = Ghost(len(&tl));
+                    assert(len(&tl) == gh@);
+                    L::Cons(x.wrapping_add(1), tl)
+                }
+            }
+        }
+    } => Ok(())
+}

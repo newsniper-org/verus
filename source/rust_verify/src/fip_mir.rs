@@ -395,7 +395,9 @@ fn check_fip_body<'tcx>(
 
 /// The crates whose functions a `#[verifier::fip(strict)]` function may call (non-tail) as
 /// leaves: std's and vstd's functions do not recurse into the caller's code (the calls that could,
-/// through callbacks, are rejected by the verifier's fip checks), so they use bounded stack space
+/// through callbacks, are rejected by the verifier's fip checks), so they use bounded stack space.
+/// (By name: under -V alloc-check, which fip needs, rust_to_vir accepts a dependency with one of
+/// these names only if it is the real one.)
 fn is_trusted_leaf_crate(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let name = tcx.crate_name(def_id.krate);
     matches!(name.as_str(), "core" | "alloc" | "std" | "vstd" | "verus_builtin")

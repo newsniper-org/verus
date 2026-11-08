@@ -609,8 +609,11 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등)
 * `drop`이 아닌 `external_body` 함수, 그리고 `external_body` 타입(숨은 필드의 drop은 vstd가 선언한 std
   타입에 대해서만 신뢰)
-* 이름으로 알아보는 crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를
-  통해서만 사용자 코드에 닿고, 유한한 스택 공간을 씁니다
+* crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를 통해서만 사용자 코드에
+  닿고, 유한한 스택 공간을 씁니다. 이름으로 알아보되, 이 이름의 crate는 진짜일 때만 받습니다. `std`,
+  `core`, `alloc`은 toolchain의 sysroot에서, `vstd`는 vstd로 검증된 것, `verus_builtin`은 Verus가
+  `--extern verus_builtin=..`으로 넘긴 파일이어야 하고, 각각 그 이름의 유일한 crate여야 합니다.
+  -V alloc-check로 검증하는 crate는 이 이름을 쓸 수 없습니다
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.
