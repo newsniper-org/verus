@@ -177,33 +177,51 @@ impl<'a, 'tcx> Ctx<'a, 'tcx> {
                 ));
             }
         }
+        // The rewrite introduces names starting with `__trmc` (locals, a label, a state type),
+        // which must not capture or shadow the function's own
+        if self.snippet(item.span)?.contains("__trmc") {
+            return Err((
+                fspan,
+                "the function uses a name starting with `__trmc`, which the rewrite reserves for its own names; rename it".into(),
+            ));
+        }
         // A value still to be dropped when the recursive call returns is dropped after it in the
-        // original, but before the next iteration in the rewrite (when its binding is
-        // reassigned or goes out of scope); only std's drops (which run no user code) may move
+        // original, but before the next iteration in the rewrite (when its binding is reassigned
+        // or goes out of scope, or at the end of the statement for a temporary); only std's
+        // drops (which run no user code) may move. So no binding, and no expression (which
+        // covers temporaries: a match scrutinee, a field taken out of a value, an argument), may
+        // have a type whose drop runs user code.
         {
-            struct Bindings<'v> {
+            struct Nodes<'v> {
                 pats: Vec<&'v rustc_hir::Pat<'v>>,
+                exprs: Vec<&'v rustc_hir::Expr<'v>>,
             }
-            impl<'v> rustc_hir::intravisit::Visitor<'v> for Bindings<'v> {
+            impl<'v> rustc_hir::intravisit::Visitor<'v> for Nodes<'v> {
                 fn visit_pat(&mut self, p: &'v rustc_hir::Pat<'v>) {
                     if matches!(p.kind, PatKind::Binding(..)) {
                         self.pats.push(p);
                     }
                     rustc_hir::intravisit::walk_pat(self, p);
                 }
+                fn visit_expr(&mut self, e: &'v rustc_hir::Expr<'v>) {
+                    self.exprs.push(e);
+                    rustc_hir::intravisit::walk_expr(self, e);
+                }
             }
-            let mut b = Bindings { pats: vec![] };
+            let mut b = Nodes { pats: vec![], exprs: vec![] };
             for p in body.params.iter() {
                 rustc_hir::intravisit::Visitor::visit_pat(&mut b, p.pat);
             }
             rustc_hir::intravisit::Visitor::visit_expr(&mut b, body.value);
             let typeck = tcx.typeck(local);
             let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, info.def_id);
-            for p in b.pats.iter() {
-                let ty = typeck.pat_ty(p);
+            let typed = b.pats.iter().map(|p| (p.span, typeck.pat_ty(p))).chain(
+                b.exprs.iter().filter_map(|e| typeck.node_type_opt(e.hir_id).map(|t| (e.span, t))),
+            );
+            for (span, ty) in typed {
                 if let Some(why) = crate::fip_mir::user_drop_glue(tcx, typing_env, ty) {
                     return Err((
-                        p.span,
+                        span,
                         format!(
                             "dropping this value ({}) may run user code, which the rewrite would run at a different time (before the next iteration instead of after the recursive call)",
                             why

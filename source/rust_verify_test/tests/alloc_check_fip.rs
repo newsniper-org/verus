@@ -750,6 +750,59 @@ test_verify_one_file_with_options! {
     }
 }
 
+test_verify_one_file_with_options! {
+    // temporaries whose drop runs user code (portable-fip, fip-beta 3eb69f3c3, N4), and a name the
+    // rewrite reserves (N5)
+    #[test] fip_lint_trmc_not_rewritable_temporaries_and_reserved_names ["vstd", "-V fip-lint"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum L { Nil, Cons(u64, Box<L>) }
+        pub enum L2 { Nil, Cons(u64, u64, Box<L2>) }
+        pub struct D(pub u64);
+        impl Drop for D {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+            {
+            }
+        }
+        fn mkd(n: u64) -> (r: D) ensures r.0 == n { D(n) }
+
+        // a match scrutinee
+        fn scrut(n: u64) -> (r: L)
+            decreases n
+        {
+            match mkd(n) { D(v) => if v == 0 { L::Nil } else { L::Cons(v, Box::new(scrut(v - 1))) } }
+        }
+
+        // a field taken out of a temporary
+        fn temp(n: u64) -> (r: L)
+            decreases n
+        {
+            if n == 0 { L::Nil } else { L::Cons(mkd(n).0, Box::new(temp(n - 1))) }
+        }
+
+        // an argument of the recursive call
+        fn arg(n: u64) -> (r: L)
+            decreases n
+        {
+            if n == 0 { L::Nil } else { L::Cons(n, Box::new(arg(mkd(n - 1).0))) }
+        }
+
+        // a local named like the rewrite's temporaries
+        fn named(n: u64) -> (r: L2)
+            decreases n
+        {
+            let __trmc_t0: u64 = 7;
+            if n == 0 { L2::Nil } else { L2::Cons(n, __trmc_t0, Box::new(named(n - 1))) }
+        }
+    } => Ok(err) => {
+        let msgs = trmc_reasons(&err);
+        assert_eq!(msgs.len(), 4, "{:?}", msgs);
+        assert_eq!(msgs.iter().filter(|m| m.contains("dropping this value")).count(), 3, "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("a name starting with `__trmc`")), "{:?}", msgs);
+    }
+}
+
 // fip(strict) takes `verus_builtin`'s functions as leaves, so a dependency of that name must be
 // the one Verus provides: a look-alike (with a deep recursion) brought in under another extern
 // name is rejected (portable-fip, fip-beta 3eb69f3c3, N3)
