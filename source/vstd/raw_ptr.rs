@@ -436,6 +436,23 @@ pub assume_specification<
         0,
 ;
 
+/// `core::ptr::slice_from_raw_parts_mut`: a slice pointer with `data`'s address and provenance
+/// and length `len` (nothing is read or checked)
+#[cfg(verus_keep_ghost)]
+pub assume_specification<T>[ core::ptr::slice_from_raw_parts_mut ](
+    data: *mut T,
+    len: usize,
+) -> (res: *mut [T])
+    ensures
+        res == ptr_mut_from_data(
+            PtrData::<[T]> { addr: data@.addr, provenance: data@.provenance, metadata: len },
+        ),
+    opens_invariants none
+    no_unwind
+    allocates
+        0,
+;
+
 //////////////////////////////////////
 // Casting
 // as-casts and implicit casts are translated internally to these functions
@@ -912,7 +929,8 @@ impl Dealloc {
 /// The precondition should be consistent with the [documented safety conditions on `alloc`](https://doc.rust-lang.org/alloc/alloc/trait.GlobalAlloc.html#tymethod.alloc).
 /// Returns a pointer with a corresponding [`PointsToRaw`] and [`Dealloc`] permissions.
 /// (-V alloc-check: one call of the global allocator; it frees nothing, so a `#[verifier::fip]`
-/// function may call it.)
+/// function may call it. It does not unwind: a global allocator must not unwind (`GlobalAlloc`),
+/// and a null result aborts.)
 #[cfg(feature = "std")]
 #[verifier::external_body]
 pub fn allocate(size: usize, align: usize) -> (pt: (
@@ -935,6 +953,7 @@ pub fn allocate(size: usize, align: usize) -> (pt: (
         pt.0.addr() as int % align as int == 0,
         pt.0@.provenance == pt.1@.provenance(),
     opens_invariants none
+    no_unwind
     allocates
         deallocates_when(1int, false),
 {
@@ -972,6 +991,7 @@ pub fn deallocate(
         pt.is_range(dealloc.addr() as int, dealloc.size() as int),
         p@.provenance == dealloc.provenance(),
     opens_invariants none
+    no_unwind
     allocates
         0,
 {

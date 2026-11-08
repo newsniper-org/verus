@@ -103,27 +103,35 @@ impl<V> PCell<V> {
     }
 
     /// Return an empty ("uninitialized") cell.
+    // (makes a cell of `MaybeUninit<V>`, which has no drop glue; drops nothing)
     #[inline(always)]
+    #[verifier::alloc_check_skip_drops]
     pub const fn empty() -> (pt: (PCell<V>, Tracked<PointsTo<V>>))
         ensures
             pt.1@.id() == pt.0.id(),
             pt.1@.mem_contents() == MemContents::Uninit,
+        allocates 0
     {
         let (pcell, Tracked(pt)) = pc::PCell::new(MaybeUninit::uninit());
         (PCell(pcell), Tracked(PointsTo(pt)))
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub const fn new(v: V) -> (pt: (PCell<V>, Tracked<PointsTo<V>>))
         ensures
             pt.1@.id() == pt.0.id(),
             pt.1@.mem_contents() == MemContents::Init(v),
+        allocates 0
     {
         let (pcell, Tracked(pt)) = pc::PCell::new(MaybeUninit::new(v));
         (PCell(pcell), Tracked(PointsTo(pt)))
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn put(&self, Tracked(perm): Tracked<&mut PointsTo<V>>, in_v: V)
         requires
             old(perm).id() == self.id(),
@@ -133,11 +141,14 @@ impl<V> PCell<V> {
             final(perm).mem_contents() == MemContents::Init(in_v),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         self.0.replace(Tracked(&mut perm.0), MaybeUninit::new(in_v));
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn take(&self, Tracked(perm): Tracked<&mut PointsTo<V>>) -> (out_v: V)
         requires
             self.id() == old(perm).id(),
@@ -148,6 +159,7 @@ impl<V> PCell<V> {
             out_v == old(perm).value(),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         unsafe {
             self.0.replace(Tracked(&mut perm.0), MaybeUninit::uninit()).assume_init()
@@ -155,6 +167,8 @@ impl<V> PCell<V> {
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn replace(&self, Tracked(perm): Tracked<&mut PointsTo<V>>, in_v: V) -> (out_v: V)
         requires
             self.id() == old(perm).id(),
@@ -165,6 +179,7 @@ impl<V> PCell<V> {
             out_v == old(perm).value(),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         unsafe {
             self.0.replace(Tracked(&mut perm.0), MaybeUninit::new(in_v)).assume_init()
@@ -172,6 +187,8 @@ impl<V> PCell<V> {
     }
 
     #[inline(always)]
+    // (hands out a reference to, or a copy of, the contents; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn borrow<'a>(&'a self, Tracked(perm): Tracked<&'a PointsTo<V>>) -> (v: &'a V)
         requires
             self.id() == perm.id(),
@@ -180,6 +197,7 @@ impl<V> PCell<V> {
             *v == perm.value(),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         unsafe {
             self.0.borrow(Tracked(&perm.0)).assume_init_ref()
@@ -187,6 +205,8 @@ impl<V> PCell<V> {
     }
 
     #[inline(always)]
+    // (hands out a reference to, or a copy of, the contents; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn borrow_mut<'a>(&'a self, Tracked(perm): Tracked<&'a mut PointsTo<V>>) -> (v: &'a mut V)
         requires
             self.id() == perm.id(),
@@ -198,6 +218,7 @@ impl<V> PCell<V> {
             final(perm).id() == self.id(),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         unsafe {
             self.0.borrow_mut(Tracked(&mut perm.0)).assume_init_mut()
@@ -205,6 +226,8 @@ impl<V> PCell<V> {
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn into_inner(self, Tracked(perm): Tracked<PointsTo<V>>) -> (v: V)
         requires
             self.id() == perm.id(),
@@ -213,12 +236,15 @@ impl<V> PCell<V> {
             v == perm.value(),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         let tracked mut perm = perm;
         self.take(Tracked(&mut perm))
     }
 
     #[inline(always)]
+    // (moves values in and out of a `MaybeUninit`, which has no drop glue; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn write(&self, Tracked(perm): Tracked<&mut PointsTo<V>>, in_v: V)
         requires
             self.id() == old(perm).id(),
@@ -227,11 +253,14 @@ impl<V> PCell<V> {
             final(perm).mem_contents() == MemContents::Init(in_v),
         opens_invariants none
         no_unwind
+        allocates 0
     {
         self.0.replace(Tracked(&mut perm.0), MaybeUninit::new(in_v));
     }
 
     #[inline(always)]
+    // (hands out a reference to, or a copy of, the contents; drops no `V`)
+    #[verifier::alloc_check_skip_drops]
     pub fn read(&self, Tracked(perm): Tracked<&PointsTo<V>>) -> (out_v: V)
         where V: Copy
         requires
@@ -241,6 +270,7 @@ impl<V> PCell<V> {
             perm.value()
         opens_invariants none
         no_unwind
+        allocates 0
     {
         *self.borrow(Tracked(perm))
     }

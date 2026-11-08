@@ -191,8 +191,23 @@ say that. So verified code may call them (for any allocator, also through a gene
 [`#[verifier::trusted_call]`](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call)
 block, like the forwarding call above. That call is trusted; the rest of the function is still
 verified, and a closure made in the block is not trusted. `--no-cheating` rejects the block, so
-under it an allocator cannot forward `deallocate` to another allocator. Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc`
-permission instead.
+under it an allocator cannot forward `deallocate` to another allocator.
+
+Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc` permission
+instead (`raw_ptr::allocate` is one allocation, `raw_ptr::deallocate` none). An allocator can do
+the same, also under `--no-cheating`:
+* `allocate` gets a block from `raw_ptr::allocate(layout.size(), layout.align())` (`Layout::size`
+  and `Layout::align` say that the pair is a `valid_layout`), and makes the `NonNull<[u8]>` it
+  returns with `core::ptr::slice_from_raw_parts_mut` and `NonNull::new`;
+* it keeps the `PointsToRaw` and `Dealloc` permissions of the blocks it handed out, with their
+  pointers and layouts, in state it can reach from `&self` (a `LocalInvariant`, or an
+  `AtomicInvariant` for a `Sync` allocator, over a `PCell` that records them);
+* `deallocate` frees a block only if it finds the address and the layout among them, and leaks
+  anything else (std never passes anything else). A type invariant ties the invariant to the cell,
+  since `deallocate` cannot have a precondition.
+
+The test `one_slot_allocator_frees_no_cheating` (`rust_verify_test/tests/alloc_check_custom_allocator.rs`)
+is such an allocator, for one block at a time.
 
 The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
 `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.

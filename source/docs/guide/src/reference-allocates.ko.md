@@ -185,8 +185,22 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 [`#[verifier::trusted_call]`](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) 블록
 안에서만 부를 수 있습니다. 그 호출은 신뢰되고, 함수의 나머지는 그대로 검증되며, 블록 안에서 만든 클로저는
 신뢰되지 않습니다. `--no-cheating`은 이 블록을 거부하므로, 그 아래에서는 할당기가 `deallocate`를 다른
-할당기에 넘길 수 없습니다. 검증된 코드에서 메모리를 해제하려면 대신
-`vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다.
+할당기에 넘길 수 없습니다.
+
+검증된 코드에서 메모리를 해제하려면 대신 `vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다
+(`raw_ptr::allocate`는 할당 한 번, `raw_ptr::deallocate`는 0번). 할당기도 `--no-cheating` 아래에서 같은
+방법을 쓸 수 있습니다.
+* `allocate`는 `raw_ptr::allocate(layout.size(), layout.align())`로 블록을 받습니다(`Layout::size`와
+  `Layout::align`이 그 쌍이 `valid_layout`임을 알려 줍니다). 돌려줄 `NonNull<[u8]>`는
+  `core::ptr::slice_from_raw_parts_mut`와 `NonNull::new`로 만듭니다.
+* 내준 블록의 `PointsToRaw`와 `Dealloc` 권한을 그 포인터·layout과 함께 `&self`에서 닿는 상태에 둡니다
+  (그것들을 기록한 `PCell` 위의 `LocalInvariant`, `Sync` 할당기라면 `AtomicInvariant`).
+* `deallocate`는 그 기록에서 주소와 layout을 찾았을 때만 블록을 해제하고, 나머지는 새게 둡니다(std는
+  다른 것을 넘기지 않습니다). `deallocate`에는 전제조건을 붙일 수 없으므로, 불변식과 셀을 잇는 사실은
+  타입 불변식으로 둡니다.
+
+테스트 `one_slot_allocator_frees_no_cheating`(`rust_verify_test/tests/alloc_check_custom_allocator.rs`)이
+한 번에 블록 하나를 다루는 이런 할당기입니다.
 
 `Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
 `grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의

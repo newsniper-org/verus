@@ -192,9 +192,15 @@ pub open spec fn spec_array_layout<T>(n: nat) -> Layout {
     spec_layout(n * super::super::layout::size_of::<T>(), super::super::layout::align_of::<T>())
 }
 
+/// A `Layout`'s alignment is a power of two and its size, rounded up to the alignment, is at most
+/// `isize::MAX` (std's documented invariant, upheld by every constructor). Stated on the values
+/// that `size` and `align` read from an executable `Layout`, not on `spec_layout`, which makes a
+/// layout of any size and alignment.
 pub assume_specification[ Layout::size ](l: &Layout) -> (r: usize)
     ensures
         r == spec_layout_size(*l),
+        super::super::layout::valid_layout(r, spec_layout_align(*l) as usize),
+        spec_layout_align(*l) <= usize::MAX,
     opens_invariants none
     no_unwind
     allocates
@@ -204,6 +210,8 @@ pub assume_specification[ Layout::size ](l: &Layout) -> (r: usize)
 pub assume_specification[ Layout::align ](l: &Layout) -> (r: usize)
     ensures
         r == spec_layout_align(*l),
+        super::super::layout::valid_layout(spec_layout_size(*l) as usize, r),
+        spec_layout_size(*l) <= usize::MAX,
     opens_invariants none
     no_unwind
     allocates
