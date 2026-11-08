@@ -1813,12 +1813,15 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] alloc_check_non_regular_type_rejected ["vstd", "-V alloc-check"] => verus_code! {
+    // dropping a value of a non-regular type is rejected by rustc itself (E0320, "overflow while
+    // adding drop-check rules"); inside a `ManuallyDrop`, which has no drop glue, it is never
+    // dropped, so there is nothing to bound (the drop rule's own depth limit stays as a guard)
+    #[test] alloc_check_non_regular_type_in_manually_drop ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         use std::mem::ManuallyDrop;
         struct P<T> { v: T, next: Option<Box<P<(T, T)>>> }
         fn f(p: ManuallyDrop<P<u8>>) allocates 0 {}
-    } => Err(err) => assert_vir_error_msg(err, "nested too deeply")
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
