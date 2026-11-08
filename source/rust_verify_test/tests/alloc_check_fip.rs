@@ -901,3 +901,106 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+// A library may provide a `FipAllocator` (its impls were checked when it was compiled with
+// -V alloc-check), and a crate using it need not have fip functions; a marker impl of a crate
+// not verified with -V alloc-check is rejected (portable-fip, fip-beta 3eb69f3c3, §2)
+#[test]
+fn fip_allocator_from_library() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{pre}use vstd::alloc_check::{{AllocFreeDrop, BoundedAllocator, NoDeallocDrop, FipAllocator}};
+use std::alloc::{{Allocator, AllocError, Global, Layout}};
+use std::ptr::NonNull;
+verus! {{
+pub struct Fwd;
+unsafe impl Allocator for Fwd {{
+    #[verifier::fip]
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) allocates 1 {{ Global.allocate(layout) }}
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) allocates 0 {{
+        #[verifier::trusted_call] {{ unsafe {{ Global.deallocate(ptr, layout) }} }}
+    }}
+}}
+unsafe impl AllocFreeDrop for Fwd {{}}
+unsafe impl NoDeallocDrop for Fwd {{}}
+unsafe impl BoundedAllocator for Fwd {{ open spec fn max_cost() -> int {{ 1 }} }}
+unsafe impl FipAllocator for Fwd {{}}
+}}
+"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        dir.join("m.rs"),
+        format!("{pre}verus!{{ fn f(x: u64) -> (r: u64) allocates 0 {{ x }} }}\n"),
+    )
+    .expect("write");
+    let lib = run_verus_raw(
+        &["--crate-type=lib", "lib.rs", "-V", "alloc-check", "--compile", "--export", "lib.vir"],
+        dir,
+    );
+    assert!(lib.status.success(), "lib:\n{}", String::from_utf8_lossy(&lib.stderr));
+    let m = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "m.rs",
+            "-V",
+            "alloc-check",
+            "--compile",
+            "--import",
+            "lib=lib.vir",
+            "--extern",
+            "lib=liblib.rlib",
+        ],
+        dir,
+    );
+    assert!(m.status.success(), "m:\n{}", String::from_utf8_lossy(&m.stderr));
+
+    // a (false) `NoDeallocDrop` in a crate built without -V alloc-check
+    std::fs::write(
+        dir.join("lib3.rs"),
+        format!(
+            "{pre}use vstd::alloc_check::{{AllocFreeDrop, NoDeallocDrop}};
+verus! {{
+pub struct S {{ pub b: Box<u8> }}
+unsafe impl AllocFreeDrop for S {{}}
+unsafe impl NoDeallocDrop for S {{}}
+}}
+"
+        ),
+    )
+    .expect("write");
+    let lib3 =
+        run_verus_raw(&["--crate-type=lib", "lib3.rs", "--compile", "--export", "lib3.vir"], dir);
+    assert!(lib3.status.success(), "lib3:\n{}", String::from_utf8_lossy(&lib3.stderr));
+    std::fs::write(
+        dir.join("m3.rs"),
+        format!("{pre}verus!{{ #[verifier::fip] fn eat(s: lib3::S) -> (r: u64) allocates 0 {{ core::mem::forget(s); 0 }} }}\n"),
+    )
+    .expect("write");
+    let m3 = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "m3.rs",
+            "-V",
+            "alloc-check",
+            "--compile",
+            "--import",
+            "lib3=lib3.vir",
+            "--extern",
+            "lib3=liblib3.rlib",
+        ],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&m3.stderr);
+    assert!(!m3.status.success(), "m3 should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("which was not verified (and compiled) with -V alloc-check"),
+        "unexpected:\n{}",
+        stderr
+    );
+}

@@ -82,7 +82,11 @@ fn user_allocators<'tcx>(
 /// constructor). (A container calls `grow` or `shrink` only on a buffer it has, which frees the
 /// old one, and `deallocate` only to free, both of which a fip function's own checks rule out.)
 /// Returns the strict methods, for `check_strict_stack`.
-fn check_fip_allocator_impls<'tcx>(tcx: TyCtxt<'tcx>, at: &AllocTraits) -> Vec<(LocalDefId, Span)> {
+fn check_fip_allocator_impls<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    at: &AllocTraits,
+    checked: &[(String, u128)],
+) -> Vec<(LocalDefId, Span)> {
     let mut strict_methods = Vec::new();
     let method_of = |tr: DefId, name: &str| {
         tcx.associated_items(tr)
@@ -94,6 +98,16 @@ fn check_fip_allocator_impls<'tcx>(tcx: TyCtxt<'tcx>, at: &AllocTraits) -> Vec<(
         let kind = if strict { "#[verifier::fip(strict)]" } else { "#[verifier::fip]" };
         for impl_def_id in tcx.all_impls(marker) {
             if tcx.crate_name(impl_def_id.krate).as_str() == "vstd" {
+                continue;
+            }
+            if !impl_def_id.is_local() {
+                // checked when its crate was compiled, if it was verified with -V alloc-check
+                dependency_impl_checked(
+                    tcx,
+                    impl_def_id,
+                    checked,
+                    if strict { "FipStrictAllocator" } else { "FipAllocator" },
+                );
                 continue;
             }
             let span = tcx.def_span(impl_def_id);
@@ -242,12 +256,38 @@ fn drop_may_deallocate<'tcx>(
     }
 }
 
+/// A marker impl of another crate was checked by the compilation of that crate if its crate was
+/// verified (and compiled) with -V alloc-check: its imported .vir is marked as checked and was
+/// produced together with the linked crate (`checked`, by name and SVH). Otherwise it is rejected.
+fn dependency_impl_checked(
+    tcx: TyCtxt<'_>,
+    impl_def_id: DefId,
+    checked: &[(String, u128)],
+    marker: &str,
+) {
+    let krate = impl_def_id.krate;
+    let name = tcx.crate_name(krate).to_string();
+    let hash = tcx.crate_hash(krate).as_u128();
+    if !checked.iter().any(|(n, h)| *n == name && *h == hash) {
+        tcx.dcx().err(format!(
+            "-V alloc-check: the `{}` impl `{}` is in the crate `{}`, which was not verified (and compiled) with -V alloc-check and imported with its library file, so the impl was not checked",
+            marker,
+            tcx.def_path_str(impl_def_id),
+            name
+        ));
+    }
+}
+
 /// Marker rule: `unsafe impl NoDeallocDrop for X` is accepted only if dropping an `X` cannot
 /// deallocate: `X` is not a `Box`, its own `Drop` (if any) is `#[verifier::fip]`, and dropping
 /// each of its fields cannot deallocate (it has no drop glue or is `NoDeallocDrop`, with the
-/// impl's own bounds). Every impl in the program is checked, whichever crate it is in.
-fn check_marker_impls<'tcx>(tcx: TyCtxt<'tcx>, marker: DefId) {
+/// impl's own bounds). This crate's impls are checked here, and those of other crates when they were compiled.
+fn check_marker_impls<'tcx>(tcx: TyCtxt<'tcx>, marker: DefId, checked: &[(String, u128)]) {
     for impl_def_id in tcx.all_impls(marker) {
+        if !impl_def_id.is_local() && tcx.crate_name(impl_def_id.krate).as_str() != "vstd" {
+            dependency_impl_checked(tcx, impl_def_id, checked, "NoDeallocDrop");
+            continue;
+        }
         let span = tcx.def_span(impl_def_id);
         let typing_env = TypingEnv::post_analysis(tcx, impl_def_id);
         let self_ty = tcx.type_of(impl_def_id).instantiate_identity().skip_normalization();
@@ -718,15 +758,16 @@ fn check_strict_stack<'tcx>(
 
 /// Checks every `#[verifier::fip]` function of the crate and every `NoDeallocDrop`,
 /// `FipAllocator` and `FipStrictAllocator` impl; returns
-/// whether there are fip functions
-pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>) -> bool {
+/// whether there are fip functions. (The impls of other crates were checked when those crates
+/// were compiled: `checked` lists the dependencies verified with -V alloc-check.)
+pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>, checked: &[(String, u128)]) -> bool {
     let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
     if let Some(m) = marker {
-        check_marker_impls(tcx, m);
+        check_marker_impls(tcx, m, checked);
     }
     let at = alloc_traits(tcx);
     let allocator_methods = match &at {
-        Some(at) => check_fip_allocator_impls(tcx, at),
+        Some(at) => check_fip_allocator_impls(tcx, at, checked),
         None => Vec::new(),
     };
     let mut any = false;

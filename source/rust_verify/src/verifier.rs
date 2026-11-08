@@ -343,6 +343,10 @@ pub struct Verifier {
     /// only after verification and compilation succeed (a .vir is written before verification, so
     /// it would otherwise claim bounds that failed, or describe a different build of the crate)
     alloc_checked_export: Option<(crate::import_export::CrateMetadata, Krate)>,
+    /// -V alloc-check: the dependencies whose imported .vir is marked as checked and was produced
+    /// together with the linked crate (name and SVH). Their compilation passed the checks of
+    /// `fip_mir` too (the mark is written only then), so their marker impls need no new check.
+    pub(crate) alloc_checked_deps: Vec<(String, u128)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -551,6 +555,7 @@ impl Verifier {
             import_virs_via_cargo: None,
             export_vir_path_via_cargo: None,
             alloc_checked_export: None,
+            alloc_checked_deps: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -601,6 +606,7 @@ impl Verifier {
             import_virs_via_cargo: self.import_virs_via_cargo.clone(),
             export_vir_path_via_cargo: self.export_vir_path_via_cargo.clone(),
             alloc_checked_export: self.alloc_checked_export.clone(),
+            alloc_checked_deps: self.alloc_checked_deps.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -3205,6 +3211,13 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                     compiler.sess.dcx().err(msg);
                     self.verifier.encountered_vir_error = true;
                     return rustc_driver::Compilation::Stop;
+                }
+                if let (Some(cnum), Some(hash)) = (linked, metadata.crate_hash) {
+                    if has_checked && hash == tcx.crate_hash(*cnum).as_u128() {
+                        self.verifier
+                            .alloc_checked_deps
+                            .push((tcx.crate_name(*cnum).to_string(), hash));
+                    }
                 }
             }
         }
