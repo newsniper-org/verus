@@ -2853,3 +2853,21 @@ test_verify_one_file! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] nonnull_allocates_nothing ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use core::ptr::NonNull;
+
+        fn f(p: *mut u8) -> (r: Option<NonNull<u8>>)
+            allocates 0
+        {
+            let o = NonNull::new(p);
+            if let Some(nn) = o {
+                let q = nn.as_ptr();
+                let _nn2 = unsafe { NonNull::new_unchecked(q) };
+            }
+            o
+        }
+    } => Ok(())
+}

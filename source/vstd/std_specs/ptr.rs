@@ -20,13 +20,15 @@ pub broadcast axiom fn axiom_nonnull_addr_nonzero<T: core::marker::PointeeSized>
 pub assume_specification<T: core::marker::PointeeSized>[ NonNull::<T>::as_ptr ](p: NonNull<T>) -> (ret: *mut T)
     ensures ret == spec_nonnull_as_ptr(p),
     opens_invariants none
-    no_unwind;
+    no_unwind
+    allocates 0;
 
 pub assume_specification<T: core::marker::PointeeSized>[ NonNull::<T>::new_unchecked ](ptr: *mut T) -> (ret: NonNull<T>)
     requires ptr@.addr != 0,
     ensures spec_nonnull_as_ptr(ret) == ptr,
     opens_invariants none
-    no_unwind;
+    no_unwind
+    allocates 0;
 
 pub assume_specification<T: core::marker::PointeeSized>[ NonNull::<T>::new ](ptr: *mut T) -> (ret: Option<NonNull<T>>)
     ensures match ret {
@@ -34,6 +36,7 @@ pub assume_specification<T: core::marker::PointeeSized>[ NonNull::<T>::new ](ptr
         None => ptr@.addr == 0,
     },
     opens_invariants none
-    no_unwind;
+    no_unwind
+    allocates 0;
 
 } // verus!
