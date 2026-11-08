@@ -236,8 +236,13 @@ nothing.
   `AllocFreeDrop` is a supertrait of `BoundedAllocator`, so dropping the allocator itself must
   not allocate.
 * Cloning a container (and `split_off`) also clones its allocator, at the cost
-  `allocator_clone_cost::<A>()`. That cost is 0 for the global allocator and for references.
-  For other allocators it is uninterpreted.
+  `allocator_clone_cost::<A>()`. std's containers also clone their allocator where Verus does
+  not see it: dropping a `BTreeMap` (or its `IntoIter`) clones it once for every node it frees.
+  So the `Clone` impls of a `BoundedAllocator` must be ones that Verus checks, bounded by
+  `allocates 0`, and must not change the allocator heap (next section). `Allocator`'s contract
+  already requires a clone to behave like the same allocator. The cost is therefore 0 for a
+  `BoundedAllocator`, as for the global allocator and for references. For other allocators it is
+  uninterpreted.
 * With `BoundedAllocator` alone, a cost depends only on the allocator's value and the arguments,
   not on its mutable state (behind `&self`, which the methods take). The next section lifts this.
 
@@ -459,8 +464,10 @@ Two things are checked:
   condition as `allocates deallocates_when(n, c)`: the function allocates at most `n` and may
   deallocate only when `c` holds (evaluated at entry). For example, `Vec::push` may deallocate
   when it has to grow an existing buffer. Growing reallocates, which frees the old block. A
-  vector without a buffer can grow without deallocating. Calls of trait methods that do not
-  resolve to an impl (generic calls), and calls of closures, are rejected.
+  vector without a buffer grows by calling only its allocator's `allocate`, which does not
+  deallocate for the global and the system allocator. For any other allocator, `allocate` is
+  user code (see below). Calls of trait methods that do not resolve to an impl (generic calls),
+  and calls of closures, are rejected.
 * **Drops.** The compiler inserts drops that do not appear in the source. They are checked on
   the MIR of the compiled program, after ghost code is erased and after drop elaboration. A value
   may be dropped on a path that returns normally only if its type has no drop glue at all, or
@@ -471,6 +478,16 @@ Two things are checked:
 An `unsafe impl NoDeallocDrop for X` is accepted only if `X` is not a `Box`, its own `Drop` (if
 any) is `#[verifier::fip]`, and each of its fields has no drop glue or is `NoDeallocDrop`. Every
 impl in the program is checked, whichever crate it is in.
+
+A container calls its allocator's methods inside std's code, so a fip function may use std or
+vstd code with an allocator other than the global or the system allocator (`Vec<u8, A>::push`,
+`Vec::with_capacity_in(n, a)`) only if the allocator implements the unsafe marker trait
+`vstd::alloc_check::FipAllocator`. A generic allocator needs the bound `A: FipAllocator`. An
+`unsafe impl FipAllocator for X` is accepted only if `X`'s `allocate`, its `allocate_zeroed` (if
+its `Allocator` impl defines one) and its `Clone::clone` (if any) are `#[verifier::fip]`
+functions of the same crate. `Allocator`, `BoundedAllocator` and `NoDeallocDrop` are supertraits.
+A `#[verifier::fip(strict)]` function needs `FipStrictAllocator` instead, whose methods must be
+`#[verifier::fip(strict)]`.
 
 Paths that unwind are not covered, as for `allocates`. The drop check runs in the compilation
 step of Verus, so `--no-lifetime` and `--no-erasure-check` reject `#[verifier::fip]` functions.

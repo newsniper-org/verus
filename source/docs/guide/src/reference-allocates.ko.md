@@ -226,7 +226,11 @@ fn push_fits(v: &mut Vec<u64, Chunked>)
   됩니다. 제네릭 할당기에는 `A: Allocator + BoundedAllocator` bound가 필요합니다. `AllocFreeDrop`이
   `BoundedAllocator`의 supertrait이므로, 할당기 자체를 drop할 때도 할당하면 안 됩니다.
 * 컨테이너를 clone하면(`split_off`도) 할당기도 clone하며, 그 비용은 `allocator_clone_cost::<A>()`입니다.
-  전역 할당기와 참조에서는 0이고, 다른 할당기에서는 해석되지 않는 항입니다.
+  std의 컨테이너는 Verus가 보지 못하는 곳에서도 할당기를 clone합니다. `BTreeMap`(또는 그 `IntoIter`)을
+  drop하면 해제하는 노드마다 한 번씩 clone합니다. 그래서 `BoundedAllocator`의 `Clone` impl은 Verus가
+  검사하는 impl이어야 하고, `allocates 0`으로 묶여야 하며, 할당기 힙을 바꾸면 안 됩니다(다음 절).
+  `Allocator`의 계약도 이미 clone한 할당기가 같은 할당기처럼 동작하기를 요구합니다. 따라서 이 비용은
+  `BoundedAllocator`에서 0이며, 전역 할당기와 참조에서도 0입니다. 다른 할당기에서는 해석되지 않는 항입니다.
 * `BoundedAllocator`만으로는 비용이 할당기의 값과 인자에만 의존할 수 있습니다. 메서드가 받는 `&self` 뒤의
   가변 상태에는 의존할 수 없습니다. 이 제한은 다음 절에서 풉니다.
 
@@ -436,7 +440,9 @@ fn push_spare(v: &mut Vec<u64>)
   거짓임을 보여야 합니다. 검증된 본문이 없는 명세는 이 조건을 `allocates deallocates_when(n, c)`로
   적습니다. 그 함수는 최대 `n`번 할당하고, `c`가 참일 때만 해제할 수 있습니다(`c`는 진입 시점에
   평가). 예를 들어 `Vec::push`는 기존 버퍼를 키워야 할 때 해제할 수 있습니다. 키우는 것은
-  재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 해제 없이 키울 수 있습니다.
+  재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 할당기의 `allocate`만 불러서
+  키웁니다. 전역 할당기와 시스템 할당기의 `allocate`는 해제하지 않습니다. 다른 할당기의 `allocate`는
+  사용자 코드입니다(아래 참고).
   impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)과 클로저 호출은 거부합니다.
 * **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
   검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
@@ -448,6 +454,15 @@ fn push_spare(v: &mut Vec<u64>)
 `unsafe impl NoDeallocDrop for X`는 다음 조건을 모두 만족할 때만 받습니다. `X`가 `Box`가 아니고,
 `X` 자신의 `Drop`이 있다면 그것이 `#[verifier::fip]`이며, 각 필드가 drop glue가 없거나 `NoDeallocDrop`이어야
 합니다. 프로그램 안의 모든 impl을, 어느 crate에 있든 검사합니다.
+
+컨테이너는 std 코드 안에서 할당기의 메서드를 부릅니다. 그래서 fip 함수는 전역 할당기나 시스템 할당기가
+아닌 할당기로 std나 vstd 코드를 쓸 때(`Vec<u8, A>::push`, `Vec::with_capacity_in(n, a)`), 그 할당기가
+unsafe 표시 trait `vstd::alloc_check::FipAllocator`를 구현해야 합니다. 제네릭 할당기에는
+`A: FipAllocator` bound가 필요합니다. `unsafe impl FipAllocator for X`는 `X`의 `allocate`, (`Allocator`
+impl이 정의한다면) `allocate_zeroed`, (있다면) `Clone::clone`이 모두 같은 crate의 `#[verifier::fip]`
+함수일 때만 받습니다. `Allocator`, `BoundedAllocator`, `NoDeallocDrop`이 supertrait입니다.
+`#[verifier::fip(strict)]` 함수에는 대신 `FipStrictAllocator`가 필요하고, 그 메서드는
+`#[verifier::fip(strict)]`여야 합니다.
 
 `allocates`와 마찬가지로 unwind하는 경로는 다루지 않습니다. drop 검사는 Verus의 컴파일 단계에서
 돌기 때문에, `--no-lifetime`과 `--no-erasure-check`는 `#[verifier::fip]` 함수를 거부합니다.
