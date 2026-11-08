@@ -412,3 +412,204 @@ test_verify_one_file_with_options! {
         assert!(msgs.iter().any(|m| m.contains("must be an enum with a variant without fields")), "{:?}", msgs);
     }
 }
+
+/// A forwarding allocator for the fip allocator tests, with the given fip attributes on its
+/// `allocate` and `clone` and the given fip marker impls
+fn fip_allocator(alloc_fip: &str, clone_fip: &str, markers: &str) -> String {
+    let code = verus_code_str! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, NoDeallocDrop, FipAllocator, FipStrictAllocator};
+        use vstd::std_specs::vec::spec_vec_capacity;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Fwd;
+
+        impl Clone for Fwd {
+            __CLONE_FIP__
+            fn clone(&self) -> (r: Self)
+                allocates 0
+            {
+                Fwd
+            }
+        }
+
+        unsafe impl Allocator for Fwd {
+            __ALLOC_FIP__
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                Global.allocate(layout)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+                unsafe { Global.deallocate(ptr, layout) }
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Fwd {}
+        unsafe impl NoDeallocDrop for Fwd {}
+        unsafe impl BoundedAllocator for Fwd {
+            open spec fn max_cost() -> int { 1 }
+        }
+        __MARKERS__
+    };
+    code.replace("__ALLOC_FIP__", alloc_fip)
+        .replace("__CLONE_FIP__", clone_fip)
+        .replace("__MARKERS__", markers)
+}
+
+const FIP_MARKER: &str = "unsafe impl FipAllocator for Fwd {}";
+const STRICT_MARKERS: &str =
+    "unsafe impl FipAllocator for Fwd {} unsafe impl FipStrictAllocator for Fwd {}";
+
+test_verify_one_file_with_options! {
+    // a vector without a buffer grows by calling its allocator's `allocate`, which for a user
+    // allocator is user code: it must be fip (`FipAllocator`)
+    #[test] fip_user_allocator_needs_marker ["vstd", "-V alloc-check"] => fip_allocator("", "", "") + verus_code_str! {
+        #[verifier::fip]
+        fn push_empty(v: &mut Vec<u8, Fwd>)
+            requires spec_vec_capacity(&*old(v)) == 0,
+            allocates 1
+        {
+            v.push(1);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "only if it implements `vstd::alloc_check::FipAllocator`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_user_allocator_generic_needs_marker ["vstd", "-V alloc-check"] => fip_allocator("", "", "") + verus_code_str! {
+        #[verifier::fip]
+        fn push_empty<A: Allocator + BoundedAllocator>(v: &mut Vec<u8, A>)
+            requires spec_vec_capacity(&*old(v)) == 0, A::max_cost() <= 1,
+            allocates 1
+        {
+            v.push(1);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "only if it implements `vstd::alloc_check::FipAllocator`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_allocator_accepted ["vstd", "-V alloc-check"] => fip_allocator("#[verifier::fip]", "#[verifier::fip]", FIP_MARKER) + verus_code_str! {
+        #[verifier::fip]
+        fn push_empty(v: &mut Vec<u8, Fwd>)
+            requires spec_vec_capacity(&*old(v)) == 0,
+            allocates 1
+        {
+            v.push(1);
+        }
+
+        #[verifier::fip]
+        fn push_generic<A: FipAllocator>(v: &mut Vec<u8, A>)
+            requires spec_vec_capacity(&*old(v)) == 0, A::max_cost() <= 1,
+            allocates 1
+        {
+            v.push(1);
+        }
+
+        #[verifier::fip]
+        fn mk() -> (r: Vec<u8, Fwd>)
+            allocates 1
+        {
+            Vec::with_capacity_in(4, Fwd)
+        }
+
+        // the std allocators' `allocate` never deallocates
+        #[verifier::fip]
+        fn direct(l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            allocates 1
+        {
+            Global.allocate(l)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_allocator_allocate_not_fip ["vstd", "-V alloc-check"] => fip_allocator("", "#[verifier::fip]", FIP_MARKER) => Err(err) => assert_vir_error_msg(err, "`Fwd::allocate` must be a #[verifier::fip] function of this crate")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_allocator_clone_not_fip ["vstd", "-V alloc-check"] => fip_allocator("#[verifier::fip]", "", FIP_MARKER) => Err(err) => assert_vir_error_msg(err, "the `Clone::clone` of `Fwd` must be a #[verifier::fip] function")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_needs_strict_allocator ["vstd", "-V alloc-check"] => fip_allocator("#[verifier::fip]", "#[verifier::fip]", FIP_MARKER) + verus_code_str! {
+        #[verifier::fip(strict)]
+        fn push_empty(v: &mut Vec<u8, Fwd>)
+            requires spec_vec_capacity(&*old(v)) == 0,
+            allocates 1
+        {
+            v.push(1);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "only if it implements `vstd::alloc_check::FipStrictAllocator`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_allocator_methods_not_strict ["vstd", "-V alloc-check"] => fip_allocator("#[verifier::fip]", "#[verifier::fip(strict)]", STRICT_MARKERS) => Err(err) => assert_vir_error_msg(err, "`Fwd::allocate` must be a #[verifier::fip(strict)] function of this crate")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_allocator_accepted ["vstd", "-V alloc-check"] => fip_allocator("#[verifier::fip(strict)]", "#[verifier::fip(strict)]", STRICT_MARKERS) + verus_code_str! {
+        #[verifier::fip(strict)]
+        fn push_empty(v: &mut Vec<u8, Fwd>)
+            requires spec_vec_capacity(&*old(v)) == 0,
+            allocates 1
+        {
+            v.push(1);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // the allocator's `allocate` could call back into a function that grows a vector with it
+    #[test] fip_strict_allocator_reentry ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, NoDeallocDrop, FipAllocator, FipStrictAllocator};
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Fwd;
+
+        // (allowed to recurse, so that the cycle through the allocator is not rejected as a
+        // possibly nonterminating one first)
+        #[verifier::fip(strict)]
+        #[verifier::exec_allows_no_decreases_clause]
+        fn again() -> (r: Result<NonNull<[u8]>, AllocError>)
+            allocates 5
+        {
+            let v: Vec<u8, Fwd> = Vec::with_capacity_in(1, Fwd);
+            core::mem::forget(v);
+            Err(AllocError)
+        }
+
+        unsafe impl Allocator for Fwd {
+            #[verifier::fip(strict)]
+            #[verifier::exec_allows_no_decreases_clause]
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 5
+            {
+                again()
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+            }
+        }
+
+        unsafe impl AllocFreeDrop for Fwd {}
+        unsafe impl NoDeallocDrop for Fwd {}
+        unsafe impl BoundedAllocator for Fwd {
+            open spec fn max_cost() -> int { 5 }
+        }
+        unsafe impl FipAllocator for Fwd {}
+        unsafe impl FipStrictAllocator for Fwd {}
+    } => Err(err) => {
+        // (the verifier already rejects the cycle through the allocator's impl; the compiler-side
+        // check, which does not see that edge, rejects it too if it gets that far)
+        assert!(err.errors.iter().any(|e| e.message.contains("cyclic self-reference")
+            || e.message.contains("can reach `again`, which uses a user allocator itself")), "{:?}", err.errors);
+    }
+}

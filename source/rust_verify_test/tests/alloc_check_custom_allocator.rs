@@ -262,9 +262,9 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    // cloning a container clones its allocator, which costs an uninterpreted amount for an
-    // allocator other than the global one or a reference
-    #[test] container_clone_charges_allocator_clone ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+    // cloning a container clones its allocator, which costs nothing for a `BoundedAllocator`
+    // (whose `clone` must be bounded by `allocates 0`)
+    #[test] container_clone_bounded_allocator_clone_free ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
         impl Clone for Fwd {
             fn clone(&self) -> (r: Self)
                 allocates 0
@@ -273,11 +273,111 @@ test_verify_one_file_with_options! {
             }
         }
         fn clone_it(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
-            allocates 1 // FAILS
+            allocates 1
         {
             v.clone()
         }
-    } => Err(err) => assert_one_fails(err)
+        fn clone_empty(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
+            requires v@.len() == 0,
+            allocates 0
+        {
+            v.clone()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // std's containers clone their allocator where Verus does not see it (dropping a `BTreeMap`
+    // clones it for every node it frees), so a `BoundedAllocator`'s `clone` must allocate nothing
+    #[test] bounded_allocator_clone_must_allocate_nothing ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        impl Clone for Fwd {
+            fn clone(&self) -> (r: Self)
+                allocates 1
+            {
+                let _b = Box::new(7u8);
+                Fwd
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] bounded_allocator_clone_unbounded ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        impl Clone for Fwd {
+            fn clone(&self) -> (r: Self) {
+                Fwd
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    // (a `Clone` impl that Verus does not see could do anything)
+    #[test] bounded_allocator_clone_outside_verus ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        #[verifier::external]
+        impl Clone for Fwd {
+            fn clone(&self) -> Self {
+                let _b = Box::new(7u8);
+                Fwd
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this `Clone` impl is for a `BoundedAllocator`")
+}
+
+test_verify_one_file_with_options! {
+    // dropping a `BTreeMap` with a `BoundedAllocator` (whose `clone` is free) allocates nothing
+    #[test] btree_drop_bounded_allocator ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        use std::collections::BTreeMap;
+        impl Clone for Fwd {
+            fn clone(&self) -> (r: Self)
+                allocates 0
+            {
+                Fwd
+            }
+        }
+        #[verifier::external]
+        unsafe impl core::alloc::AllocatorClone for Fwd {}
+
+        fn f(m: BTreeMap<u8, u8, Fwd>)
+            allocates 0
+        {
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a btree iterator owns the map's allocator too (std 1.100 `IntoIter::drop` clones and calls it)
+    #[test] btree_into_iter_drop_needs_bounded_allocator ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::collections::btree_map;
+        use std::ptr::NonNull;
+
+        pub struct MyA;
+        #[verifier::external]
+        impl Clone for MyA {
+            fn clone(&self) -> Self { MyA }
+        }
+        #[verifier::external]
+        unsafe impl Allocator for MyA {
+            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
+            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
+        }
+        #[verifier::external]
+        unsafe impl core::alloc::AllocatorClone for MyA {}
+
+        #[verifier::external_type_specification]
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(K)]
+        #[verifier::reject_recursive_types(V)]
+        #[verifier::reject_recursive_types(A)]
+        pub struct ExBIntoIter<K, V, A: core::alloc::AllocatorClone>(btree_map::IntoIter<K, V, A>);
+
+        fn f(it: btree_map::IntoIter<u8, u8, MyA>)
+            allocates 0
+        {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "must implement `vstd::alloc_check::BoundedAllocator`")
 }
 
 /// An allocator whose cost depends on its value (`limit`) and on the requested layout: requests

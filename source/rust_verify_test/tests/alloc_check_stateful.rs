@@ -511,6 +511,41 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
+    // a `BoundedAllocator`'s `clone` runs inside std's containers, where Verus does not see it
+    #[test] stateful_allocator_clone_must_preserve ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
+        pub struct Fwd<'a> { p: &'a Pool, l: Layout }
+
+        impl<'a> Clone for Fwd<'a> {
+            fn clone(&self) -> (r: Self)
+                allocates 0
+            {
+                let _ = self.p.allocate(self.l);
+                Fwd { p: self.p, l: self.l }
+            }
+        }
+
+        unsafe impl<'a> Allocator for Fwd<'a> {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                self.p.allocate(layout)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+                allocates 0
+            {
+            }
+        }
+
+        unsafe impl<'a> AllocFreeDrop for Fwd<'a> {}
+
+        unsafe impl<'a> BoundedAllocator for Fwd<'a> {
+            open spec fn max_cost() -> int { 1 }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "may change the allocator heap")
+}
+
+test_verify_one_file_with_options! {
     #[test] stateful_drop_must_preserve ["vstd", "-V alloc-check"] => POOL.to_string() + verus_code_str! {
         pub struct Holder<'a> { p: &'a Pool, l: Layout }
 

@@ -9,12 +9,198 @@
 use crate::attributes::{Attr, parse_attrs_opt};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir::TerminatorKind;
-use rustc_middle::ty::{self, Ty, TyCtxt, TypingEnv};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt, TypingEnv};
 use rustc_span::Span;
 use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_trait_selection::infer::InferCtxtExt;
 
 const MARKER: &str = "vstd::alloc_check::NoDeallocDrop";
+const FIP_ALLOCATOR: &str = "vstd::alloc_check::FipAllocator";
+const FIP_STRICT_ALLOCATOR: &str = "vstd::alloc_check::FipStrictAllocator";
+
+/// `core::alloc::Allocator` and vstd's `FipAllocator`/`FipStrictAllocator`
+struct AllocTraits {
+    allocator: DefId,
+    fip: DefId,
+    strict: DefId,
+}
+
+fn alloc_traits(tcx: TyCtxt<'_>) -> Option<AllocTraits> {
+    let allocator = tcx.all_traits_including_private().find(|d| {
+        tcx.crate_name(d.krate).as_str() == "core" && tcx.item_name(*d).as_str() == "Allocator"
+    })?;
+    let fip = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == FIP_ALLOCATOR)?;
+    let strict = tcx
+        .all_traits_including_private()
+        .find(|d| tcx.def_path_str(*d) == FIP_STRICT_ALLOCATOR)?;
+    Some(AllocTraits { allocator, fip, strict })
+}
+
+/// The global or the system allocator (std's own, whose methods are not user code)
+fn is_std_allocator<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        ty::Adt(adt, _) => {
+            matches!(tcx.crate_name(adt.did().krate).as_str(), "alloc" | "std" | "core")
+                && matches!(tcx.item_name(adt.did()).as_str(), "Global" | "System")
+        }
+        _ => false,
+    }
+}
+
+/// The allocators other than std's (user code) among the types in `args`: std or vstd code
+/// instantiated with them may call their methods (a container that grows calls `allocate`)
+fn user_allocators<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    at: &AllocTraits,
+    args: ty::GenericArgsRef<'tcx>,
+) -> Vec<Ty<'tcx>> {
+    let mut out: Vec<Ty<'tcx>> = Vec::new();
+    for arg in args.iter() {
+        let Some(t) = arg.as_type() else { continue };
+        for g in t.walk() {
+            let Some(u) = g.as_type() else { continue };
+            if u.has_escaping_bound_vars() || matches!(u.kind(), ty::Ref(..)) {
+                // (the referent is visited too)
+                continue;
+            }
+            if is_std_allocator(tcx, u) || out.contains(&u) {
+                continue;
+            }
+            if implements(tcx, typing_env, at.allocator, u) {
+                out.push(u);
+            }
+        }
+    }
+    out
+}
+
+/// Marker rule: `unsafe impl FipAllocator for X` (`FipStrictAllocator`) is accepted only if the
+/// methods of `X` that std's containers may call in a fip function are `#[verifier::fip]`
+/// (`#[verifier::fip(strict)]`) functions of this crate: `allocate`, `allocate_zeroed` (std's
+/// default body calls `allocate`) and `Clone::clone` (of every `Clone` impl of `X`'s type
+/// constructor). (A container calls `grow` or `shrink` only on a buffer it has, which frees the
+/// old one, and `deallocate` only to free, both of which a fip function's own checks rule out.)
+/// Returns the strict methods, for `check_strict_stack`.
+fn check_fip_allocator_impls<'tcx>(tcx: TyCtxt<'tcx>, at: &AllocTraits) -> Vec<(LocalDefId, Span)> {
+    let mut strict_methods = Vec::new();
+    let method_of = |tr: DefId, name: &str| {
+        tcx.associated_items(tr)
+            .in_definition_order()
+            .find(|i| i.ident(tcx).as_str() == name)
+            .map(|i| i.def_id)
+    };
+    for (marker, strict) in [(at.fip, false), (at.strict, true)] {
+        let kind = if strict { "#[verifier::fip(strict)]" } else { "#[verifier::fip]" };
+        for impl_def_id in tcx.all_impls(marker) {
+            if tcx.crate_name(impl_def_id.krate).as_str() == "vstd" {
+                continue;
+            }
+            let span = tcx.def_span(impl_def_id);
+            let typing_env = TypingEnv::post_analysis(tcx, impl_def_id);
+            let self_ty = tcx.erase_and_anonymize_regions(
+                tcx.type_of(impl_def_id).instantiate_identity().skip_normalization(),
+            );
+            let err = |what: String| {
+                tcx.dcx().span_err(
+                    span,
+                    format!(
+                        "-V alloc-check: this `{}` impl is not accepted: {}",
+                        if strict { "FipStrictAllocator" } else { "FipAllocator" },
+                        what
+                    ),
+                );
+            };
+            let ok_kind = |d: LocalDefId| match fip_kind_local(tcx, d) {
+                Some(s) => s || !strict,
+                None => false,
+            };
+            for (name, default_ok) in [("allocate", false), ("allocate_zeroed", true)] {
+                let Some(m) = method_of(at.allocator, name) else { continue };
+                let args = tcx.mk_args(&[self_ty.into()]);
+                match ty::Instance::try_resolve(tcx, typing_env, m, args) {
+                    Ok(Some(inst)) if inst.def_id() == m && default_ok => {}
+                    Ok(Some(inst)) => match inst.def_id().as_local() {
+                        Some(d) if ok_kind(d) => {
+                            if strict {
+                                strict_methods.push((d, span));
+                            }
+                        }
+                        _ => err(format!(
+                            "`{}::{}` must be a {} function of this crate",
+                            self_ty, name, kind
+                        )),
+                    },
+                    _ => {
+                        err(format!("the `Allocator::{}` of `{}` is not known here", name, self_ty))
+                    }
+                }
+            }
+            if let (Some(clone_trait), ty::Adt(adt, _)) =
+                (tcx.lang_items().clone_trait(), self_ty.kind())
+            {
+                for clone_impl in tcx.all_impls(clone_trait) {
+                    let cty = tcx.type_of(clone_impl).instantiate_identity().skip_normalization();
+                    if cty.ty_adt_def().map(|a| a.did()) != Some(adt.did()) {
+                        continue;
+                    }
+                    for item in tcx.associated_items(clone_impl).in_definition_order() {
+                        if item.ident(tcx).as_str() != "clone" {
+                            continue;
+                        }
+                        match item.def_id.as_local() {
+                            Some(d) if ok_kind(d) => {
+                                if strict {
+                                    strict_methods.push((d, span));
+                                }
+                            }
+                            _ => err(format!(
+                                "the `Clone::clone` of `{}` must be a {} function of this crate (std's containers may clone their allocator)",
+                                cty, kind
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    strict_methods
+}
+
+/// In a fip function, a call of std or vstd code instantiated with a user allocator: it may call
+/// the allocator's methods, which must then be fip (`FipAllocator`, or `FipStrictAllocator` in a
+/// strict function). Returns whether the call uses a user allocator.
+fn check_allocator_use<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    at: &AllocTraits,
+    strict: bool,
+    callee: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+    span: Span,
+) -> bool {
+    if !is_trusted_leaf_crate(tcx, callee) {
+        return false;
+    }
+    let users = user_allocators(tcx, typing_env, at, args);
+    for u in users.iter() {
+        let (need, name) =
+            if strict { (at.strict, FIP_STRICT_ALLOCATOR) } else { (at.fip, FIP_ALLOCATOR) };
+        if !implements(tcx, typing_env, need, *u) {
+            tcx.dcx().span_err(
+                span,
+                format!(
+                    "-V alloc-check: a `#[verifier::fip{}]` function may use the allocator `{}` here (through `{}`, which may call its `allocate`) only if it implements `{}`",
+                    if strict { "(strict)" } else { "" },
+                    u,
+                    tcx.def_path_str(callee),
+                    name
+                ),
+            );
+        }
+    }
+    !users.is_empty()
+}
 
 /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
 fn fip_kind_local(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<bool> {
@@ -133,7 +319,13 @@ fn report<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
 }
 
 /// The drops of one `#[verifier::fip]` function, on paths that return normally
-fn check_fip_body<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, marker: Option<DefId>) {
+fn check_fip_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    marker: Option<DefId>,
+    at: Option<&AllocTraits>,
+) {
+    let strict = fip_kind_local(tcx, def_id) == Some(true);
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
     let body = tcx.mir_drops_elaborated_and_const_checked(def_id);
     let body = body.borrow();
@@ -157,8 +349,11 @@ fn check_fip_body<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, marker: Option<De
                     report(tcx, span, format!("a value of type `{}` is dropped here{}", ty, hint));
                 }
             }
-            TerminatorKind::Call { func, .. } => {
+            TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
                 let Some((callee, args)) = func.const_fn_def() else { continue };
+                if let Some(at) = at {
+                    check_allocator_use(tcx, typing_env, at, strict, callee, args, span);
+                }
                 // (drop elaboration calls `Drop::drop` directly, e.g. for a `Box` whose contents
                 // were moved out, which frees the box)
                 let is_drop_method =
@@ -271,7 +466,12 @@ fn strict_err<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
 
 /// The calls of one strict fip function (on paths that return normally), checked to go to
 /// strict fip functions or to std/vstd
-fn strict_edges<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Vec<StrictEdge> {
+fn strict_edges<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    at: Option<&AllocTraits>,
+) -> (Vec<StrictEdge>, bool) {
+    let mut uses_allocator = false;
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
     let body = tcx.mir_drops_elaborated_and_const_checked(def_id);
     let body = body.borrow();
@@ -312,6 +512,13 @@ fn strict_edges<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Vec<StrictEdge> 
         match &term.kind {
             TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
                 let tail = matches!(&term.kind, TerminatorKind::TailCall { .. });
+                if let (Some(at), Some((callee, args))) = (at, func.const_fn_def()) {
+                    if !user_allocators(tcx, typing_env, at, args).is_empty()
+                        && is_trusted_leaf_crate(tcx, callee)
+                    {
+                        uses_allocator = true;
+                    }
+                }
                 match resolve_callee(tcx, typing_env, func) {
                     Some(callee) => add(callee, tail, span, &mut edges),
                     None => strict_err(
@@ -338,15 +545,57 @@ fn strict_edges<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Vec<StrictEdge> 
             _ => {}
         }
     }
-    edges
+    (edges, uses_allocator)
 }
 
 /// Constant stack space: a call that is not a tail call adds a frame, so no cycle of calls may
 /// go through one (a cycle of tail calls only replaces frames). The calls that leave the strict
 /// functions go to std/vstd, which do not call back.
-fn check_strict_stack<'tcx>(tcx: TyCtxt<'tcx>, strict: &[LocalDefId]) {
-    let graph: std::collections::HashMap<LocalDefId, Vec<StrictEdge>> =
-        strict.iter().map(|f| (*f, strict_edges(tcx, *f))).collect();
+///
+/// A call of std code with a user allocator may call the allocator's (strict) methods, which
+/// does not appear as an edge: so no function that such a method can reach may itself use a user
+/// allocator (otherwise the allocator could call back into it).
+fn check_strict_stack<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    strict: &[LocalDefId],
+    at: Option<&AllocTraits>,
+    allocator_methods: &[(LocalDefId, Span)],
+) {
+    let mut uses_allocator: std::collections::HashSet<LocalDefId> =
+        std::collections::HashSet::new();
+    let graph: std::collections::HashMap<LocalDefId, Vec<StrictEdge>> = strict
+        .iter()
+        .map(|f| {
+            let (edges, uses) = strict_edges(tcx, *f, at);
+            if uses {
+                uses_allocator.insert(*f);
+            }
+            (*f, edges)
+        })
+        .collect();
+    for (m, span) in allocator_methods.iter() {
+        let mut seen = std::collections::HashSet::new();
+        let mut work = vec![*m];
+        while let Some(f) = work.pop() {
+            if !seen.insert(f) {
+                continue;
+            }
+            if uses_allocator.contains(&f) {
+                tcx.dcx().span_err(
+                    *span,
+                    format!(
+                        "-V alloc-check: this `FipStrictAllocator` impl is not accepted: its `{}` can reach `{}`, which uses a user allocator itself (the allocator could call back into it, growing the stack)",
+                        tcx.def_path_str(m.to_def_id()),
+                        tcx.def_path_str(f.to_def_id())
+                    ),
+                );
+                break;
+            }
+            if let Some(es) = graph.get(&f) {
+                work.extend(es.iter().map(|e| e.callee));
+            }
+        }
+    }
     let reaches = |from: LocalDefId, to: LocalDefId| -> bool {
         let mut seen = std::collections::HashSet::new();
         let mut work = vec![from];
@@ -380,13 +629,19 @@ fn check_strict_stack<'tcx>(tcx: TyCtxt<'tcx>, strict: &[LocalDefId]) {
     }
 }
 
-/// Checks every `#[verifier::fip]` function of the crate and every `NoDeallocDrop` impl; returns
+/// Checks every `#[verifier::fip]` function of the crate and every `NoDeallocDrop`,
+/// `FipAllocator` and `FipStrictAllocator` impl; returns
 /// whether there are fip functions
 pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>) -> bool {
     let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
     if let Some(m) = marker {
         check_marker_impls(tcx, m);
     }
+    let at = alloc_traits(tcx);
+    let allocator_methods = match &at {
+        Some(at) => check_fip_allocator_impls(tcx, at),
+        None => Vec::new(),
+    };
     let mut any = false;
     let mut strict: Vec<LocalDefId> = Vec::new();
     for def_id in tcx.hir_body_owners() {
@@ -403,9 +658,9 @@ pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>) -> bool {
         if fip_kind_local(tcx, def_id) == Some(true) {
             strict.push(def_id);
         }
-        check_fip_body(tcx, def_id, marker);
+        check_fip_body(tcx, def_id, marker, at.as_ref());
     }
-    check_strict_stack(tcx, &strict);
+    check_strict_stack(tcx, &strict, at.as_ref(), &allocator_methods);
     any
 }
 

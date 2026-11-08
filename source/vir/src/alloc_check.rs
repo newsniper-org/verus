@@ -121,6 +121,7 @@ const STD_ALLOCATOR_PARAM_TYPES: &[&str] = &[
     "alloc::collections::binary_heap::BinaryHeap",
     "alloc::collections::btree::map::BTreeMap",
     "alloc::collections::btree::set::BTreeSet",
+    "alloc::collections::btree::map::IntoIter",
     "alloc::rc::Rc",
     "alloc::rc::Weak",
     "alloc::sync::Arc",
@@ -174,9 +175,25 @@ fn is_bounded_allocator_trait(path: &Path) -> bool {
     crate::ast_util::path_as_friendly_rust_name(path) == "vstd::alloc_check::BoundedAllocator"
 }
 
+/// `BoundedAllocator` or one of its subtraits `FipAllocator`, `FipStrictAllocator` (as a bound,
+/// each says that the parameter is a `BoundedAllocator`)
+fn implies_bounded_allocator(path: &Path) -> bool {
+    let name = crate::ast_util::path_as_friendly_rust_name(path);
+    name == "vstd::alloc_check::BoundedAllocator"
+        || name == "vstd::alloc_check::FipAllocator"
+        || name == "vstd::alloc_check::FipStrictAllocator"
+}
+
 /// `core::alloc::Allocator`
 fn is_allocator_trait(path: &Path) -> bool {
     crate::ast_util::path_as_friendly_rust_name(path) == "core::alloc::Allocator"
+}
+
+/// `core::alloc::Allocator` or its std 1.100 refinement `AllocatorClone` (the bound that the
+/// btree types put on their allocator parameter)
+fn is_allocator_bound_trait(path: &Path) -> bool {
+    let name = crate::ast_util::path_as_friendly_rust_name(path);
+    name == "core::alloc::Allocator" || name == "core::alloc::AllocatorClone"
 }
 
 /// `Copy` types have no drop glue at all
@@ -185,14 +202,15 @@ fn is_copy_trait(path: &Path) -> bool {
 }
 
 /// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
-/// (or `T: BoundedAllocator` or `T: NoDeallocDrop`, whose supertrait is `AllocFreeDrop`)
+/// (or `T: BoundedAllocator`, `FipAllocator`, `FipStrictAllocator` or `NoDeallocDrop`, whose
+/// supertraits include `AllocFreeDrop`)
 fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     let mut params = HashSet::new();
     for bound in bounds.iter() {
         if let GenericBoundX::Trait(TraitId::Path(path), args) = &**bound {
             if is_alloc_free_drop_trait(path)
                 || is_copy_trait(path)
-                || is_bounded_allocator_trait(path)
+                || implies_bounded_allocator(path)
                 || crate::ast_util::path_as_friendly_rust_name(path)
                     == "vstd::alloc_check::NoDeallocDrop"
             {
@@ -283,7 +301,7 @@ impl<'a> DropGlueCheck<'a> {
             .iter()
             .filter_map(|b| match &**b {
                 GenericBoundX::Trait(TraitId::Path(path), args)
-                    if is_bounded_allocator_trait(path) =>
+                    if implies_bounded_allocator(path) =>
                 {
                     match args.first().map(|t| &**t) {
                         Some(TypX::TypParam(x)) => Some(x.clone()),
@@ -660,7 +678,7 @@ impl<'a> DropGlueCheck<'a> {
                         .filter(|((x, _), _)| {
                             datatype.x.typ_bounds.iter().any(|b| match &**b {
                                 GenericBoundX::Trait(TraitId::Path(tp), targs) => {
-                                    is_allocator_trait(tp)
+                                    is_allocator_bound_trait(tp)
                                         && targs.first().is_some_and(
                                             |t| matches!(&**t, TypX::TypParam(y) if y == x),
                                         )
@@ -1150,6 +1168,43 @@ pub(crate) fn add_bounded_allocator_edges(
     }
 }
 
+/// The datatype at the head of `typ`, under references
+fn head_dt(typ: &Typ) -> Option<Dt> {
+    let mut t = typ;
+    loop {
+        match &**t {
+            TypX::MutRef(inner) | TypX::Decorate(_, _, inner) => t = inner,
+            TypX::Datatype(dt, _, _) => return Some(dt.clone()),
+            _ => return None,
+        }
+    }
+}
+
+/// The datatypes with a `vstd::alloc_check::BoundedAllocator` impl outside vstd
+pub(crate) fn bounded_allocator_dts(krate: &Krate) -> HashSet<Dt> {
+    krate
+        .trait_impls
+        .iter()
+        .filter(|i| is_bounded_allocator_trait(&i.x.trait_path) && !i.x.impl_path.is_vstd_path())
+        .filter_map(|i| i.x.trait_typ_args.first().and_then(head_dt))
+        .collect()
+}
+
+/// The `Clone::clone` impls for the datatypes `dts` (any instance: a generic allocator's clone
+/// impls are all covered)
+pub(crate) fn clone_impls_of<'a>(
+    krate: &'a Krate,
+    dts: &'a HashSet<Dt>,
+) -> impl Iterator<Item = &'a crate::ast::Function> + 'a {
+    krate.functions.iter().filter(move |f| match &f.x.kind {
+        crate::ast::FunctionKind::TraitMethodImpl { method, trait_typ_args, .. } => {
+            crate::ast_util::fun_as_friendly_rust_name(method) == "core::clone::Clone::clone"
+                && trait_typ_args.first().and_then(head_dt).is_some_and(|d| dts.contains(&d))
+        }
+        _ => false,
+    })
+}
+
 /// Marker rule: `unsafe impl BoundedAllocator for X` is accepted only if `X`'s `Allocator` impl
 /// is one that Verus checks: its `allocate` and `deallocate` (the methods without a default) are
 /// in the crate, so they were verified against the bounds of the `Allocator` declaration
@@ -1158,7 +1213,8 @@ pub(crate) fn add_bounded_allocator_edges(
 /// methods it does not define run std's default bodies, each of which calls one of
 /// `allocate`/`allocate_zeroed` once with the new layout and `deallocate` at most once (std 1.100
 /// `core/src/alloc/mod.rs`), so they stay within the marker's default costs, which the marker
-/// may then not replace.
+/// may then not replace. If `X` has `Clone` impls, their `clone` must be bounded by
+/// `allocates 0` (and must not change the allocator heap).
 /// (vstd's impls, for the std allocators and for references, are trusted.)
 pub(crate) fn check_bounded_allocator_impls(krate: &Krate) -> Result<(), VirErr> {
     for imp in krate.trait_impls.iter() {
@@ -1225,6 +1281,25 @@ pub(crate) fn check_bounded_allocator_impls(krate: &Krate) -> Result<(), VirErr>
             }
         }
     }
+    // A clone of a bounded allocator allocates nothing (and does not change the heap, see
+    // `alloc_heap::check_hidden_calls_preserve`): std's containers clone their allocator where
+    // Verus does not see it (dropping a `BTreeMap` clones it once for each node it frees), so its
+    // cost could not be charged there. (`Allocator`'s contract already requires a clone to behave
+    // like the same allocator.) That every such impl is one Verus sees is checked on the
+    // compiler's side (rust_verify's `check_impls_outside_vir`).
+    let dts = bounded_allocator_dts(krate);
+    for f in clone_impls_of(krate, &dts) {
+        let unverified_body = f.x.attrs.is_external_body || f.x.proxy.is_some();
+        let zero = f.x.allocates.as_ref().is_some_and(|e| is_literal_zero(e))
+            && !unverified_body
+            && f.x.attrs.alloc_checked_crate;
+        if !zero {
+            return Err(error(
+                &f.span,
+                "-V alloc-check: the `Clone::clone` of a `BoundedAllocator` must be checked by Verus and bounded by `allocates 0` (std's containers clone their allocator where Verus does not see it, e.g. for every node that dropping a `BTreeMap` frees)",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1269,7 +1344,8 @@ pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), Vi
 /// (`external_body`, `assume_specification`) is never checked, so its own bound could contradict
 /// the declaration's and make `false` provable. Such an impl must not state its own bound: it then
 /// has the declaration's bound, which is trusted like the rest of its specification. (A literal
-/// `allocates 0` is allowed: both bounds are clamped at 0, so it cannot exceed the declaration's.)
+/// `allocates 0` is allowed: both bounds are clamped at 0, so it cannot exceed the declaration's.
+/// vstd's own specifications are trusted like the rest of vstd.)
 pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(), VirErr> {
     let decl_has_bound: HashSet<&crate::ast::Fun> =
         krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
@@ -1282,6 +1358,11 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
         // `call_allocates == 0` cannot contradict `call_allocates <= decl`: both bounds are
         // clamped at 0
         if is_literal_zero(own) {
+            continue;
+        }
+        // (vstd's own specifications are the trusted base: one of them may restate the
+        // declaration's bound, e.g. to add a `deallocates_when` condition)
+        if f.x.proxy.as_ref().is_some_and(|px| px.x.is_vstd_path()) {
             continue;
         }
         if f.x.attrs.is_external_body || f.x.proxy.is_some() {

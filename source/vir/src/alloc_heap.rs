@@ -321,11 +321,18 @@ pub(crate) fn check_impls_follow_decls(krate: &Krate) -> Result<(), VirErr> {
     Ok(())
 }
 
-/// `Drop::drop` and `Allocator::deallocate` run where Verus does not see them (a drop), so their
-/// bodies must not change the heap (a lower bound in it would then be stale)
+/// `Drop::drop` and `Allocator::deallocate` run where Verus does not see them (a drop), and so
+/// does a `BoundedAllocator`'s `Clone::clone` (std's containers clone their allocator inside
+/// their own code, e.g. when a `BTreeMap` is dropped), so their bodies must not change the heap
+/// (a lower bound in it would then be stale)
 pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Result<(), VirErr> {
+    let dts = crate::alloc_check::bounded_allocator_dts(krate);
+    let clones: HashSet<&Fun> =
+        crate::alloc_check::clone_impls_of(krate, &dts).map(|f| &f.x.name).collect();
     for f in krate.functions.iter() {
-        let what = if f.x.attrs.is_drop {
+        let what = if clones.contains(&f.x.name) {
+            "Clone::clone of a BoundedAllocator"
+        } else if f.x.attrs.is_drop {
             "Drop::drop"
         } else if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
             if crate::ast_util::fun_as_friendly_rust_name(method)
@@ -345,7 +352,7 @@ pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Res
             return Err(error(
                 &f.span,
                 format!(
-                    "this `{}` may change the allocator heap (allocate from, or step, an allocator with a state), but it runs where Verus does not see it (when a value is dropped); an allocator's `deallocate` may only raise its authoritative state (`AllocAuth::raise`)",
+                    "this `{}` may change the allocator heap (allocate from, or step, an allocator with a state), but it runs where Verus does not see it (when a value is dropped, or inside std's containers); an allocator's `deallocate` may only raise its authoritative state (`AllocAuth::raise`)",
                     what
                 ),
             ));
@@ -493,8 +500,9 @@ pub(crate) fn rewrite_with(
     post: &Expr,
 ) -> Result<Expr, VirErr> {
     crate::ast_visitor::map_expr_visitor(expr, &|e: &Expr| {
-        let ExprX::Call { target: CallTarget::Fun(kind, fun, typs, impl_paths, attrs), args, .. } =
-            &e.x
+        let ExprX::Call {
+            target: CallTarget::Fun(kind, fun, typs, impl_paths, attrs), args, ..
+        } = &e.x
         else {
             return Ok(e.clone());
         };
@@ -506,8 +514,11 @@ pub(crate) fn rewrite_with(
         match sp {
             Special::Heap | Special::OldHeap => Ok(heap),
             Special::State | Special::OldState | Special::Tracked => {
-                let name =
-                    if sp == Special::Tracked { info.tracked_in.clone() } else { info.state_in.clone() };
+                let name = if sp == Special::Tracked {
+                    info.tracked_in.clone()
+                } else {
+                    info.state_in.clone()
+                };
                 let mut new_args = vec![heap];
                 new_args.extend(args.iter().cloned());
                 Ok(e.new_x(ExprX::Call {
@@ -612,7 +623,13 @@ pub(crate) fn prepare_function(info: &HeapInfo, function: &Function) -> Result<F
         for name in [heap_pre(), heap_post()] {
             params.push(crate::def::Spanned::new(
                 function.span.clone(),
-                ParamX { name, typ: info.typ.clone(), mode: Mode::Spec, user_mut: false, unwrapped_info: None },
+                ParamX {
+                    name,
+                    typ: info.typ.clone(),
+                    mode: Mode::Spec,
+                    user_mut: false,
+                    unwrapped_info: None,
+                },
             ));
         }
         fx.params = Arc::new(params);

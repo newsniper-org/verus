@@ -254,8 +254,8 @@ pub uninterp spec fn allocator_shrink_cost<A: ?Sized>(
 ) -> int;
 
 /// -V alloc-check: the allocations of cloning an allocator of type `A` (which the containers'
-/// `clone` and `split_off` do): 0 for the global allocator and for references; for any other
-/// allocator, an uninterpreted per-type cost.
+/// `clone` and `split_off` do): 0 for the global allocator, for references and for a
+/// `vstd::alloc_check::BoundedAllocator`; for any other allocator, an uninterpreted per-type cost.
 pub uninterp spec fn allocator_clone_cost<A: ?Sized>() -> int;
 
 pub broadcast axiom fn axiom_allocator_max_cost<A: ?Sized>()
@@ -368,6 +368,19 @@ pub broadcast axiom fn axiom_bounded_allocator_shrink_cost<
         ),
 ;
 
+/// A `BoundedAllocator`'s `clone` (if it has one) allocates nothing: the marker rule
+/// (`vir::alloc_check::check_bounded_allocator_impls`) requires it to be bounded by `allocates 0`
+/// and not to change the allocator heap, since std's containers clone their allocator where
+/// Verus does not see it (dropping a `BTreeMap` clones it for every node it frees). (`Allocator`'s
+/// safety contract already requires a clone to behave like the same allocator.)
+#[cfg(not(verus_verify_core))]
+pub broadcast axiom fn axiom_bounded_allocator_clone_cost<
+    A: crate::alloc_check::BoundedAllocator + ?Sized,
+>()
+    ensures
+        #[trigger] allocator_clone_cost::<A>() == 0,
+;
+
 // `&A` and `&mut A` forward every method to `A` (std 1.100 `core/src/alloc/mod.rs`). (For `&mut A`
 // only the maximum is stated: a specification cannot dereference a `&&mut A` argument.)
 pub broadcast axiom fn axiom_ref_allocator_max_cost<A: ?Sized>()
@@ -428,6 +441,8 @@ pub broadcast group group_rust_1_100_core_axioms {
     axiom_bounded_allocator_grow_zeroed_cost,
     #[cfg(not(verus_verify_core))]
     axiom_bounded_allocator_shrink_cost,
+    #[cfg(not(verus_verify_core))]
+    axiom_bounded_allocator_clone_cost,
     axiom_ref_allocator_max_cost,
     axiom_mut_ref_allocator_max_cost,
     axiom_ref_allocator_allocate_cost,
@@ -495,6 +510,10 @@ pub unsafe trait ExAllocator {
 // not counted), i.e. their `max_cost` is 1 (`vstd::alloc_check::BoundedAllocator`); the
 // specifications below have the bounds of the `Allocator` declaration. (`Global` is the global
 // allocator, `System` the system's; a `#[global_allocator]` replaces what `Global` calls.)
+// The std allocators' `allocate` and `allocate_zeroed` only obtain memory (std 1.100
+// `alloc/src/alloc.rs` `Global::alloc_impl`, `std/src/alloc.rs` `System`): they never deallocate,
+// so a `#[verifier::fip]` function (a `FipAllocator`'s `allocate`) may call them. (The bound is
+// the declaration's, restated to add the condition.)
 macro_rules! std_allocator_specs {
     ($cfg:meta, $a:ty) => {
         #[$cfg]
@@ -503,12 +522,14 @@ macro_rules! std_allocator_specs {
                 a: &$a,
                 layout: Layout,
             ) -> Result<NonNull<[u8]>, AllocError>
+                allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
             ;
 
             pub assume_specification[ <$a as core::alloc::Allocator>::allocate_zeroed ](
                 a: &$a,
                 layout: Layout,
             ) -> Result<NonNull<[u8]>, AllocError>
+                allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
             ;
 
             pub assume_specification[ <$a as core::alloc::Allocator>::deallocate ](

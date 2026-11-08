@@ -414,4 +414,73 @@ unsafe impl<'a, A: BoundedAllocator + ?Sized> BoundedAllocator for &'a mut A {
     }
 }
 
+/// Allocators that a `#[verifier::fip]` function (fully in-place, FP²) may use through std's
+/// containers.
+///
+/// A container that grows without a buffer to reallocate (`Vec::push` on an empty vector) only
+/// calls its allocator's `allocate`, which for a user allocator is user code: a fip function may
+/// instantiate std (or vstd) code with an allocator other than the global or the system allocator
+/// only if the allocator implements this trait (a generic one needs the bound
+/// `A: FipAllocator`). An `unsafe impl FipAllocator for X` is accepted only if `X`'s `allocate`
+/// (and `allocate_zeroed`, if the `Allocator` impl defines it) and `X`'s `Clone::clone` (if any)
+/// are `#[verifier::fip]` functions of the same crate. `NoDeallocDrop` is a supertrait: dropping
+/// the allocator does not deallocate.
+pub unsafe trait FipAllocator: core::alloc::Allocator + BoundedAllocator + NoDeallocDrop {
+
+}
+
+/// Allocators that a `#[verifier::fip(strict)]` function may use through std's containers: as
+/// `FipAllocator`, with `#[verifier::fip(strict)]` methods (constant stack space), none of which
+/// can reach (through calls that are not tail calls or through other allocators) a function that
+/// uses a user allocator itself.
+pub unsafe trait FipStrictAllocator: FipAllocator {
+
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl NoDeallocDrop for alloc::alloc::Global {
+
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl FipAllocator for alloc::alloc::Global {
+
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl FipStrictAllocator for alloc::alloc::Global {
+
+}
+
+#[cfg(feature = "std")]
+unsafe impl NoDeallocDrop for std::alloc::System {
+
+}
+
+#[cfg(feature = "std")]
+unsafe impl FipAllocator for std::alloc::System {
+
+}
+
+#[cfg(feature = "std")]
+unsafe impl FipStrictAllocator for std::alloc::System {
+
+}
+
+unsafe impl<'a, A: FipAllocator + ?Sized> FipAllocator for &'a A {
+
+}
+
+unsafe impl<'a, A: FipStrictAllocator + ?Sized> FipStrictAllocator for &'a A {
+
+}
+
+unsafe impl<'a, A: FipAllocator + ?Sized> FipAllocator for &'a mut A {
+
+}
+
+unsafe impl<'a, A: FipStrictAllocator + ?Sized> FipStrictAllocator for &'a mut A {
+
+}
+
 } // verus!
