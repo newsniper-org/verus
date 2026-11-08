@@ -15,12 +15,16 @@ use common::*;
 // These tests verify programs whose checked functions have numeric bounds, compile them at
 // several optimization levels with a counting `#[global_allocator]`, run them, and compare the
 // counts each call actually made with its verified bound. A count above the bound would mean a
-// specification in vstd is wrong or the compiler introduced an allocator call.
+// specification in vstd is wrong or the compiler introduced an allocator call. They also run a
+// user allocator through std's containers, and count the deallocations of `#[verifier::fip]`
+// functions (which must make none).
 
 const COUNTING_PRELUDE: &str = r#"
 use std::sync::atomic::{AtomicUsize, Ordering};
 struct Counting;
 static COUNT: AtomicUsize = AtomicUsize::new(0);
+// (deallocations, for `#[verifier::fip]`: `dealloc`, and the old block of a `realloc`)
+static FREES: AtomicUsize = AtomicUsize::new(0);
 unsafe impl std::alloc::GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
         COUNT.fetch_add(1, Ordering::SeqCst);
@@ -32,9 +36,11 @@ unsafe impl std::alloc::GlobalAlloc for Counting {
     }
     unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
         COUNT.fetch_add(1, Ordering::SeqCst);
+        FREES.fetch_add(1, Ordering::SeqCst);
         unsafe { std::alloc::System.realloc(p, l, n) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        FREES.fetch_add(1, Ordering::SeqCst);
         unsafe { std::alloc::System.dealloc(p, l) }
     }
 }
@@ -50,10 +56,24 @@ fn measure<R>(name: &str, bound: usize, f: impl FnOnce() -> R) {
     drop(r);
     println!("ALLOC-CASE {} {} {}", name, after - before, bound);
 }
+
+// The same for a `#[verifier::fip]` function, which must also not deallocate
+fn measure_fip(name: &str, bound: usize, f: impl FnOnce()) {
+    let (before, freed_before) = (COUNT.load(Ordering::SeqCst), FREES.load(Ordering::SeqCst));
+    f();
+    let (after, freed_after) = (COUNT.load(Ordering::SeqCst), FREES.load(Ordering::SeqCst));
+    println!("ALLOC-CASE {} {} {}", name, after - before, bound);
+    println!("FIP-CASE {} {}", name, freed_after - freed_before);
+}
 "#;
 
 const CASES: &str = r#"
 use vstd::prelude::*;
+use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, FipAllocator, NoDeallocDrop};
+use vstd::std_specs::vec::spec_vec_capacity;
+use std::alloc::{AllocError, Allocator, Global, Layout};
+use std::collections::BTreeMap;
+use std::ptr::NonNull;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -216,13 +236,98 @@ fn cap_after_reserve_u32() -> (c: usize)
     v.capacity()
 }
 
+// A user allocator (forwarding to the global one, which is counted)
+pub struct Fwd;
+
+impl Clone for Fwd {
+    #[verifier::fip]
+    fn clone(&self) -> (r: Self)
+        allocates 0
+    {
+        Fwd
+    }
+}
+
+unsafe impl Allocator for Fwd {
+    #[verifier::fip]
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        allocates 1
+    {
+        Global.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
+        allocates 0
+    {
+        unsafe { Global.deallocate(ptr, layout) }
+    }
+}
+
+unsafe impl AllocFreeDrop for Fwd {}
+unsafe impl NoDeallocDrop for Fwd {}
+unsafe impl BoundedAllocator for Fwd {
+    open spec fn max_cost() -> int { 1 }
+}
+unsafe impl FipAllocator for Fwd {}
+
+#[verifier::fip]
+fn fip_push_spare(v: &mut Vec<u64>)
+    requires
+        old(v)@.len() < spec_vec_capacity(&*old(v)),
+{
+    v.push(1);
+}
+
+#[verifier::fip]
+fn fip_push_empty_fwd(v: &mut Vec<u8, Fwd>)
+    requires
+        spec_vec_capacity(&*old(v)) == 0,
+    allocates 1
+{
+    v.push(1);
+}
+
+// dropping a `BTreeMap` clones its allocator for every node it frees
+fn btree_drop_fwd(m: BTreeMap<u8, u8, Fwd>)
+    allocates 0
+{
+}
+
+fn box_zst_fwd() -> (r: Box<(), Fwd>)
+    allocates 0
+{
+    Box::new_in((), Fwd)
+}
+
+fn vec_clone_fwd(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
+    allocates 1
+{
+    v.clone()
+}
+
 fn main() {
 }
 
 } // verus!
 
+unsafe impl core::alloc::AllocatorClone for Fwd {}
+
 #[verifier::external]
 fn run_cases() {
+    let mut v0: Vec<u64> = Vec::with_capacity(4);
+    measure_fip("fip_push_spare", 0, || fip_push_spare(&mut v0));
+    let mut v1: Vec<u8, Fwd> = Vec::new_in(Fwd);
+    measure_fip("fip_push_empty_fwd", 1, || fip_push_empty_fwd(&mut v1));
+    let mut m = BTreeMap::new_in(Fwd);
+    for i in 0..100u8 {
+        m.insert(i, i);
+    }
+    measure("btree_drop_fwd", 0, || btree_drop_fwd(m));
+    measure("box_zst_fwd", 0, || box_zst_fwd());
+    let mut w: Vec<u8, Fwd> = Vec::new_in(Fwd);
+    w.push(1);
+    w.push(2);
+    measure("vec_clone_fwd", 1, || vec_clone_fwd(&w));
     measure("vec_push_grow", 2, || vec_push_grow());
     measure("vec_new_push", 1, || vec_new_push());
     measure("vec_reserve_then_push", 1, || vec_reserve_then_push(3));
@@ -250,7 +355,10 @@ fn run_at(opt_level: &str) {
     // (`fn main` comes from `verus!`, so `run_cases` is called from a second, external `main`
     // in a module-level wrapper: replace the empty verified `main`)
     let cases = CASES.replace("fn main() {\n}", "#[verifier::external] fn main() { run_cases() }");
-    let code = format!("{}\n{}\n{}\n", FEATURE_PRELUDE, COUNTING_PRELUDE, cases);
+    let code = format!(
+        "{}\n#![feature(btreemap_alloc)]\n{}\n{}\n",
+        FEATURE_PRELUDE, COUNTING_PRELUDE, cases
+    );
     std::fs::write(&entry_file, code).expect("write source file");
     let opt = format!("opt-level={}", opt_level);
     let output = run_verus_raw(
@@ -269,7 +377,18 @@ fn run_at(opt_level: &str) {
     let stdout = String::from_utf8_lossy(&run.stdout);
     let mut n = 0;
     let mut caps = 0;
+    let mut fips = 0;
     for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("FIP-CASE ") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            assert_eq!(
+                parts[1], "0",
+                "{} (opt-level={}): {} deallocations, but it verified as `#[verifier::fip]`",
+                parts[0], opt_level, parts[1]
+            );
+            fips += 1;
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("CAP-CASE ") {
             let parts: Vec<&str> = rest.split_whitespace().collect();
             assert_eq!(
@@ -294,7 +413,8 @@ fn run_at(opt_level: &str) {
         );
         n += 1;
     }
-    assert_eq!(n, 13, "expected 13 cases, got:\n{}", stdout);
+    assert_eq!(n, 18, "expected 18 cases, got:\n{}", stdout);
+    assert_eq!(fips, 2, "expected 2 fip cases, got:\n{}", stdout);
     assert_eq!(caps, 3, "expected 3 capacity cases, got:\n{}", stdout);
 }
 

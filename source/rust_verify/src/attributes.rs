@@ -1625,7 +1625,17 @@ pub(crate) fn get_verifier_attrs_maybe_check(
             Attr::AssumeTermination => vs.assume_termination = true,
             Attr::ExecAllowNoDecreasesClause => vs.exec_allows_no_decreases_clause = true,
             Attr::AllocCheckSkipDrops => vs.alloc_check_skip_drops = true,
-            Attr::Fip(strict) => vs.fip = Some(strict),
+            Attr::Fip(strict) => {
+                // (rust_verify's MIR checks and the verifier must agree on the kind)
+                if vs.fip.is_some() {
+                    let span = attrs.first().map(|a| a.span()).unwrap_or(rustc_span::DUMMY_SP);
+                    return err_span(
+                        span,
+                        "more than one `#[verifier::fip]` attribute (use one: `#[verifier::fip]` or `#[verifier::fip(strict)]`)",
+                    );
+                }
+                vs.fip = Some(strict)
+            }
             Attr::ExternalsAvailableWithoutDeclaration(flag) => {
                 vs.externals_available_without_declaration = Some(flag)
             }

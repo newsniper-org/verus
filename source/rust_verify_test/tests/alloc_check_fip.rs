@@ -613,3 +613,139 @@ test_verify_one_file_with_options! {
             || e.message.contains("can reach `again`, which uses a user allocator itself")), "{:?}", err.errors);
     }
 }
+
+/// A type whose (fip, but not strict) `Drop` recurses
+const RECURSIVE_DROP: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use vstd::alloc_check::{AllocFreeDrop, NoDeallocDrop};
+
+    #[verifier::fip]
+    fn deep(n: u64) -> (r: u64)
+        decreases n
+        opens_invariants none
+        no_unwind
+    {
+        if n == 0 { 0 } else { let r = deep(n - 1); if r < 1000 { r + 1 } else { r } }
+    }
+
+    pub struct H { pub n: u64 }
+
+    impl Drop for H {
+        #[verifier::fip]
+        fn drop(&mut self)
+            opens_invariants none
+            no_unwind
+        {
+            let _ = deep(self.n);
+        }
+    }
+
+    unsafe impl AllocFreeDrop for H {}
+    unsafe impl NoDeallocDrop for H {}
+};
+
+test_verify_one_file_with_options! {
+    // the drop of a value of a type parameter runs a destructor that is not known here
+    #[test] fip_strict_generic_drop ["vstd", "-V alloc-check"] => RECURSIVE_DROP.to_string() + verus_code_str! {
+        #[verifier::fip(strict)]
+        fn sink<T: NoDeallocDrop>(x: T) {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "it drops a value of type `T`, whose destructor is not known here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_generic_copy_ok ["vstd", "-V alloc-check"] => RECURSIVE_DROP.to_string() + verus_code_str! {
+        #[verifier::fip(strict)]
+        fn sink<T: Copy>(x: T) {
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // std code may drop values of its type arguments (`Vec::clear`), running their destructors
+    #[test] fip_strict_std_call_runs_destructor ["vstd", "-V alloc-check"] => RECURSIVE_DROP.to_string() + verus_code_str! {
+        #[verifier::fip(strict)]
+        fn strict_clear(v: &mut Vec<H>) {
+            v.clear();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "which is not `#[verifier::fip(strict)]`")
+}
+
+test_verify_one_file_with_options! {
+    // (both the MIR checks and the verifier must agree on the kind)
+    #[test] fip_two_attributes ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip]
+        #[verifier::fip(strict)]
+        fn f(n: u64) -> u64 {
+            n
+        }
+    } => Err(err) => assert_vir_error_msg(err, "more than one `#[verifier::fip]` attribute")
+}
+
+/// The reasons `-V fip-lint` gives for not rewriting recursion modulo a constructor
+fn trmc_reasons(err: &TestErr) -> Vec<String> {
+    err.warnings
+        .iter()
+        .map(|w| w.message.clone())
+        .filter(|m| m.contains("cannot be rewritten into a loop automatically"))
+        .collect()
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_lint_trmc_not_rewritable_order_and_names ["vstd", "-V fip-lint"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum T { Leaf, Node(Box<T>, u64) }
+        pub enum L { Nil, Cons(u64, Box<L>) }
+
+        fn tick() -> u64 { 7 }
+
+        // a field after the recursive call that is not a literal or a name
+        fn after(n: u64) -> (r: T)
+            decreases n
+        {
+            if n == 0 { T::Leaf } else { T::Node(Box::new(after(n - 1)), tick()) }
+        }
+
+        // a parameter's name bound again
+        fn shadow(k: u64, n: u64) -> (r: L)
+            requires k < 1000,
+            decreases n
+        {
+            let k = k + 1;
+            if n == 0 { L::Nil } else { L::Cons(k, Box::new(shadow(k % 1000, n - 1))) }
+        }
+    } => Ok(err) => {
+        let msgs = trmc_reasons(&err);
+        assert_eq!(msgs.len(), 2, "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("this field comes after the recursive call")), "{:?}", msgs);
+        assert!(msgs.iter().any(|m| m.contains("binds a parameter's name again")), "{:?}", msgs);
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_lint_trmc_not_rewritable_user_drop ["vstd", "-V fip-lint"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum L { Nil, Cons(u64, Box<L>) }
+        pub struct D(pub u64);
+        impl Drop for D {
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+            {
+            }
+        }
+
+        // `d` is dropped after the recursive call returns
+        fn with_drop(n: u64) -> (r: L)
+            decreases n
+        {
+            let d = D(n);
+            if n == 0 { L::Nil } else { L::Cons(n, Box::new(with_drop(n - 1))) }
+        }
+    } => Ok(err) => {
+        let msgs = trmc_reasons(&err);
+        assert_eq!(msgs.len(), 1, "{:?}", msgs);
+        assert!(msgs[0].contains("dropping this value"), "{:?}", msgs);
+    }
+}

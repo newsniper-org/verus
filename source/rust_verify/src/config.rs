@@ -925,6 +925,38 @@ pub fn parse_args_with_imports(
         }
     }
 
+    // `-V fip-lint=fix` keeps a rewrite only if the crate still verifies, which a partial
+    // verification (or one without the lifetime and erasure checks) does not show
+    if args.fip_lint_fix {
+        let partial_flags = [
+            OPT_NO_VERIFY,
+            OPT_VERIFY_ROOT,
+            OPT_VERIFY_MODULE,
+            OPT_VERIFY_ONLY_MODULE,
+            OPT_VERIFY_FUNCTION,
+            OPT_NO_LIFETIME,
+            OPT_NO_ERASURE_CHECK,
+            OPT_NO_TRAIT_CONFLICTS,
+        ];
+        for flag in partial_flags {
+            if matches.opt_present(flag) {
+                error(format!(
+                    "`--{}` is not allowed with `-V {}=fix` (a rewrite is kept only if the whole crate still verifies)",
+                    flag, EXTENDED_FIP_LINT
+                ));
+            }
+        }
+        let partial_extended = [EXTENDED_ALLOW_INLINE_AIR, EXTENDED_IGNORE_UNEXPECTED_SMT];
+        for key in partial_extended {
+            if extended.contains_key(key) {
+                error(format!(
+                    "`-V {}` is not allowed with `-V {}=fix` (a rewrite is kept only if the whole crate still verifies)",
+                    key, EXTENDED_FIP_LINT
+                ));
+            }
+        }
+    }
+
     if args.compile && args.no_erasure_check {
         error("`--compile` and `--no-erasure-check` are mutually exclusive".to_string())
     }

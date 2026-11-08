@@ -116,6 +116,22 @@ pub fn main() {
 
     let (our_args, rustc_args) =
         rust_verify::config::parse_args_with_imports(&program, args.into_iter(), vstd);
+    if our_args.fip_lint_fix {
+        // (an interrupted `=fix` run that could not restore its originals leaves backups)
+        let roots: Vec<std::path::PathBuf> = rustc_args
+            .iter()
+            .filter(|a| a.ends_with(".rs"))
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_file())
+            .collect();
+        if let Some(b) = roots.iter().find_map(|r| rust_verify::fip_trmc::find_leftover_backup(r)) {
+            eprintln!(
+                "error: -V fip-lint=fix: {} was left by an interrupted run and holds the original of the file next to it (which may contain an unverified rewrite): restore it with `mv`, or delete it, before running with -V fip-lint=fix again",
+                b.display()
+            );
+            std::process::exit(1);
+        }
+    }
 
     if our_args.version {
         if our_args.output_json {

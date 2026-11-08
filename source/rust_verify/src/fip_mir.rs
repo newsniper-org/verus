@@ -421,12 +421,16 @@ fn resolve_callee<'tcx>(
     }
 }
 
-/// The local destructors that dropping a value of type `ty` runs
+/// The destructors that dropping a value of type `ty` runs (`out`), and the types in it whose drop
+/// glue is not known here (`unknown`: type parameters, associated and opaque types, `dyn`). A
+/// std type is assumed to drop exactly its type arguments (its fields may hide them behind raw
+/// pointers: `Vec<T>`, `Box<T>`).
 fn drop_glue_destructors<'tcx>(
     tcx: TyCtxt<'tcx>,
     typing_env: TypingEnv<'tcx>,
     ty: Ty<'tcx>,
     out: &mut Vec<DefId>,
+    unknown: &mut Vec<Ty<'tcx>>,
     seen: &mut std::collections::HashSet<Ty<'tcx>>,
 ) {
     if !ty.needs_drop(tcx, typing_env) || !seen.insert(ty) {
@@ -437,21 +441,59 @@ fn drop_glue_destructors<'tcx>(
             if let Some(dtor) = adt.destructor(tcx) {
                 out.push(dtor.did);
             }
-            for variant in adt.variants().iter() {
-                for field in variant.fields.iter() {
-                    let fty = field.ty(tcx, args).skip_normalization();
-                    drop_glue_destructors(tcx, typing_env, fty, out, seen);
+            if adt.did().is_local() {
+                for variant in adt.variants().iter() {
+                    for field in variant.fields.iter() {
+                        let fty = field.ty(tcx, args).skip_normalization();
+                        drop_glue_destructors(tcx, typing_env, fty, out, unknown, seen);
+                    }
+                }
+            } else {
+                for t in args.types() {
+                    drop_glue_destructors(tcx, typing_env, t, out, unknown, seen);
                 }
             }
         }
         ty::Tuple(tys) => {
             for t in tys.iter() {
-                drop_glue_destructors(tcx, typing_env, t, out, seen);
+                drop_glue_destructors(tcx, typing_env, t, out, unknown, seen);
             }
         }
-        ty::Array(t, _) | ty::Slice(t) => drop_glue_destructors(tcx, typing_env, *t, out, seen),
-        _ => {}
+        ty::Array(t, _) | ty::Slice(t) => {
+            drop_glue_destructors(tcx, typing_env, *t, out, unknown, seen)
+        }
+        ty::Closure(_, args) => {
+            for t in args.as_closure().upvar_tys() {
+                drop_glue_destructors(tcx, typing_env, t, out, unknown, seen);
+            }
+        }
+        _ => unknown.push(ty),
     }
+}
+
+/// Does dropping a value of type `ty` run user code (a destructor outside std, or one not known
+/// here)? Returns a description if so.
+pub(crate) fn user_drop_glue<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<String> {
+    let (mut dtors, mut unknown) = (Vec::new(), Vec::new());
+    drop_glue_destructors(
+        tcx,
+        typing_env,
+        ty,
+        &mut dtors,
+        &mut unknown,
+        &mut std::collections::HashSet::new(),
+    );
+    if let Some(u) = unknown.first() {
+        return Some(format!("a `{}`, whose destructor is not known here", u));
+    }
+    dtors
+        .iter()
+        .find(|d| !is_trusted_leaf_crate(tcx, **d))
+        .map(|d| format!("it runs `{}`", tcx.def_path_str(*d)))
 }
 
 fn strict_err<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
@@ -519,6 +561,38 @@ fn strict_edges<'tcx>(
                         uses_allocator = true;
                     }
                 }
+                // std code may drop values of its type arguments (`Vec::<H>::clear`, `truncate`),
+                // which runs their destructors from inside the call
+                if let Some((callee, args)) = func.const_fn_def() {
+                    if is_trusted_leaf_crate(tcx, callee) {
+                        let (mut dtors, mut unknown) = (Vec::new(), Vec::new());
+                        let mut seen = std::collections::HashSet::new();
+                        for t in args.types() {
+                            drop_glue_destructors(
+                                tcx,
+                                typing_env,
+                                t,
+                                &mut dtors,
+                                &mut unknown,
+                                &mut seen,
+                            );
+                        }
+                        for d in dtors {
+                            add(d, false, span, &mut edges);
+                        }
+                        if let Some(u) = unknown.first() {
+                            strict_err(
+                                tcx,
+                                span,
+                                format!(
+                                    "it calls `{}`, which may drop a value of type `{}`, whose destructor is not known here",
+                                    tcx.def_path_str(callee),
+                                    u
+                                ),
+                            );
+                        }
+                    }
+                }
                 match resolve_callee(tcx, typing_env, func) {
                     Some(callee) => add(callee, tail, span, &mut edges),
                     None => strict_err(
@@ -530,16 +604,27 @@ fn strict_edges<'tcx>(
             }
             TerminatorKind::Drop { place, .. } => {
                 let ty = place.ty(&body.local_decls, tcx).ty;
-                let mut dtors = Vec::new();
+                let (mut dtors, mut unknown) = (Vec::new(), Vec::new());
                 drop_glue_destructors(
                     tcx,
                     typing_env,
                     ty,
                     &mut dtors,
+                    &mut unknown,
                     &mut std::collections::HashSet::new(),
                 );
                 for d in dtors {
                     add(d, false, span, &mut edges);
+                }
+                if let Some(u) = unknown.first() {
+                    strict_err(
+                        tcx,
+                        span,
+                        format!(
+                            "it drops a value of type `{}`, whose destructor is not known here (a type parameter, an associated or opaque type, or `dyn`; a `Copy` bound rules out a destructor)",
+                            u
+                        ),
+                    );
                 }
             }
             _ => {}

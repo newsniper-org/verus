@@ -126,6 +126,13 @@ impl<'a, 'tcx> Ctx<'a, 'tcx> {
             ItemKind::Fn { sig, generics, body, .. } => (sig, generics, *body),
             _ => return Err((fspan, "not a function item".into())),
         };
+        if item.span.from_expansion() {
+            return Err((
+                fspan,
+                "the function comes from a macro expansion (rewriting it would change the macro)"
+                    .into(),
+            ));
+        }
         let body = tcx.hir_body(body_id);
         let mut params = Vec::new();
         for (i, p) in body.params.iter().enumerate() {
@@ -142,6 +149,68 @@ impl<'a, 'tcx> Ctx<'a, 'tcx> {
             };
             let ty = self.snippet(sig.decl.inputs[i].span)?;
             params.push((name, is_mut, ty));
+        }
+        // The rewrite assigns the parameters by name at each recursive call (`k = ..`), which
+        // would assign an inner binding of the same name instead
+        {
+            struct Rebinds<'a> {
+                names: &'a [String],
+                found: Option<Span>,
+            }
+            impl<'a, 'v> rustc_hir::intravisit::Visitor<'v> for Rebinds<'a> {
+                fn visit_pat(&mut self, p: &'v rustc_hir::Pat<'v>) {
+                    if let PatKind::Binding(_, _, ident, _) = &p.kind {
+                        if self.found.is_none() && self.names.contains(&ident.to_string()) {
+                            self.found = Some(p.span);
+                        }
+                    }
+                    rustc_hir::intravisit::walk_pat(self, p);
+                }
+            }
+            let names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+            let mut v = Rebinds { names: &names, found: None };
+            rustc_hir::intravisit::Visitor::visit_expr(&mut v, body.value);
+            if let Some(sp) = v.found {
+                return Err((
+                    sp,
+                    "this binds a parameter's name again (the rewrite assigns the parameters by name at each recursive call); rename it".into(),
+                ));
+            }
+        }
+        // A value still to be dropped when the recursive call returns is dropped after it in the
+        // original, but before the next iteration in the rewrite (when its binding is
+        // reassigned or goes out of scope); only std's drops (which run no user code) may move
+        {
+            struct Bindings<'v> {
+                pats: Vec<&'v rustc_hir::Pat<'v>>,
+            }
+            impl<'v> rustc_hir::intravisit::Visitor<'v> for Bindings<'v> {
+                fn visit_pat(&mut self, p: &'v rustc_hir::Pat<'v>) {
+                    if matches!(p.kind, PatKind::Binding(..)) {
+                        self.pats.push(p);
+                    }
+                    rustc_hir::intravisit::walk_pat(self, p);
+                }
+            }
+            let mut b = Bindings { pats: vec![] };
+            for p in body.params.iter() {
+                rustc_hir::intravisit::Visitor::visit_pat(&mut b, p.pat);
+            }
+            rustc_hir::intravisit::Visitor::visit_expr(&mut b, body.value);
+            let typeck = tcx.typeck(local);
+            let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, info.def_id);
+            for p in b.pats.iter() {
+                let ty = typeck.pat_ty(p);
+                if let Some(why) = crate::fip_mir::user_drop_glue(tcx, typing_env, ty) {
+                    return Err((
+                        p.span,
+                        format!(
+                            "dropping this value ({}) may run user code, which the rewrite would run at a different time (before the next iteration instead of after the recursive call)",
+                            why
+                        ),
+                    ));
+                }
+            }
         }
         let ret_typ = match &sig.decl.output {
             FnRetTy::Return(ty) => self.snippet(ty.span)?,
@@ -288,6 +357,19 @@ struct LevelText {
     after: Vec<(String, String)>,
 }
 
+/// A constructor field after the hole is evaluated after the recursive call in the original, but
+/// before the next iteration in the rewrite: only a literal or a plain name (whose value the
+/// recursive call cannot change) is evaluated the same either way
+fn after_field_is_inert(e: &rustc_hir::Expr<'_>) -> Res<()> {
+    match &strip_hir(e).kind {
+        rustc_hir::ExprKind::Lit(_) | rustc_hir::ExprKind::Path(_) => Ok(()),
+        _ => Err((
+            e.span,
+            "this field comes after the recursive call, so the original evaluates it after the call returns; the loop would evaluate it before (only a literal or a name may follow the call)".into(),
+        )),
+    }
+}
+
 fn render_site(
     cx: &Ctx,
     site: &TrmcSite,
@@ -402,6 +484,7 @@ fn render_site(
                 (TrmcLevel::Ctor { hole, .. }, ExprKind::Call(_, args)) => {
                     let idx: usize = hole.parse().unwrap();
                     for (i, a) in args.iter().enumerate().skip(idx + 1) {
+                        after_field_is_inert(a)?;
                         v.push((i.to_string(), String::new(), a.span));
                     }
                     e2 = strip_hir(&args[idx]);
@@ -410,6 +493,7 @@ fn render_site(
                     let idx =
                         fields.iter().position(|f| f.ident.as_str() == hole.as_str()).unwrap();
                     for f in fields[idx + 1..].iter() {
+                        after_field_is_inert(f.expr)?;
                         v.push((f.ident.to_string(), String::new(), f.expr.span));
                     }
                     e2 = strip_hir(&fields[idx].expr);
@@ -1111,10 +1195,56 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             }
         }
     }
+    // An interrupted run must not leave unverified code behind: the originals are kept in backup
+    // files (`<file>.fip-lint-orig`) while the trials run, every write replaces a file atomically,
+    // and SIGINT/SIGTERM/SIGHUP stop the trial and restore the originals. (After a SIGKILL the
+    // backups remain, and the next run refuses to start until they are dealt with.)
+    let backup_of = |p: &std::path::Path| {
+        let mut b = p.as_os_str().to_owned();
+        b.push(".fip-lint-orig");
+        std::path::PathBuf::from(b)
+    };
+    for path in originals.keys() {
+        if backup_of(path).exists() {
+            eprintln!(
+                "warning: -V fip-lint=fix: {} exists, left by an interrupted run: it holds the original of {} (restore it with `mv`, or delete it), so no rewrite is applied",
+                backup_of(path).display(),
+                path.display()
+            );
+            return;
+        }
+    }
+    let atomic_write = |path: &std::path::Path, text: &str| -> bool {
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".fip-lint-tmp");
+        let tmp = std::path::PathBuf::from(tmp);
+        std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok()
+    };
+    for (path, orig) in originals.iter() {
+        if !atomic_write(&backup_of(path), orig) {
+            eprintln!(
+                "warning: -V fip-lint=fix: cannot write a backup of {}, so no rewrite is applied",
+                path.display()
+            );
+            for p in originals.keys() {
+                let _ = std::fs::remove_file(backup_of(p));
+            }
+            return;
+        }
+    }
+    let restore_all = || {
+        for (path, orig) in originals.iter() {
+            if atomic_write(path, orig) {
+                let _ = std::fs::remove_file(backup_of(path));
+            }
+        }
+    };
+    interrupt::install();
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(err) => {
             eprintln!("warning: -V fip-lint=fix: cannot find the verifier executable: {}", err);
+            restore_all();
             return;
         }
     };
@@ -1124,7 +1254,7 @@ pub fn apply_fixes(args_without_fix: &[String]) {
                 kept.iter().flat_map(|f| f.edits.iter()).filter(|e| &e.path == path).collect();
             match apply_edits(orig, &edits) {
                 Some(s) => {
-                    if std::fs::write(path, s).is_err() {
+                    if !atomic_write(path, &s) {
                         return false;
                     }
                 }
@@ -1133,18 +1263,53 @@ pub fn apply_fixes(args_without_fix: &[String]) {
         }
         true
     };
+    // run the verifier on the trial; None if interrupted
+    let run = || -> Option<bool> {
+        let mut child = match std::process::Command::new(&exe)
+            .args(args_without_fix)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return Some(false),
+        };
+        loop {
+            if interrupt::requested() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => return Some(status.success()),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => return Some(false),
+            }
+        }
+    };
+    let interrupted = || {
+        restore_all();
+        eprintln!("warning: -V fip-lint=fix: interrupted; restored the original files");
+        std::process::exit(130);
+    };
     let mut kept: Vec<&Fix> = Vec::new();
     for f in fixes.iter() {
         let mut trial = kept.clone();
         trial.push(f);
-        let verified = write(&trial)
-            && std::process::Command::new(&exe)
-                .args(args_without_fix)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+        if interrupt::requested() {
+            interrupted();
+        }
+        let verified = if write(&trial) {
+            match run() {
+                Some(v) => v,
+                None => {
+                    interrupted();
+                    false
+                }
+            }
+        } else {
+            false
+        };
         if verified {
             eprintln!(
                 "note: -V fip-lint=fix: rewrote `{}` into a loop (it verifies)",
@@ -1158,13 +1323,79 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             );
         }
     }
+    if interrupt::requested() {
+        interrupted();
+    }
     if !write(&kept) {
-        // restore everything
-        for (path, orig) in originals.iter() {
-            let _ = std::fs::write(path, orig);
-        }
+        restore_all();
         eprintln!(
             "warning: -V fip-lint=fix: could not write the rewritten files; restored the originals"
         );
+        return;
     }
+    for path in originals.keys() {
+        let _ = std::fs::remove_file(backup_of(path));
+    }
+}
+
+/// A backup left by an interrupted `-V fip-lint=fix` run, in the directory tree of the crate root
+/// `root` (not following hidden directories or `target`)
+pub fn find_leftover_backup(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = root.parent()?;
+    let dir = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+    let mut work = vec![(dir.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((d, depth)) = work.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            seen += 1;
+            if seen > 100_000 {
+                return None;
+            }
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".fip-lint-orig") {
+                return Some(p);
+            }
+            if depth < 16
+                && !name.starts_with('.')
+                && name != "target"
+                && e.file_type().is_ok_and(|t| t.is_dir())
+            {
+                work.push((p, depth + 1));
+            }
+        }
+    }
+    None
+}
+
+/// SIGINT, SIGTERM and SIGHUP during `apply_fixes`: the handler only records the request (the
+/// trial loop polls it and restores the originals)
+mod interrupt {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn requested() -> bool {
+        REQUESTED.load(Ordering::SeqCst)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn install() {
+        unsafe extern "C" {
+            fn signal(signum: core::ffi::c_int, handler: usize) -> usize;
+        }
+        extern "C" fn on_signal(_: core::ffi::c_int) {
+            REQUESTED.store(true, Ordering::SeqCst);
+        }
+        // SIGHUP, SIGINT, SIGTERM (the same numbers on Linux and macOS)
+        for sig in [1, 2, 15] {
+            unsafe {
+                signal(sig, on_signal as extern "C" fn(core::ffi::c_int) as usize);
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn install() {}
 }
