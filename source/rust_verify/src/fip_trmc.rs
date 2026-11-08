@@ -1185,10 +1185,43 @@ fn apply_edits(original: &str, edits: &[&Edit]) -> Option<String> {
     Some(s)
 }
 
+/// The journal of a `-V fip-lint=fix` run, next to the crate root: it lists the backups the run
+/// made (one absolute path per line) while they exist. It is created only if absent, so it also
+/// keeps two runs on one crate from overlapping, and a run that finds it refuses to start.
+pub fn journal_of(root: &std::path::Path) -> std::path::PathBuf {
+    let dir = root.parent().unwrap_or(std::path::Path::new("."));
+    let dir = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+    dir.join(".fip-lint-journal")
+}
+
+/// The arguments for a trial: the same, but only verifying (no `--export`, `--compile`, `-o`,
+/// `--out-dir` or `--emit`), so that a rejected trial leaves no outputs behind
+fn verify_only_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for a in args.iter() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match a.as_str() {
+            "--compile" => {}
+            "--export" | "-o" | "--out-dir" | "--emit" => skip_next = true,
+            _ if a.starts_with("--export=")
+                || a.starts_with("--out-dir=")
+                || a.starts_with("--emit=")
+                || (a.starts_with("-o") && a.len() > 2) => {}
+            _ => out.push(a.clone()),
+        }
+    }
+    out
+}
+
 /// Write the fixes to the source files, one component at a time, keeping each only if the crate
 /// still verifies (checked by running this verifier again, with the same arguments but without
-/// `=fix`)
-pub fn apply_fixes(args_without_fix: &[String]) {
+/// `=fix`, and only verifying); if any is kept, run once more with all the arguments, so that the
+/// outputs (`--export`, `--compile`) describe the rewritten files
+pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) {
     let fixes = take_fixes();
     if fixes.is_empty() {
         return;
@@ -1199,6 +1232,15 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             if !originals.contains_key(&e.path) {
                 match std::fs::read_to_string(&e.path) {
                     Ok(s) => {
+                        // (rustc's positions count a file without its byte-order mark and with
+                        // its line endings normalized, so the edits would not line up)
+                        if s.starts_with('\u{feff}') || s.contains('\r') {
+                            eprintln!(
+                                "warning: -V fip-lint=fix: {} has a byte-order mark or CRLF line endings, which the rewrite does not handle, so no rewrite is applied",
+                                e.path.display()
+                            );
+                            return;
+                        }
                         originals.insert(e.path.clone(), s);
                     }
                     Err(err) => {
@@ -1213,12 +1255,26 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             }
         }
     }
+    // The files are rewritten in place (through a symbolic link, keeping hard links and
+    // permissions), so each must be writable
+    for path in originals.keys() {
+        if let Err(err) = std::fs::OpenOptions::new().write(true).open(path) {
+            eprintln!(
+                "warning: -V fip-lint=fix: {} cannot be written ({}), so no rewrite is applied",
+                path.display(),
+                err
+            );
+            return;
+        }
+    }
     // An interrupted run must not leave unverified code behind: the originals are kept in backup
-    // files (`<file>.fip-lint-orig`) while the trials run, every write replaces a file atomically,
-    // and SIGINT/SIGTERM/SIGHUP stop the trial and restore the originals. (After a SIGKILL the
-    // backups remain, and the next run refuses to start until they are dealt with.)
+    // files (`<file>.fip-lint-orig`, next to the file a link points to) while the trials run,
+    // listed in the journal, and SIGINT/SIGTERM/SIGHUP stop the trial and restore the originals.
+    // (After a SIGKILL the backups and the journal remain, and the next run refuses to start until
+    // they are dealt with.)
     let backup_of = |p: &std::path::Path| {
-        let mut b = p.as_os_str().to_owned();
+        let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let mut b = real.as_os_str().to_owned();
         b.push(".fip-lint-orig");
         std::path::PathBuf::from(b)
     };
@@ -1232,11 +1288,43 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             return;
         }
     }
+    let journal = root.map(journal_of);
+    if let Some(j) = &journal {
+        let listing: String =
+            originals.keys().map(|p| format!("{}\n", backup_of(p).display())).collect();
+        let created = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(j)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, listing.as_bytes()));
+        if let Err(err) = created {
+            eprintln!(
+                "warning: -V fip-lint=fix: cannot create {} ({}): another run may be rewriting this crate, or one was interrupted (see the backups it lists), so no rewrite is applied",
+                j.display(),
+                err
+            );
+            return;
+        }
+    }
+    let remove_journal = || {
+        if let Some(j) = &journal {
+            let _ = std::fs::remove_file(j);
+        }
+    };
     let atomic_write = |path: &std::path::Path, text: &str| -> bool {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".fip-lint-tmp");
         let tmp = std::path::PathBuf::from(tmp);
         std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok()
+    };
+    // (in place: `File::create` follows a link and keeps the file, its links and its mode)
+    let write_in_place = |path: &std::path::Path, text: &str| -> bool {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
+            .is_ok()
     };
     for (path, orig) in originals.iter() {
         if !atomic_write(&backup_of(path), orig) {
@@ -1247,14 +1335,21 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             for p in originals.keys() {
                 let _ = std::fs::remove_file(backup_of(p));
             }
+            remove_journal();
             return;
         }
     }
     let restore_all = || {
+        let mut all = true;
         for (path, orig) in originals.iter() {
-            if atomic_write(path, orig) {
+            if write_in_place(path, orig) {
                 let _ = std::fs::remove_file(backup_of(path));
+            } else {
+                all = false;
             }
+        }
+        if all {
+            remove_journal();
         }
     };
     interrupt::install();
@@ -1272,7 +1367,7 @@ pub fn apply_fixes(args_without_fix: &[String]) {
                 kept.iter().flat_map(|f| f.edits.iter()).filter(|e| &e.path == path).collect();
             match apply_edits(orig, &edits) {
                 Some(s) => {
-                    if !atomic_write(path, &s) {
+                    if !write_in_place(path, &s) {
                         return false;
                     }
                 }
@@ -1281,10 +1376,12 @@ pub fn apply_fixes(args_without_fix: &[String]) {
         }
         true
     };
-    // run the verifier on the trial; None if interrupted
-    let run = || -> Option<bool> {
+    let trial_args = verify_only_args(args_without_fix);
+    // run the verifier on the trial (only verifying, or with all the arguments); None if
+    // interrupted
+    let run_with = |args: &[String]| -> Option<bool> {
         let mut child = match std::process::Command::new(&exe)
-            .args(args_without_fix)
+            .args(args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -1318,7 +1415,7 @@ pub fn apply_fixes(args_without_fix: &[String]) {
             interrupted();
         }
         let verified = if write(&trial) {
-            match run() {
+            match run_with(&trial_args) {
                 Some(v) => v,
                 None => {
                     interrupted();
@@ -1351,9 +1448,26 @@ pub fn apply_fixes(args_without_fix: &[String]) {
         );
         return;
     }
+    // the outputs of this run (`--export`, `--compile`) describe the original files: produce them
+    // again from the rewritten ones (or, if that fails, from the originals once more)
+    if !kept.is_empty() && trial_args.len() != args_without_fix.len() {
+        match run_with(args_without_fix) {
+            Some(true) => {}
+            Some(false) => {
+                restore_all();
+                let _ = run_with(args_without_fix);
+                eprintln!(
+                    "warning: -V fip-lint=fix: building the rewritten files failed; restored the originals"
+                );
+                return;
+            }
+            None => interrupted(),
+        }
+    }
     for path in originals.keys() {
         let _ = std::fs::remove_file(backup_of(path));
     }
+    remove_journal();
 }
 
 /// A backup left by an interrupted `-V fip-lint=fix` run, in the directory tree of the crate root

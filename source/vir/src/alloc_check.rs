@@ -660,6 +660,17 @@ impl<'a> DropGlueCheck<'a> {
             TypX::Datatype(Dt::Path(path), _, _) if crate::def::is_closure_type_path(path) => {
                 Ok(())
             }
+            // std types with no drop glue at all: `ManuallyDrop<T>` never drops its `T`, and
+            // `PhantomData<T>` holds no `T`
+            TypX::Datatype(Dt::Path(path), _, _)
+                if is_trusted_std_crate(&path.krate)
+                    && matches!(
+                        crate::ast_util::path_as_friendly_rust_name(path).as_str(),
+                        "core::mem::manually_drop::ManuallyDrop" | "core::marker::PhantomData"
+                    ) =>
+            {
+                Ok(())
+            }
             TypX::Datatype(dt, args, _) => {
                 let Some(datatype) = self.datatypes.get(dt) else {
                     return Err(self.unsupported(span, typ, "its definition is not visible"));

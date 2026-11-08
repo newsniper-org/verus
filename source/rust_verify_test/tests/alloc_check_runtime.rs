@@ -810,3 +810,90 @@ fn fip_trmc_fix_opt0() {
 fn fip_trmc_fix_opt3() {
     run_trmc_fix_at("3");
 }
+
+const RANGE: &str = r#"
+use vstd::prelude::*;
+verus! {
+pub enum List { Nil, Cons(u64, Box<List>) }
+pub open spec fn len(l: List) -> nat decreases l {
+    match l { List::Nil => 0, List::Cons(_, t) => 1 + len(*t) }
+}
+fn range(n: u64) -> (r: List)
+    ensures len(r) == n
+    decreases n
+{
+    if n == 0 { List::Nil } else { List::Cons(n, Box::new(range(n - 1))) }
+}
+fn main() { }
+}
+"#;
+
+// `-V fip-lint=fix` rewrites a file in place: through a symbolic link, keeping hard links and
+// the file's mode; it leaves a read-only file and a file with CRLF line endings alone; a journal
+// next to the crate root (also listing backups outside it) keeps a second run from starting
+// (portable-fip, fip-beta 3eb69f3c3, §2)
+#[cfg(unix)]
+#[test]
+fn fip_trmc_fix_files() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let src = format!("{}\n{}\n", FEATURE_PRELUDE, RANGE);
+    let fix = |file: &str| {
+        let out = run_verus_raw(&["-V", "fip-lint=fix", file], dir);
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+    let rewritten = |p: &std::path::Path| std::fs::read_to_string(p).unwrap().contains("'__trmc");
+    // a symbolic link: the file it points to is rewritten, the link stays
+    std::fs::create_dir(dir.join("real")).unwrap();
+    std::fs::write(dir.join("real/t.rs"), &src).unwrap();
+    std::os::unix::fs::symlink("real/t.rs", dir.join("link.rs")).unwrap();
+    let e = fix("link.rs");
+    assert!(e.contains("rewrote `link::range` into a loop"), "{}", e);
+    assert!(std::fs::symlink_metadata(dir.join("link.rs")).unwrap().file_type().is_symlink());
+    assert!(rewritten(&dir.join("real/t.rs")));
+    // a hard link and the mode stay
+    std::fs::write(dir.join("h.rs"), &src).unwrap();
+    std::fs::hard_link(dir.join("h.rs"), dir.join("h2.rs")).unwrap();
+    std::fs::set_permissions(dir.join("h.rs"), std::fs::Permissions::from_mode(0o640)).unwrap();
+    let e = fix("h.rs");
+    assert!(e.contains("rewrote `h::range` into a loop"), "{}", e);
+    let (m1, m2) = (
+        std::fs::metadata(dir.join("h.rs")).unwrap(),
+        std::fs::metadata(dir.join("h2.rs")).unwrap(),
+    );
+    assert_eq!(m1.ino(), m2.ino());
+    assert_eq!(m1.mode() & 0o777, 0o640);
+    assert!(rewritten(&dir.join("h2.rs")));
+    // a read-only file is left alone
+    std::fs::write(dir.join("ro.rs"), &src).unwrap();
+    std::fs::set_permissions(dir.join("ro.rs"), std::fs::Permissions::from_mode(0o440)).unwrap();
+    let e = fix("ro.rs");
+    assert!(e.contains("cannot be written"), "{}", e);
+    assert!(!rewritten(&dir.join("ro.rs")));
+    // CRLF line endings
+    std::fs::write(dir.join("crlf.rs"), src.replace('\n', "\r\n")).unwrap();
+    let e = fix("crlf.rs");
+    assert!(e.contains("CRLF line endings"), "{}", e);
+    assert!(!rewritten(&dir.join("crlf.rs")));
+    // nothing is left behind
+    let left: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("fip-lint"))
+        .collect();
+    assert!(left.is_empty(), "{:?}", left);
+    // a journal (of a run that was interrupted, or is running) stops a new run
+    std::fs::write(dir.join("j.rs"), &src).unwrap();
+    std::fs::write(dir.join(".fip-lint-journal"), "/elsewhere/x.rs.fip-lint-orig\n").unwrap();
+    let out = run_verus_raw(&["-V", "fip-lint=fix", "j.rs"], dir);
+    let e = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", e);
+    assert!(
+        e.contains(".fip-lint-journal exists") && e.contains("/elsewhere/x.rs.fip-lint-orig"),
+        "{}",
+        e
+    );
+    assert!(!rewritten(&dir.join("j.rs")));
+}

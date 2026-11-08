@@ -124,6 +124,19 @@ pub fn main() {
             .map(std::path::PathBuf::from)
             .filter(|p| p.is_file())
             .collect();
+        // (the journal of such a run lists its backups, also those outside the crate root's
+        // directory: files included with `#[path]`)
+        if let Some(j) =
+            roots.iter().map(|r| rust_verify::fip_trmc::journal_of(r)).find(|j| j.exists())
+        {
+            let listed = std::fs::read_to_string(&j).unwrap_or_default();
+            eprintln!(
+                "error: -V fip-lint=fix: {} exists: another run is rewriting this crate, or one was interrupted; it lists the backups that hold the originals of the files next to them (which may contain an unverified rewrite): restore them with `mv`, or delete them, then delete it, before running with -V fip-lint=fix again\n{}",
+                j.display(),
+                listed.trim_end()
+            );
+            std::process::exit(1);
+        }
         if let Some(b) = roots.iter().find_map(|r| rust_verify::fip_trmc::find_leftover_backup(r)) {
             eprintln!(
                 "error: -V fip-lint=fix: {} was left by an interrupted run and holds the original of the file next to it (which may contain an unverified rewrite): restore it with `mv`, or delete it, before running with -V fip-lint=fix again",
@@ -590,7 +603,11 @@ pub fn main() {
         // (the rewrites are checked by verifying again, with the same arguments but without `=fix`)
         let rerun: Vec<String> =
             std::env::args().skip(1).map(|a| a.replace("fip-lint=fix", "fip-lint")).collect();
-        rust_verify::fip_trmc::apply_fixes(&rerun);
+        let root = std::env::args()
+            .skip(1)
+            .map(std::path::PathBuf::from)
+            .find(|p| p.extension().is_some_and(|e| e == "rs") && p.is_file());
+        rust_verify::fip_trmc::apply_fixes(&rerun, root.as_deref());
     }
 
     match status {
