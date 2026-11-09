@@ -1315,20 +1315,37 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
     // includes the same file with `#[path]`, may be making one), complete and synced to disk
     // before it appears: written to a temporary file, synced, then linked to its name (which
     // fails if the name exists)
-    let create_backup = |path: &std::path::Path, text: &str| -> bool {
+    // (returns why it failed; the temporary file is removed only if this run made it)
+    let create_backup = |path: &std::path::Path, text: &str| -> Result<(), String> {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".fip-lint-tmp");
         let tmp = std::path::PathBuf::from(tmp);
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, text.as_bytes())?;
-                f.sync_all()
-            })
-            .is_ok();
-        let linked = written && std::fs::hard_link(&tmp, path).is_ok();
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(
+            |e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => format!(
+                    "{} exists: another run may be rewriting this file, or one was interrupted",
+                    tmp.display()
+                ),
+                _ => format!("cannot create {}: {}", tmp.display(), e),
+            },
+        )?;
+        let written = std::io::Write::write_all(&mut f, text.as_bytes()).and_then(|_| f.sync_all());
+        drop(f);
+        let linked = match written {
+            Err(e) => Err(format!("cannot write {}: {}", tmp.display(), e)),
+            Ok(()) => std::fs::hard_link(&tmp, path).map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => format!(
+                    "{} exists: another run may be rewriting this file, or one was interrupted",
+                    path.display()
+                ),
+                _ => format!(
+                    "cannot link {} to {} (the backup is made with a hard link, which this file system may not support): {}",
+                    tmp.display(),
+                    path.display(),
+                    e
+                ),
+            }),
+        };
         let _ = std::fs::remove_file(&tmp);
         linked
     };
@@ -1346,10 +1363,11 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
     };
     let mut created: Vec<std::path::PathBuf> = Vec::new();
     for (path, orig) in originals.iter() {
-        if !create_backup(&backup_of(path), orig) {
+        if let Err(why) = create_backup(&backup_of(path), orig) {
             eprintln!(
-                "warning: -V fip-lint=fix: cannot create a backup of {} (another run may be rewriting it), so no rewrite is applied",
-                path.display()
+                "warning: -V fip-lint=fix: cannot create a backup of {} ({}), so no rewrite is applied",
+                path.display(),
+                why
             );
             // (only the backups this run made)
             for b in created.iter() {

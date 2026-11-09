@@ -24,7 +24,9 @@ const PRELUDE: &str = verus_code_str! {
         requires vstd::layout::valid_layout(size, align), size != 0,
         ensures
             r.0 matches Some(nn) ==> r.1@.is_range(vstd::alloc_check::block_addr(nn) as int, vstd::alloc_check::block_len(nn) as int)
-                && r.1@.provenance() == vstd::alloc_check::block_provenance(nn),
+                && r.1@.provenance() == vstd::alloc_check::block_provenance(nn)
+                && vstd::alloc_check::block_len(nn) == size
+                && vstd::alloc_check::block_addr(nn) as nat % align as nat == 0,
     {
         let (p, Tracked(pt), Tracked(d)) = raw_ptr::allocate(size, align);
         let sp = core::ptr::slice_from_raw_parts_mut(p, size);
@@ -166,6 +168,8 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
+    // (a user's `shrink` with a body is rejected outright now: it cannot be checked to move the
+    // contents; the check that a failing one did not reclaim stays as a second line)
     #[test] reclaim_then_fail ["vstd"] => PRELUDE.to_string() + FAKE + verus_code_str! {
         pub struct A;
         unsafe impl Allocator for A {
@@ -179,14 +183,16 @@ test_verify_one_file_with_options! {
                 Err(AllocError)
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "a `grow` or `shrink` that fails must not reclaim the old block")
+    } => Err(err) => assert_vir_error_msg(err, "`shrink` of a user's `Allocator` must move the old contents")
 }
 
 test_verify_one_file_with_options! {
     // a trusted (`external_body`) source of blocks is accepted (as trusted)
     #[test] external_body_source ["vstd"] => PRELUDE.to_string() + verus_code_str! {
         #[verifier::external_body]
-        fn chunk(layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+        fn chunk(layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            ensures vstd::std_specs::rust_1_100::allocator_block_fits(r, layout),
+        {
             std::alloc::System.allocate(layout)
         }
         pub struct A;
@@ -218,4 +224,64 @@ test_verify_one_file_with_options! {
             unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {}
         }
     } => Err(err) => assert_vir_error_msg(err, "`hand_out` may be called only in the body of an `Allocator` impl")
+}
+
+test_verify_one_file_with_options! {
+    // a block shorter than the layout (here: of length 0, at the address of a block whose
+    // permission the allocator keeps) (portable-fip, fip-beta ad55cd10a, §1)
+    #[test] return_short_block ["vstd"] => PRELUDE.to_string() + verus_code_str! {
+        pub struct A;
+        unsafe impl Allocator for A {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                if layout.size() == 0 { return Err(AllocError); }
+                let (p, Tracked(pt), Tracked(d)) = raw_ptr::allocate(layout.size(), layout.align());
+                let sp = core::ptr::slice_from_raw_parts_mut(p, 0);
+                match NonNull::new(sp) {
+                    Some(nn) => {
+                        let tracked h = hand_out(raw_ptr::PointsToRaw::empty(pt.provenance()), nn);
+                        Ok(nn)
+                    }
+                    None => Err(AllocError),
+                }
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {}
+        }
+    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
+}
+
+test_verify_one_file_with_options! {
+    // a user's `grow` with a body is rejected (it cannot be checked to move the contents)
+    // (portable-fip, fip-beta ad55cd10a, §2); as `external_body` it is trusted
+    #[test] user_grow ["vstd"] => PRELUDE.to_string() + verus_code_str! {
+        pub struct A;
+        unsafe impl Allocator for A {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                Global.allocate(layout)
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+                #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
+            }
+            unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                Global.allocate(new_layout)
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`grow` of a user's `Allocator` must move the old contents")
+}
+
+test_verify_one_file_with_options! {
+    #[test] user_grow_external_body ["vstd"] => PRELUDE.to_string() + verus_code_str! {
+        pub struct A;
+        unsafe impl Allocator for A {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                Global.allocate(layout)
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+                #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
+            }
+            #[verifier::external_body]
+            unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+                unsafe { Global.grow(ptr, old_layout, new_layout) }
+            }
+        }
+    } => Ok(())
 }

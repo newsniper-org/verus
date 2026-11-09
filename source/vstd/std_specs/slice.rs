@@ -735,6 +735,8 @@ pub assume_specification<T> [ <[T]>::split_at_mut ](slice: &mut [T], mid: usize)
     ensures
         ret.0@ == old(slice)@[..mid],
         ret.1@ == old(slice)@[mid..],
+        final(ret.0)@.len() == ret.0@.len(),
+        final(ret.1)@.len() == ret.1@.len(),
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
     no_unwind  allocates deallocates_when(0int, false)
 ;
@@ -766,6 +768,8 @@ pub assume_specification<T> [ <[T]>::split_at_mut_unchecked ](slice: &mut [T], m
     ensures
         ret.0@ == old(slice)@[..mid],
         ret.1@ == old(slice)@[mid..],
+        final(ret.0)@.len() == ret.0@.len(),
+        final(ret.1)@.len() == ret.1@.len(),
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
     no_unwind  allocates deallocates_when(0int, false)
 ;
@@ -797,6 +801,8 @@ pub assume_specification<T> [ <[T]>::split_at_mut_checked ](slice: &mut [T], mid
         mid <= old(slice).len() ==> (ret matches Some((a, b))
             && a@ == old(slice)@[..mid as int]
             && b@ == old(slice)@[mid as int..]
+            && final(a)@.len() == a@.len()
+            && final(b)@.len() == b@.len()
             && final(slice)@ == final(a)@ + final(b)@),
         mid > old(slice).len() ==> ret is None && final(slice)@ == old(slice)@,
     no_unwind  allocates deallocates_when(0int, false)

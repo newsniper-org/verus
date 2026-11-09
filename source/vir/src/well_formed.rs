@@ -1768,6 +1768,30 @@ fn check_function_inner(
         }
     }
 
+    // A user's `Allocator::grow` (`grow_zeroed`, `shrink`) must move the old block's contents into
+    // the new one (std's containers rely on it), which Verus cannot check: the permissions of raw
+    // memory (`PointsToRaw`) do not say what it holds. So such an impl is trusted, as
+    // `external_body`, or left to std's default body (`allocate`, copy, `deallocate`).
+    if let FunctionKind::TraitMethodImpl { method, .. } = &function.x.kind {
+        let m = crate::ast_util::fun_as_friendly_rust_name(method);
+        if matches!(
+            m.as_str(),
+            "core::alloc::Allocator::grow"
+                | "core::alloc::Allocator::grow_zeroed"
+                | "core::alloc::Allocator::shrink"
+        ) && function.x.body.is_some()
+            && !function.x.attrs.is_external_body
+        {
+            return Err(error(
+                &function.span,
+                format!(
+                    "`{}` of a user's `Allocator` must move the old contents into the new block, which Verus cannot check (the permissions of raw memory do not say what it holds): mark it `#[verifier::external_body]` (trusted), or leave it out to use std's default body",
+                    m.trim_start_matches("core::alloc::Allocator::")
+                ),
+            ));
+        }
+    }
+
     if ctxt.no_cheating && (function.x.attrs.is_external_body || function.x.proxy.is_some()) {
         match &function.x.owning_module {
             // Allow external_body/assume_specification inside vstd

@@ -210,6 +210,14 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
     살아 있고 호출자가 더는 쓰지 않는 블록만 받습니다. 검증된 코드는 `deallocate`를 부를 수 없습니다
     (`trusted_only`).
 
+* 블록은 충분히 크고 정렬되어 있어야 합니다. `Allocator` 선언의 사후조건 `allocator_block_fits(r, layout)`
+  (`grow`와 `shrink`는 `new_layout`)은 `Ok`로 돌려준 블록이 길이 `layout.size()` 이상이고 `layout.align()`에
+  맞춰 정렬되어 있다고 말합니다(std 계약 그대로). 사용자 impl은 이를 증명해야 합니다.
+* 사용자의 `grow`, `grow_zeroed`, `shrink`는 옛 블록의 내용을 새 블록으로 옮겨야 하는데, Verus는 이를 검사할 수
+  없습니다(raw 메모리의 권한은 그 안의 값을 말하지 않습니다). 그래서 `#[verifier::external_body]`(신뢰,
+  `--no-cheating`은 거부)로만 받습니다. 정의하지 않으면 std의 기본 본문(할당, 복사, 해제)을 쓰며, 이는
+  안전합니다.
+
 그래서 해제하는 할당기는 다음과 같습니다.
 
 * `allocate`는 `raw_ptr::allocate(layout.size(), layout.align())`로 블록을 받습니다(`Layout::size`와
@@ -551,8 +559,9 @@ fn sum(n: u64, acc: u64) -> (r: u64)
   코드로 되돌아 부르지 않습니다. 그렇게 할 수 있는 호출(콜백을 통한 호출)은 위의 검사가 거부하기
   때문입니다. 다른 crate의 함수는 엄격한 함수이고, 그 crate가 `-V alloc-check`로 검증·컴파일되어 라이브러리
   파일과 함께 import된 경우에만 부를 수 있습니다(`become`의 대상으로도). 그 컴파일이 그 함수와 거기서 닿는
-  모든 함수를 검사했고, 엄격한 함수의 호출 대상은 모두 알려져 있으므로 되돌아 부를 수 없습니다("라이브러리와
-  다른 crate" 참고). 그 밖의 다른 crate 함수 호출과 callee를 알 수 없는 호출(제네릭 호출, 함수 값)은
+  모든 함수를 검사했습니다("라이브러리와 다른 crate" 참고). 그 함수가 이 crate로 되돌아 부를 수 있는 길은
+  그 함수를 인스턴스화한 사용자 할당기(`A: FipStrictAllocator`, 엄격한 메서드가 이 crate에 있음)뿐입니다.
+  그런 호출은 사용자 할당기를 쓰는 것으로 치므로, 할당기의 메서드가 거기에 닿을 수 없습니다(아래). 그 밖의 다른 crate 함수 호출과 callee를 알 수 없는 호출(제네릭 호출, 함수 값)은
   거부합니다.
 * 소멸자도 호출로 칩니다. 그 함수의 drop이 실행하는 소멸자와, std나 vstd 호출이 인스턴스화된 타입의
   소멸자(std는 `Vec::<T>::clear`처럼 호출 안에서 그런 값을 drop할 수 있습니다)입니다. 다른 crate 타입의
