@@ -620,8 +620,10 @@ fn strict_edges<'tcx>(
             TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
                 let tail = matches!(&term.kind, TerminatorKind::TailCall { .. });
                 if let (Some(at), Some((callee, args))) = (at, func.const_fn_def()) {
+                    // (also a strict function of another crate instantiated with a user
+                    // allocator: it may call the allocator's methods, which may lead back here)
                     if !user_allocators(tcx, typing_env, at, args).is_empty()
-                        && is_trusted_leaf_crate(tcx, callee)
+                        && (is_trusted_leaf_crate(tcx, callee) || ext.contains(tcx, callee))
                     {
                         uses_allocator = true;
                     }

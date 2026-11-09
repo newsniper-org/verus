@@ -1077,4 +1077,87 @@ pub fn inc_loose(x: u64) -> (r: u64) allocates 0 {{ x.wrapping_add(1) }}
     assert!(!ok && e.contains("calls `lib::inc_loose` from another crate"), "{}", e);
     let (ok, e) = run("bad2", "#[verifier::fip(strict)] fn s(g: lib::G) { }");
     assert!(!ok && e.contains("<lib::G as std::ops::Drop>::drop` from another crate"), "{}", e);
+    // a strict library function generic over the allocator, instantiated with an allocator whose
+    // strict `allocate` calls back into it: VIR's recursion check rejects the cycle first (the
+    // compiled-program check would too: the call counts as using a user allocator)
+    std::fs::write(
+        dir.join("glib.rs"),
+        format!(
+            "{pre}use vstd::alloc_check::FipStrictAllocator;
+verus! {{
+#[verifier::fip(strict)]
+pub fn push_one<A: FipStrictAllocator + Copy>(v: &mut Vec<u8, A>)
+    requires vstd::std_specs::vec::spec_vec_capacity(&*old(v)) == 0,
+    allocates vstd::std_specs::rust_1_100::allocator_max_cost::<A>()
+{{ v.push(1); }}
+}}
+"
+        ),
+    )
+    .expect("write");
+    let glib = run_verus_raw(
+        &["--crate-type=lib", "glib.rs", "-V", "alloc-check", "--compile", "--export", "glib.vir"],
+        dir,
+    );
+    assert!(glib.status.success(), "glib:\n{}", String::from_utf8_lossy(&glib.stderr));
+    std::fs::write(
+        dir.join("cyc.rs"),
+        format!(
+            "{pre}use vstd::alloc_check::{{AllocFreeDrop, BoundedAllocator, NoDeallocDrop, FipAllocator, FipStrictAllocator}};
+use std::alloc::{{Allocator, AllocError, Global, Layout}};
+use std::ptr::NonNull;
+verus! {{
+pub struct Re;
+impl Clone for Re {{
+    #[verifier::fip(strict)]
+    fn clone(&self) -> (r: Self) allocates 0 {{ Re }}
+}}
+impl Copy for Re {{}}
+#[verifier::fip(strict)]
+fn g() allocates 1 {{
+    let mut v: Vec<u8, Re> = Vec::new_in(Re);
+    glib::push_one(&mut v);
+    core::mem::forget(v);
+}}
+unsafe impl Allocator for Re {{
+    #[verifier::fip(strict)]
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) allocates 1 {{
+        g();
+        Global.allocate(layout)
+    }}
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) allocates 0 {{
+        #[verifier::trusted_call] {{ unsafe {{ Global.deallocate(ptr, layout) }} }}
+    }}
+}}
+unsafe impl AllocFreeDrop for Re {{}}
+unsafe impl NoDeallocDrop for Re {{}}
+unsafe impl BoundedAllocator for Re {{ open spec fn max_cost() -> int {{ 2 }} }}
+unsafe impl FipAllocator for Re {{}}
+unsafe impl FipStrictAllocator for Re {{}}
+}}
+"
+        ),
+    )
+    .expect("write");
+    let cyc = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "cyc.rs",
+            "-V",
+            "alloc-check",
+            "--compile",
+            "--import",
+            "glib=glib.vir",
+            "--extern",
+            "glib=libglib.rlib",
+        ],
+        dir,
+    );
+    let e = String::from_utf8_lossy(&cyc.stderr);
+    assert!(!cyc.status.success(), "{}", e);
+    assert!(
+        e.contains("cyclic self-reference") || e.contains("uses a user allocator itself"),
+        "{}",
+        e
+    );
 }
