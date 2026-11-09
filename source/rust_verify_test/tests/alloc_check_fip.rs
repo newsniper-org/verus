@@ -1161,3 +1161,38 @@ unsafe impl FipStrictAllocator for Re {{}}
         e
     );
 }
+
+test_verify_one_file_with_options! {
+    // std's slice views (they reborrow the slice or move elements within it: nothing is dropped
+    // or freed, and no user code runs) may be called from a fip function (portable-fip,
+    // 2026-11-09 split_at_mut request)
+    #[test] fip_slice_views ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip]
+        pub fn swap_lt(xs: &mut [u64], i: usize, j: usize)
+            requires i < j, j < old(xs)@.len(),
+            ensures final(xs)@ == old(xs)@.update(i as int, old(xs)@[j as int]).update(j as int, old(xs)@[i as int]),
+            no_unwind allocates 0
+        {
+            let (a, b) = <[u64]>::split_at_mut(xs, j);
+            ::core::mem::swap(&mut a[i], &mut b[0]);
+            proof { assert(final(xs)@ =~= old(xs)@.update(i as int, old(xs)@[j as int]).update(j as int, old(xs)@[i as int])); }
+        }
+        #[verifier::fip]
+        fn views(xs: &mut [u64], v: &mut Vec<u64>) -> (r: u64)
+            requires old(xs)@.len() >= 2, old(v)@.len() >= 1,
+            allocates 0
+        {
+            let n = xs.len();
+            let a = xs[0];
+            let w = v[0];
+            v[0] = a;
+            xs.swap(0, 1);
+            let _ = xs.split_last();
+            let _ = xs.first();
+            match xs.split_last_mut() { Some((l, _)) => { *l = w; } None => {} }
+            match xs.split_at_mut_checked(1) { Some((p, q)) => { core::mem::swap(&mut p[0], &mut q[0]); } None => {} }
+            match xs.get(0) { Some(x) => *x, None => 0 }
+        }
+    } => Ok(())
+}

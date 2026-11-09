@@ -431,14 +431,14 @@ pub assume_specification<T, I>[ <[T]>::get::<I> ](slice: &[T], i: I) -> (b: Opti
     &<I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::get, (i, slice), b),  allocates 0
+        call_ensures(<I as SliceIndex<[T]>>::get, (i, slice), b),  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, I>[ <[T]>::get_mut::<I> ](slice: &mut [T], i: I) -> (b: Option<
     &mut <I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::get_mut, (i, slice), b),  allocates 0
+        call_ensures(<I as SliceIndex<[T]>>::get_mut, (i, slice), b),  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as Index<I>>::index ](
@@ -446,7 +446,7 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as Index<I>>::index ](
     index: I,
 ) -> (output: &<I as SliceIndex<[T]>>::Output)
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),  allocates 0
+        call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as IndexMut<I>>::index_mut ](
@@ -454,7 +454,7 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as IndexMut<I>>::index_mut
     index: I,
 ) -> (output: &mut <I as SliceIndex<[T]>>::Output)
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::index_mut, (index, slice), output),  allocates 0
+        call_ensures(<I as SliceIndex<[T]>>::index_mut, (index, slice), output),  allocates deallocates_when(0int, false)
 ;
 
 // `get_unchecked(i)`/`get_unchecked_mut(i)` share the contract of `index`/`index_mut`, with
@@ -466,7 +466,7 @@ pub assume_specification<T, I>[ <[T]>::get_unchecked::<I> ](
     requires
         index.in_bounds(slice),
     ensures
-        index.index_postcondition(slice, output),  allocates 0
+        index.index_postcondition(slice, output),  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, I>[ <[T]>::get_unchecked_mut::<I> ](
@@ -476,7 +476,7 @@ pub assume_specification<T, I>[ <[T]>::get_unchecked_mut::<I> ](
     requires
         index.in_bounds(&*old(slice)),
     ensures
-        index.index_mut_postcondition(&*old(slice), &*final(slice), output, &*final(output)),  allocates 0
+        index.index_mut_postcondition(&*old(slice), &*final(slice), output, &*final(output)),  allocates deallocates_when(0int, false)
 ;
 
 impl<T, I, const N: usize> super::core::IndexSpecImpl<I> for [T; N]
@@ -492,7 +492,7 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index ](array: &[T; N]
     where
         [T]: Index<I>,
     ensures
-        call_ensures(<[T]>::index, (array, index), output),  allocates 0
+        call_ensures(<[T]>::index, (array, index), output),  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, I, const N: usize>[ <[T; N]>::index_mut ](array: &mut [T; N], index: I) -> (output: &mut <[T; N] as Index<I>>::Output)
@@ -503,7 +503,7 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index_mut ](array: &mu
             &&& #[trigger] slice@ == old(array)@
             &&& final(slice)@ == final(array)@
             &&& call_ensures(<[T]>::index_mut, (slice, index), output)
-        },  allocates 0
+        },  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification[ core::hint::unreachable_unchecked ]() -> !
@@ -560,7 +560,7 @@ pub assume_specification<T>[ <[T]>::swap ](slice: &mut [T], a: usize, b: usize)
         b < old(slice)@.len(),
     ensures
         final(slice)@ == old(slice)@.update(a as int, old(slice)@[b as int]).update(b as int, old(slice)@[a as int]),
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 // The `iter` method of a `<T>` returns an iterator of type `Iter<'_, T>`,
@@ -691,14 +691,14 @@ pub assume_specification<T> [ <[T]>::first ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
         slice.len() != 0 ==> res.is_some() && res.unwrap() == slice[0]
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T> [ <[T]>::last ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
         slice.len() != 0 ==> res.is_some() && res.unwrap() == slice@.last()
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 #[doc(hidden)]
@@ -707,7 +707,7 @@ pub assume_specification<T> [ <[T]>::first_mut ](slice: &mut [T]) -> (res: Optio
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
         old(slice).len() != 0 ==> res.is_some() && *res.unwrap() == old(slice)[0]
             && final(slice)@ == old(slice)@.update(0, *final(res.unwrap()))
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 #[doc(hidden)]
@@ -716,7 +716,7 @@ pub assume_specification<T> [ <[T]>::last_mut ](slice: &mut [T]) -> (res: Option
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
         old(slice).len() != 0 ==> res.is_some() && *res.unwrap() == old(slice)@.last()
             && final(slice)@ == old(slice)@.update(old(slice).len() - 1, *final(res.unwrap()))
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T> [ <[T]>::split_at ](slice: &[T], mid: usize) -> (ret: (&[T], &[T]))
@@ -725,7 +725,7 @@ pub assume_specification<T> [ <[T]>::split_at ](slice: &[T], mid: usize) -> (ret
     ensures
         ret.0@ == slice@[..mid],
         ret.1@ == slice@[mid..],
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 #[doc(hidden)]
@@ -736,7 +736,7 @@ pub assume_specification<T> [ <[T]>::split_at_mut ](slice: &mut [T], mid: usize)
         ret.0@ == old(slice)@[..mid],
         ret.1@ == old(slice)@[mid..],
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 // The non-panicking (`Option`-returning) form of `split_at`: `Some((a, b))` split at `mid`
@@ -747,7 +747,7 @@ pub assume_specification<T> [ <[T]>::split_at_checked ](slice: &[T], mid: usize)
             && a@ == slice@[..mid]
             && b@ == slice@[mid..]),
         mid > slice.len() ==> ret is None,
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T> [ <[T]>::split_at_unchecked ](slice: &[T], mid: usize) -> (ret: (&[T], &[T]))
@@ -756,7 +756,7 @@ pub assume_specification<T> [ <[T]>::split_at_unchecked ](slice: &[T], mid: usiz
     ensures
         ret.0@ == slice@[..mid],
         ret.1@ == slice@[mid..],
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 #[doc(hidden)]
@@ -767,14 +767,14 @@ pub assume_specification<T> [ <[T]>::split_at_mut_unchecked ](slice: &mut [T], m
         ret.0@ == old(slice)@[..mid],
         ret.1@ == old(slice)@[mid..],
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T> [ <[T]>::split_first ](slice: &[T]) -> (ret: Option<(&T, &[T])>)
     ensures
         slice.len() == 0 ==> ret.is_none(),
         slice.len() > 0 ==> (ret matches Some((a, b)) && a == slice[0] && b@ == slice@[1..])
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T> [ <[T]>::split_first_mut ](slice: &mut [T]) -> (ret: Option<(&mut T, &mut [T])>)
@@ -786,7 +786,39 @@ pub assume_specification<T> [ <[T]>::split_first_mut ](slice: &mut [T]) -> (ret:
             && b@.len() == final(b)@.len()
             && final(slice)@ == seq![*final(a)] + final(b)@
         )
-    no_unwind  allocates 0
+    no_unwind  allocates deallocates_when(0int, false)
+;
+
+// The non-panicking form of `split_at_mut` (std 1.100: `split_at_mut_unchecked` when
+// `mid <= len`, else `None`).
+#[doc(hidden)]
+pub assume_specification<T> [ <[T]>::split_at_mut_checked ](slice: &mut [T], mid: usize) -> (ret: Option<(&mut [T], &mut [T])>)
+    ensures
+        mid <= old(slice).len() ==> (ret matches Some((a, b))
+            && a@ == old(slice)@[..mid as int]
+            && b@ == old(slice)@[mid as int..]
+            && final(slice)@ == final(a)@ + final(b)@),
+        mid > old(slice).len() ==> ret is None && final(slice)@ == old(slice)@,
+    no_unwind  allocates deallocates_when(0int, false)
+;
+
+pub assume_specification<T> [ <[T]>::split_last ](slice: &[T]) -> (ret: Option<(&T, &[T])>)
+    ensures
+        slice.len() == 0 ==> ret.is_none(),
+        slice.len() > 0 ==> (ret matches Some((a, b)) && a == slice@.last() && b@ == slice@.drop_last())
+    no_unwind  allocates deallocates_when(0int, false)
+;
+
+pub assume_specification<T> [ <[T]>::split_last_mut ](slice: &mut [T]) -> (ret: Option<(&mut T, &mut [T])>)
+    ensures
+        old(slice).len() == 0 ==> ret.is_none() && final(slice)@ == seq![],
+        old(slice).len() > 0 ==> (ret matches Some((a, b))
+            && *a == old(slice)@.last()
+            && b@ == old(slice)@.drop_last()
+            && b@.len() == final(b)@.len()
+            && final(slice)@ == final(b)@ + seq![*final(a)]
+        )
+    no_unwind  allocates deallocates_when(0int, false)
 ;
 
 /// Copy the contents of `src` into `dst`, which must have the same length.

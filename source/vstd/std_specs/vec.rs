@@ -62,7 +62,7 @@ pub fn vec_index<T, A: Allocator>(vec: &Vec<T, A>, i: usize) -> (element: &T)
     ensures
         *element == vec.view().index(i as int),
     no_unwind
-    allocates 0
+    allocates deallocates_when(0int, false)
 {
     &vec[i]
 }
@@ -80,7 +80,7 @@ pub fn vec_index_mut<T, A: Allocator>(vec: &mut Vec<T, A>, i: usize) -> (element
 
         *final(element) == final(vec).view().index(i as int),
     no_unwind
-    allocates 0
+    allocates deallocates_when(0int, false)
 {
     &mut vec[i]
 }
@@ -497,7 +497,7 @@ pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index
     ensures
         exists|s: &[T]| #[trigger] s@ == vec@ && call_ensures(<I as SliceIndex<[T]>>::index, (i, s), r),
     // SliceIndex is sealed: only std's (non-allocating) impls exist
-    allocates 0
+    allocates deallocates_when(0int, false)
 ;
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::swap_remove ](
