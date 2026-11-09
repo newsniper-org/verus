@@ -483,4 +483,72 @@ unsafe impl<'a, A: FipStrictAllocator + ?Sized> FipStrictAllocator for &'a mut A
 
 }
 
+/// The address of a block `NonNull<[u8]>` (as an allocator returns it)
+pub open spec fn block_addr(block: core::ptr::NonNull<[u8]>) -> usize {
+    super::std_specs::ptr::spec_nonnull_as_ptr(block)@.addr
+}
+
+/// The length of a block `NonNull<[u8]>`
+pub open spec fn block_len(block: core::ptr::NonNull<[u8]>) -> usize {
+    super::std_specs::ptr::spec_nonnull_as_ptr(block)@.metadata
+}
+
+/// The provenance of a block `NonNull<[u8]>`
+pub open spec fn block_provenance(block: core::ptr::NonNull<[u8]>) -> super::raw_ptr::Provenance {
+    super::std_specs::ptr::spec_nonnull_as_ptr(block)@.provenance
+}
+
+/// The receipt for a block that an `Allocator` impl handed out ([`hand_out`]): it gives no access
+/// to the block, and [`reclaim`] turns it back into the block's permission when the block is
+/// returned to `deallocate` (or `grow`, `shrink`).
+#[verifier::external_body]
+pub tracked struct Handout {
+    _no_copy: NoCopy,
+}
+
+impl Handout {
+    pub uninterp spec fn addr(self) -> usize;
+
+    pub uninterp spec fn len(self) -> usize;
+
+    pub uninterp spec fn provenance(self) -> super::raw_ptr::Provenance;
+}
+
+/// Gives up the permission of `block` (as std's containers own the memory that an allocator
+/// returns): in the body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`,
+/// `grow_zeroed`, `shrink`), the block returned in `Ok` must be the last one this call handed out
+/// (or got from another allocator), and Verus allows `hand_out` only there. The receipt can be
+/// kept, to [`reclaim`] the block later.
+pub axiom fn hand_out(
+    tracked pt: super::raw_ptr::PointsToRaw,
+    block: core::ptr::NonNull<[u8]>,
+) -> (tracked h: Handout)
+    requires
+        pt.is_range(block_addr(block) as int, block_len(block) as int),
+        pt.provenance() == block_provenance(block),
+    ensures
+        h.addr() == block_addr(block),
+        h.len() == block_len(block),
+        h.provenance() == pt.provenance(),
+;
+
+/// Takes back the permission of the block that the caller of `deallocate` (or `grow`, `shrink`)
+/// returns: std's `Allocator` contract says that `ptr` is a block this allocator (or an equivalent
+/// one) handed out and that the caller no longer uses it. Verus allows `reclaim` only in the body
+/// of a user's `Allocator::deallocate` (or `grow`, `grow_zeroed`, `shrink`), with that method's
+/// `ptr`, at most once (and, in `grow` or `shrink`, not if it returns `Err`: the old block is then
+/// still the caller's). The receipt says what the block was.
+pub axiom fn reclaim(
+    ptr: core::ptr::NonNull<u8>,
+    layout: core::alloc::Layout,
+    tracked h: Handout,
+) -> (tracked pt: super::raw_ptr::PointsToRaw)
+    requires
+        h.addr() == super::std_specs::ptr::spec_nonnull_as_ptr(ptr)@.addr,
+        super::std_specs::rust_1_100::spec_layout_size(layout) <= h.len(),
+    ensures
+        pt.is_range(h.addr() as int, h.len() as int),
+        pt.provenance() == h.provenance(),
+;
+
 } // verus!
