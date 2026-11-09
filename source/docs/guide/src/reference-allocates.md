@@ -195,7 +195,8 @@ under it an allocator cannot forward `deallocate` to another allocator.
 
 Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc` permission
 instead (`raw_ptr::allocate` is one allocation, `raw_ptr::deallocate` none). An allocator can do
-the same, also under `--no-cheating`:
+the same, also under `--no-cheating`, but one thing about it is trusted, not checked: see the
+last point.
 * `allocate` gets a block from `raw_ptr::allocate(layout.size(), layout.align())` (`Layout::size`
   and `Layout::align` say that the pair is a `valid_layout`), and makes the `NonNull<[u8]>` it
   returns with `core::ptr::slice_from_raw_parts_mut` and `NonNull::new`;
@@ -208,6 +209,14 @@ the same, also under `--no-cheating`:
 
 The test `one_slot_allocator_frees_no_cheating` (`rust_verify_test/tests/alloc_check_custom_allocator.rs`)
 is such an allocator, for one block at a time.
+
+**Trusted:** nothing checks that an allocator gives up the permission of a block it hands out.
+Verus's model of a `Box` or a `Vec` takes the memory that `allocate` returned to be the
+container's alone, but the allocator above still holds the block's `PointsToRaw` while the
+container uses it, and another of its methods could open the invariant and write to the block,
+which makes verified facts about the container's contents false at run time. So a verified
+`Allocator` impl is trusted not to touch the blocks it handed out (also under `--no-cheating`).
+A design that makes `allocate` give up the permission is under review.
 
 The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
 `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.
@@ -514,8 +523,10 @@ the value's memory: unlike FP²'s linear discipline, `#[verifier::fip]` only say
 freed, not that every owned cell is reused.
 
 An `unsafe impl NoDeallocDrop for X` is accepted only if `X` is not a `Box`, its own `Drop` (if
-any) is `#[verifier::fip]`, and each of its fields has no drop glue or is `NoDeallocDrop`. Every
-impl in the program is checked, whichever crate it is in.
+any) is `#[verifier::fip]`, and each of its fields has no drop glue or is `NoDeallocDrop`. The
+impls of this crate are checked when it is compiled; an impl of another crate is accepted only if
+that crate was verified and compiled with `-V alloc-check` and imported with its library file
+(so its compilation checked it), and rejected otherwise.
 
 A container calls its allocator's methods inside std's code, so a fip function may use std or
 vstd code with an allocator other than the global or the system allocator (`Vec<u8, A>::push`,
@@ -680,6 +691,8 @@ What `-V alloc-check` trusts:
   `#[verifier::fip(strict)]`, that std's and vstd's functions use bounded stack space and that
   rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
   `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
+* that a user's `Allocator` impl, even a verified one, does not touch the blocks it handed out (see
+  "Custom allocators");
 * calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
   `deallocate`). `--no-cheating` applies only to the crate being verified: the blocks (and the
   `external_body` functions) of a dependency verified without it are trusted all the same, and a
@@ -695,7 +708,9 @@ What `-V alloc-check` trusts:
   imported `vstd` must also have been verified as vstd. Verus gives these files from its own
   installation; with `--is-core`, `--import-via-core` or in its internal test mode it does not,
   and the ones on the command line are then trusted. A crate being verified with -V alloc-check
-  cannot take one of these names;
+  cannot take one of these names, except that a crate verified with `--is-vstd` is `vstd` (it
+  then trusts its own `external_body` drops and opaque types; `--no-cheating` rejects
+  `--is-vstd`);
 * the toolchain's std (its trusted drops and opaque types).
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not

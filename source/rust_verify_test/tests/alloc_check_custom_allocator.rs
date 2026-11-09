@@ -515,7 +515,10 @@ test_verify_one_file_with_options! {
     // An allocator that frees, verified with --no-cheating: it keeps the `Dealloc` permission of
     // the block it handed out (from `vstd::raw_ptr::allocate`) in a `LocalInvariant`, and its
     // `deallocate` frees a block whose address and layout it recorded (and leaks anything else).
-    // (Run with a counting global allocator: three `Box::new_in` make 3 allocations and 3 frees.)
+    // (This test only verifies it. Compiled separately with a counting global allocator, three
+    // `Box::new_in` made 3 allocations and 3 frees. That the allocator does not touch a block it
+    // handed out, while it still holds the block's `PointsToRaw`, is trusted, not checked: see the
+    // guide, "Custom allocators".)
     #[test] one_slot_allocator_frees_no_cheating ["vstd", "-V alloc-check", "--no-cheating"] => code! {
         use vstd::prelude::*;
         use vstd::raw_ptr;
@@ -626,7 +629,7 @@ test_verify_one_file_with_options! {
                         let _ = self.cell.replace(Tracked(&mut perm), (core::ptr::null_mut(), 0usize, 0usize));
                         proof { slot = Slot { perm, blk: None }; }
                     } else {
-                        // not the block this allocator handed out (std never does this): leak nothing
+                        // not the block this allocator handed out (std never does this): leave it alone (leak it)
                         proof { slot = Slot { perm, blk }; }
                     }
                 });

@@ -189,7 +189,7 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 
 검증된 코드에서 메모리를 해제하려면 대신 `vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다
 (`raw_ptr::allocate`는 할당 한 번, `raw_ptr::deallocate`는 0번). 할당기도 `--no-cheating` 아래에서 같은
-방법을 쓸 수 있습니다.
+방법을 쓸 수 있지만, 한 가지는 검사되지 않고 신뢰됩니다(마지막 문단 참고).
 * `allocate`는 `raw_ptr::allocate(layout.size(), layout.align())`로 블록을 받습니다(`Layout::size`와
   `Layout::align`이 그 쌍이 `valid_layout`임을 알려 줍니다). 돌려줄 `NonNull<[u8]>`는
   `core::ptr::slice_from_raw_parts_mut`와 `NonNull::new`로 만듭니다.
@@ -201,6 +201,13 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 
 테스트 `one_slot_allocator_frees_no_cheating`(`rust_verify_test/tests/alloc_check_custom_allocator.rs`)이
 한 번에 블록 하나를 다루는 이런 할당기입니다.
+
+**신뢰하는 것:** 할당기가 내준 블록의 권한을 내놓는지는 아무것도 검사하지 않습니다. Verus의 `Box`, `Vec`
+모델은 `allocate`가 돌려준 메모리를 컨테이너만의 것으로 봅니다. 그러나 위의 할당기는 컨테이너가 그 블록을
+쓰는 동안에도 그 `PointsToRaw`를 쥐고 있고, 다른 메서드가 불변식을 열어 그 블록에 쓸 수 있습니다. 그러면
+컨테이너 내용에 대해 검증된 사실이 실행 시 거짓이 됩니다. 그래서 검증된 `Allocator` impl은 내준 블록을
+건드리지 않는다고 신뢰합니다(`--no-cheating`에서도). `allocate`가 그 권한을 내놓게 하는 설계를 검토하고
+있습니다.
 
 `Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
 `grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의
@@ -489,7 +496,9 @@ fn push_spare(v: &mut Vec<u64>)
 
 `unsafe impl NoDeallocDrop for X`는 다음 조건을 모두 만족할 때만 받습니다. `X`가 `Box`가 아니고,
 `X` 자신의 `Drop`이 있다면 그것이 `#[verifier::fip]`이며, 각 필드가 drop glue가 없거나 `NoDeallocDrop`이어야
-합니다. 프로그램 안의 모든 impl을, 어느 crate에 있든 검사합니다.
+합니다. 이 crate의 impl은 컴파일할 때 검사합니다. 다른 crate의 impl은 그 crate가 `-V alloc-check`로
+검증·컴파일되어 라이브러리 파일과 함께 import된 경우에만 받고(그 컴파일이 검사했으므로), 그렇지 않으면
+거부합니다.
 
 컨테이너는 std 코드 안에서 할당기의 메서드를 부릅니다. 그래서 fip 함수는 전역 할당기나 시스템 할당기가
 아닌 할당기로 std나 vstd 코드를 쓸 때(`Vec<u8, A>::push`, `Vec::with_capacity_in(n, a)`), 그 할당기가
@@ -643,6 +652,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
   `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
+* 사용자의 `Allocator` impl이, 검증된 것이라도, 내준 블록을 건드리지 않는다는 점("사용자 정의 할당기" 참고)
 * `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등). `--no-cheating`은 지금
   검증하는 crate에만 적용됩니다. 그것 없이 검증된 의존 crate의 블록(과 `external_body` 함수)은 그대로
   신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다
@@ -655,7 +665,8 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
   하고(`--no-vstd`에서는 어떤 의존 crate도 `vstd`라는 이름일 수 없음), 가져온 `vstd`는 vstd로 검증된
   것이어야 합니다. Verus는 이 파일들을 자신의 설치 위치에서 넘깁니다. `--is-core`, `--import-via-core`,
   내부 테스트 모드에서는 넘기지 않으므로, 그때는 명령줄에 준 것을 신뢰합니다. -V alloc-check로 검증하는
-  crate는 이 이름을 쓸 수 없습니다
+  crate는 이 이름을 쓸 수 없습니다. 다만 `--is-vstd`로 검증하는 crate는 `vstd`입니다(그때는 자기
+  `external_body` drop과 불투명 타입을 신뢰하며, `--no-cheating`은 `--is-vstd`를 거부합니다)
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.

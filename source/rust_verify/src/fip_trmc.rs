@@ -1292,11 +1292,11 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
     if let Some(j) = &journal {
         let listing: String =
             originals.keys().map(|p| format!("{}\n", backup_of(p).display())).collect();
-        let created = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(j)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, listing.as_bytes()));
+        let created =
+            std::fs::OpenOptions::new().write(true).create_new(true).open(j).and_then(|mut f| {
+                std::io::Write::write_all(&mut f, listing.as_bytes())?;
+                f.sync_all()
+            });
         if let Err(err) = created {
             eprintln!(
                 "warning: -V fip-lint=fix: cannot create {} ({}): another run may be rewriting this crate, or one was interrupted (see the backups it lists), so no rewrite is applied",
@@ -1311,11 +1311,26 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
             let _ = std::fs::remove_file(j);
         }
     };
-    let atomic_write = |path: &std::path::Path, text: &str| -> bool {
+    // A backup is created only if it does not exist yet (another run, on another crate that
+    // includes the same file with `#[path]`, may be making one), complete and synced to disk
+    // before it appears: written to a temporary file, synced, then linked to its name (which
+    // fails if the name exists)
+    let create_backup = |path: &std::path::Path, text: &str| -> bool {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".fip-lint-tmp");
         let tmp = std::path::PathBuf::from(tmp);
-        std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok()
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, text.as_bytes())?;
+                f.sync_all()
+            })
+            .is_ok();
+        let linked = written && std::fs::hard_link(&tmp, path).is_ok();
+        let _ = std::fs::remove_file(&tmp);
+        linked
     };
     // (in place: `File::create` follows a link and keeps the file, its links and its mode)
     let write_in_place = |path: &std::path::Path, text: &str| -> bool {
@@ -1323,21 +1338,27 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
             .write(true)
             .truncate(true)
             .open(path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, text.as_bytes())?;
+                f.sync_all()
+            })
             .is_ok()
     };
+    let mut created: Vec<std::path::PathBuf> = Vec::new();
     for (path, orig) in originals.iter() {
-        if !atomic_write(&backup_of(path), orig) {
+        if !create_backup(&backup_of(path), orig) {
             eprintln!(
-                "warning: -V fip-lint=fix: cannot write a backup of {}, so no rewrite is applied",
+                "warning: -V fip-lint=fix: cannot create a backup of {} (another run may be rewriting it), so no rewrite is applied",
                 path.display()
             );
-            for p in originals.keys() {
-                let _ = std::fs::remove_file(backup_of(p));
+            // (only the backups this run made)
+            for b in created.iter() {
+                let _ = std::fs::remove_file(b);
             }
             remove_journal();
             return;
         }
+        created.push(backup_of(path));
     }
     let restore_all = || {
         let mut all = true;
@@ -1379,16 +1400,14 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
     let trial_args = verify_only_args(args_without_fix);
     // run the verifier on the trial (only verifying, or with all the arguments); None if
     // interrupted
-    let run_with = |args: &[String]| -> Option<bool> {
-        let mut child = match std::process::Command::new(&exe)
-            .args(args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => return Some(false),
-        };
+    let run_with = |args: &[String], show: bool| -> Option<bool> {
+        let out =
+            || if show { std::process::Stdio::inherit() } else { std::process::Stdio::null() };
+        let mut child =
+            match std::process::Command::new(&exe).args(args).stdout(out()).stderr(out()).spawn() {
+                Ok(c) => c,
+                Err(_) => return Some(false),
+            };
         loop {
             if interrupt::requested() {
                 let _ = child.kill();
@@ -1415,7 +1434,7 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
             interrupted();
         }
         let verified = if write(&trial) {
-            match run_with(&trial_args) {
+            match run_with(&trial_args, false) {
                 Some(v) => v,
                 None => {
                     interrupted();
@@ -1451,15 +1470,23 @@ pub fn apply_fixes(args_without_fix: &[String], root: Option<&std::path::Path>) 
     // the outputs of this run (`--export`, `--compile`) describe the original files: produce them
     // again from the rewritten ones (or, if that fails, from the originals once more)
     if !kept.is_empty() && trial_args.len() != args_without_fix.len() {
-        match run_with(args_without_fix) {
+        eprintln!(
+            "note: -V fip-lint=fix: building the rewritten files with all the options (--export, --compile, ...)"
+        );
+        match run_with(args_without_fix, true) {
             Some(true) => {}
             Some(false) => {
                 restore_all();
-                let _ = run_with(args_without_fix);
                 eprintln!(
-                    "warning: -V fip-lint=fix: building the rewritten files failed; restored the originals"
+                    "error: -V fip-lint=fix: building the rewritten files failed (see above), so the rewrites above were not kept: restored the originals, and building them again"
                 );
-                return;
+                match run_with(args_without_fix, true) {
+                    Some(true) => {}
+                    _ => eprintln!(
+                        "error: -V fip-lint=fix: building the original files failed too, so the outputs (--export, --compile) may be missing or stale"
+                    ),
+                }
+                std::process::exit(1);
             }
             None => interrupted(),
         }
