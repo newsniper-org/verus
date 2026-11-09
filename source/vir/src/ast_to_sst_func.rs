@@ -1286,8 +1286,131 @@ pub fn func_def_to_sst(
         }
     }
 
+    // A user's `Allocator` impl: the block that `allocate` (and the like) returns must be one whose
+    // permission it gave up (`vstd::alloc_check::hand_out`) or got from another allocator, and
+    // `deallocate` (and the like) may reclaim the freed block's permission once
+    // (`vstd::alloc_check::reclaim`); see `AllocHandout` and `AllocReclaim`
+    let mut handout_inits: Vec<crate::sst::Stm> = Vec::new();
+    if let FunctionKind::TraitMethodImpl { method, .. } = &function.x.kind {
+        let m = crate::ast_util::fun_as_friendly_rust_name(method);
+        let hands_out = matches!(
+            m.as_str(),
+            "core::alloc::Allocator::allocate"
+                | "core::alloc::Allocator::allocate_zeroed"
+                | "core::alloc::Allocator::grow"
+                | "core::alloc::Allocator::grow_zeroed"
+                | "core::alloc::Allocator::shrink"
+        );
+        let frees = matches!(
+            m.as_str(),
+            "core::alloc::Allocator::deallocate"
+                | "core::alloc::Allocator::grow"
+                | "core::alloc::Allocator::grow_zeroed"
+                | "core::alloc::Allocator::shrink"
+        );
+        let span = &function.span;
+        let bool_typ = Arc::new(TypX::Bool);
+        let var =
+            |x: &VarIdent, t: &Typ| SpannedTyped::new(span, t, crate::sst::ExpX::Var(x.clone()));
+        let ParamX { name: rname, typ: rtyp, .. } = &function.x.inner_ret.x;
+        let note = |text: &str, e: Exp| {
+            let label = crate::ast::ProofNoteLabel {
+                text: Arc::new(text.to_string()),
+                is_custom_err: true,
+            };
+            SpannedTyped::new(
+                span,
+                &bool_typ,
+                crate::sst::ExpX::UnaryOpr(crate::ast::UnaryOpr::ProofNote(label), e),
+            )
+        };
+        if hands_out {
+            let block_typ = match &*crate::ast_util::undecorate_typ(rtyp) {
+                TypX::Datatype(_, args, _) if args.len() == 2 => args[0].clone(),
+                _ => {
+                    return Err(crate::messages::error(
+                        span,
+                        "unexpected return type for an `Allocator` method",
+                    ));
+                }
+            };
+            let handed = state.declare_var_stm(
+                &crate::ast_util::air_unique_var(crate::def::ALLOC_HANDED),
+                &bool_typ,
+                PreLocalDeclKind::StmtLet,
+                false,
+            );
+            let block = state.declare_var_stm(
+                &crate::ast_util::air_unique_var(crate::def::ALLOC_HANDED_BLOCK),
+                &block_typ,
+                PreLocalDeclKind::StmtLet,
+                false,
+            );
+            handout_inits.push(crate::ast_to_sst::init_var(
+                span,
+                &handed,
+                &crate::sst_util::sst_bool(span, false),
+            ));
+            state.alloc_handout = Some(crate::ast_to_sst::AllocHandout {
+                handed: handed.clone(),
+                block: block.clone(),
+                result_typ: rtyp.clone(),
+                block_typ: block_typ.clone(),
+            });
+            if !ctx.checking_spec_preconditions() {
+                let r = var(rname, rtyp);
+                let ok = crate::ast_to_sst::result_is_variant(span, &r, "Ok");
+                let same = crate::sst_util::sst_equal(
+                    span,
+                    &var(&block, &block_typ),
+                    &crate::ast_to_sst::result_ok_value(span, &r, &block_typ),
+                );
+                let cond = crate::sst_util::sst_and(span, &var(&handed, &bool_typ), &same);
+                enss.push(note(
+                    "an `Allocator` may return a block only if it gave up the block's permission (`vstd::alloc_check::hand_out`) or got the block from another allocator, as the last such block in this call",
+                    crate::sst_util::sst_implies(span, &ok, &cond),
+                ));
+            }
+        }
+        if frees {
+            let ptr = &function.x.params[1];
+            let reclaimed = state.declare_var_stm(
+                &crate::ast_util::air_unique_var(crate::def::ALLOC_RECLAIMED),
+                &bool_typ,
+                PreLocalDeclKind::StmtLet,
+                false,
+            );
+            handout_inits.push(crate::ast_to_sst::init_var(
+                span,
+                &reclaimed,
+                &crate::sst_util::sst_bool(span, false),
+            ));
+            state.alloc_reclaim = Some(crate::ast_to_sst::AllocReclaim {
+                reclaimed: reclaimed.clone(),
+                ptr: ptr.x.name.clone(),
+                ptr_typ: ptr.x.typ.clone(),
+            });
+            if hands_out && !ctx.checking_spec_preconditions() {
+                let r = var(rname, rtyp);
+                let err = crate::ast_to_sst::result_is_variant(span, &r, "Err");
+                enss.push(note(
+                    "a `grow` or `shrink` that fails must not reclaim the old block (it is still the caller's)",
+                    crate::sst_util::sst_implies(
+                        span,
+                        &err,
+                        &crate::sst_util::sst_not(span, &var(&reclaimed, &bool_typ)),
+                    ),
+                ));
+            }
+        }
+    }
+
     // AST --> SST
     let mut stm = expr_to_one_stm_with_post(ctx, &mut state, &body, &function.span)?;
+    if !handout_inits.is_empty() {
+        handout_inits.push(stm);
+        stm = stms_to_one_stm(&body.span, handout_inits);
+    }
     if let Some(assume) = heap_entry_assume {
         stm = stms_to_one_stm(&body.span, vec![assume, stm]);
     }

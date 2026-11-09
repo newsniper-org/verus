@@ -120,6 +120,12 @@ pub(crate) struct State<'a> {
 
     /// `-V alloc-check`: the ghost local counting allocation-source calls in this function
     pub(crate) alloc_counter: Option<VarIdent>,
+    /// The body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`, `grow_zeroed`,
+    /// `shrink`): the blocks it hands out (see `AllocHandout`)
+    pub(crate) alloc_handout: Option<AllocHandout>,
+    /// The body of a user's `Allocator::deallocate` (or `grow`, `grow_zeroed`, `shrink`): the
+    /// freed block it may reclaim (see `AllocReclaim`)
+    pub(crate) alloc_reclaim: Option<AllocReclaim>,
     /// The current ghost allocator heap (`alloc%heap`, see alloc_heap.rs) in an exec or proof
     /// function body
     pub(crate) alloc_heap: Option<VarIdent>,
@@ -273,6 +279,8 @@ impl<'a> State<'a> {
             loop_result_dests: HashMap::new(),
             mask: None,
             alloc_counter: None,
+            alloc_handout: None,
+            alloc_reclaim: None,
             alloc_heap: None,
             fip: false,
             au_pred_args: Vec::new(),
@@ -570,6 +578,177 @@ impl PreLocalDeclKind {
             PreLocalDeclKind::StmtLet => Ok(LocalDeclKind::StmtLet { mutable: mutbl.is_some() }),
         }
     }
+}
+
+/// The ghost locals of the body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`,
+/// `grow_zeroed`, `shrink`): whether it handed out a block (`vstd::alloc_check::hand_out`, which
+/// gives up the block's permission, or a block it got from another allocator, whose permission
+/// Verus never had), and the last such block. It may return `Ok(b)` only for that block, so an
+/// allocator cannot keep the permission of memory that the caller (std's containers) then owns.
+#[derive(Clone)]
+pub(crate) struct AllocHandout {
+    pub(crate) handed: VarIdent,
+    pub(crate) block: VarIdent,
+    /// `Result<NonNull<[u8]>, AllocError>`
+    pub(crate) result_typ: Typ,
+    /// `NonNull<[u8]>`
+    pub(crate) block_typ: Typ,
+}
+
+/// The ghost local of the body of a user's `Allocator::deallocate` (or `grow`, `grow_zeroed`,
+/// `shrink`): whether it reclaimed the freed block's permission (`vstd::alloc_check::reclaim`),
+/// which it may do once, for its parameter `ptr`
+#[derive(Clone)]
+pub(crate) struct AllocReclaim {
+    pub(crate) reclaimed: VarIdent,
+    pub(crate) ptr: VarIdent,
+    pub(crate) ptr_typ: Typ,
+}
+
+/// `r is Ok` for a `Result` value `r` of type `result_typ`
+pub(crate) fn result_is_variant(span: &Span, r: &Exp, variant: &str) -> Exp {
+    let TypX::Datatype(dt, _, _) = &*undecorate_typ(&r.typ) else {
+        panic!("result_is_variant expects a datatype");
+    };
+    SpannedTyped::new(
+        span,
+        &Arc::new(TypX::Bool),
+        ExpX::UnaryOpr(
+            crate::ast::UnaryOpr::IsVariant {
+                datatype: dt.clone(),
+                variant: Arc::new(variant.to_string()),
+            },
+            r.clone(),
+        ),
+    )
+}
+
+/// The value inside `Ok(..)` of `r`
+pub(crate) fn result_ok_value(span: &Span, r: &Exp, value_typ: &Typ) -> Exp {
+    let TypX::Datatype(dt, _, _) = &*undecorate_typ(&r.typ) else {
+        panic!("result_ok_value expects a datatype");
+    };
+    SpannedTyped::new(
+        span,
+        value_typ,
+        ExpX::UnaryOpr(
+            crate::ast::UnaryOpr::Field(crate::ast::FieldOpr {
+                datatype: dt.clone(),
+                variant: Arc::new("Ok".to_string()),
+                field: crate::def::positional_field_ident(0),
+                get_variant: false,
+                check: crate::ast::VariantCheck::None,
+            }),
+            r.clone(),
+        ),
+    )
+}
+
+/// After a call in the body of a user's `Allocator` method: `hand_out`, `reclaim`, or another
+/// allocator's `allocate` (and the like), which update the ghost locals above
+fn alloc_handout_after_call(
+    ctx: &Ctx,
+    state: &mut State,
+    span: &Span,
+    name: &Fun,
+    resolved_method: &Option<(Fun, Typs)>,
+    args: &Exps,
+    dest: &Option<Dest>,
+) -> Result<Vec<Stm>, VirErr> {
+    let friendly = crate::ast_util::fun_as_friendly_rust_name(name);
+    let bool_typ = Arc::new(TypX::Bool);
+    let var = |x: &VarIdent, t: &Typ| SpannedTyped::new(span, t, ExpX::Var(x.clone()));
+    let assign = |x: &VarIdent, t: &Typ, e: Exp| {
+        Spanned::new(
+            span.clone(),
+            StmX::Assign {
+                lhs: Dest { dest: var_loc_exp(span, t, x.clone()), is_init: false },
+                rhs: e,
+            },
+        )
+    };
+    let mut stms: Vec<Stm> = Vec::new();
+    if friendly == "vstd::alloc_check::hand_out" {
+        let Some(h) = state.alloc_handout.clone() else {
+            return Err(error(
+                span,
+                "`hand_out` may be called only in the body of an `Allocator` impl's `allocate`, `allocate_zeroed`, `grow`, `grow_zeroed` or `shrink` (not in a function it calls)",
+            ));
+        };
+        stms.push(assign(&h.handed, &bool_typ, crate::sst_util::sst_bool(span, true)));
+        stms.push(assign(&h.block, &h.block_typ, args[1].clone()));
+    } else if friendly == "vstd::alloc_check::reclaim" {
+        let Some(r) = state.alloc_reclaim.clone() else {
+            return Err(error(
+                span,
+                "`reclaim` may be called only in the body of an `Allocator` impl's `deallocate`, `grow`, `grow_zeroed` or `shrink` (not in a function it calls)",
+            ));
+        };
+        let not_yet = crate::sst_util::sst_not(span, &var(&r.reclaimed, &bool_typ));
+        let same = crate::sst_util::sst_equal(span, &args[0], &var(&r.ptr, &r.ptr_typ));
+        stms.push(Spanned::new(
+            span.clone(),
+            StmX::Assert(
+                state.next_assert_id(),
+                Some(error(
+                    span,
+                    "`reclaim` takes back the block that this call frees: its `ptr` must be the method's `ptr`, and it may be called only once",
+                )),
+                crate::sst_util::sst_and(span, &not_yet, &same),
+            ),
+        ));
+        stms.push(assign(&r.reclaimed, &bool_typ, crate::sst_util::sst_bool(span, true)));
+    } else if let Some(h) = state.alloc_handout.clone() {
+        let allocates_block = |f: &Fun| {
+            crate::alloc_heap::stateful_method(f).is_some()
+                || ctx.func_map.get(f).is_some_and(|func| match &func.x.kind {
+                    crate::ast::FunctionKind::TraitMethodImpl { method, .. } => {
+                        crate::alloc_heap::stateful_method(method).is_some()
+                    }
+                    _ => false,
+                })
+        };
+        // (another allocator's `allocate` and the like, or a trusted function, `external_body`,
+        // that returns a block: its memory is whatever that trust says, as with any
+        // `external_body`, which `--no-cheating` rejects)
+        let trusted_source = ctx.func_map.get(name).is_some_and(|f| {
+            f.x.attrs.is_external_body && f.x.proxy.is_none() && f.x.mode == Mode::Exec
+        });
+        let is_alloc = allocates_block(name)
+            || resolved_method.as_ref().is_some_and(|(f, _)| allocates_block(f))
+            || trusted_source;
+        if is_alloc {
+            if let Some(Dest { dest: d, .. }) = dest {
+                if let ExpX::VarLoc(x) = &d.x {
+                    let r = SpannedTyped::new(span, &d.typ, ExpX::Var(x.clone()));
+                    if crate::ast_util::types_equal(
+                        &undecorate_typ(&r.typ),
+                        &undecorate_typ(&h.result_typ),
+                    ) {
+                        let ok = result_is_variant(span, &r, "Ok");
+                        let handed = var(&h.handed, &bool_typ);
+                        let or = SpannedTyped::new(
+                            span,
+                            &bool_typ,
+                            ExpX::Binary(crate::sst::BinaryOp::Or, handed, ok.clone()),
+                        );
+                        let block = SpannedTyped::new(
+                            span,
+                            &h.block_typ,
+                            ExpX::If(
+                                ok.clone(),
+                                result_ok_value(span, &r, &h.block_typ),
+                                var(&h.block, &h.block_typ),
+                            ),
+                        );
+                        stms.push(assign(&h.block, &h.block_typ, block));
+                        stms.push(assign(&h.handed, &bool_typ, or));
+                    }
+                }
+            }
+        }
+    }
+    Ok(stms)
 }
 
 pub(crate) fn var_loc_exp(span: &Span, typ: &Typ, lhs: UniqueIdent) -> Exp {
@@ -1652,6 +1831,7 @@ fn stm_call(
         );
         stms.push(Spanned::new(span.clone(), StmX::Assume(m)));
     }
+    let dest_for_handout = dest.clone();
     let call = StmX::Call {
         fun: crate::sst::CallTarget::Fun(name.clone()),
         resolved_method,
@@ -1698,6 +1878,15 @@ fn stm_call(
             }
         }
     }
+    stms.extend(alloc_handout_after_call(
+        ctx,
+        state,
+        span,
+        &name,
+        &alloc_target.2.as_ref().map(|f| (f.clone(), Arc::new(vec![]))),
+        &small_args,
+        &dest_for_handout,
+    )?);
     // (after the charge, which reads the heap before the call)
     if let Some(stm) = heap_after {
         stms.push(stm);
@@ -5274,6 +5463,10 @@ fn exec_closure_body_stms(
     let outer_alloc_counter = state.alloc_counter.take();
     // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function)
     let outer_fip = std::mem::replace(&mut state.fip, false);
+    // (and a closure made in an `Allocator` method's body may run any number of times, or after
+    // the method returns: it may not hand out or reclaim blocks for the method)
+    let outer_handout = state.alloc_handout.take();
+    let outer_reclaim = state.alloc_reclaim.take();
     // The closure body runs later, with whatever the heap is then (its own `alloc%heap`, declared
     // in its scope by exec_closure_body_stms_inner)
     let outer_heap = state.alloc_heap.clone();
@@ -5292,6 +5485,8 @@ fn exec_closure_body_stms(
     );
     state.alloc_counter = outer_alloc_counter;
     state.fip = outer_fip;
+    state.alloc_handout = outer_handout;
+    state.alloc_reclaim = outer_reclaim;
     state.alloc_heap = outer_heap;
     result.map(|stms| (stms, Arc::new(typ_inv_vars)))
 }

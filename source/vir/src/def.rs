@@ -58,6 +58,14 @@ const PREFIX_ALLOC_BOUND: &str = "alloc_bound%";
 const PREFIX_DEALLOC_COND: &str = "dealloc_cond%";
 /// Ghost local that counts allocations in a function checked with `-V alloc-check`
 pub const ALLOC_COUNT: &str = "alloc%count";
+/// In the body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`, `grow_zeroed`,
+/// `shrink`): whether a block was handed out (`vstd::alloc_check::hand_out`, or got from another
+/// allocator), and the last such block
+pub const ALLOC_HANDED: &str = "alloc%handed";
+pub const ALLOC_HANDED_BLOCK: &str = "alloc%handed_block";
+/// In the body of a user's `Allocator::deallocate` (or `grow`, `grow_zeroed`, `shrink`): whether
+/// the freed block was reclaimed (`vstd::alloc_check::reclaim`)
+pub const ALLOC_RECLAIMED: &str = "alloc%reclaimed";
 const PREFIX_RECURSIVE: &str = "rec%";
 const PREFIX_SIMPLIFY_TEMP_VAR: &str = "tmp%%";
 const PREFIX_TEMP_VAR: &str = "tmp%";

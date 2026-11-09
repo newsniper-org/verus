@@ -512,13 +512,12 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    // An allocator that frees, verified with --no-cheating: it keeps the `Dealloc` permission of
-    // the block it handed out (from `vstd::raw_ptr::allocate`) in a `LocalInvariant`, and its
-    // `deallocate` frees a block whose address and layout it recorded (and leaks anything else).
-    // (This test only verifies it. Compiled separately with a counting global allocator, three
-    // `Box::new_in` made 3 allocations and 3 frees. That the allocator does not touch a block it
-    // handed out, while it still holds the block's `PointsToRaw`, is trusted, not checked: see the
-    // guide, "Custom allocators".)
+    // An allocator that frees, verified with --no-cheating. `allocate` gives up the permission of
+    // the block it returns (`hand_out`, keeping the receipt and the block's `Dealloc` in a
+    // `LocalInvariant`); `deallocate` reclaims it (`reclaim`, with the receipt) and frees it with
+    // `raw_ptr::deallocate` if the address and layout are the ones it recorded (and leaves anything
+    // else alone). (This test only verifies it. Compiled separately with a counting global
+    // allocator, three `Box::new_in` made 3 allocations and 3 frees.)
     #[test] one_slot_allocator_frees_no_cheating ["vstd", "-V alloc-check", "--no-cheating"] => code! {
         use vstd::prelude::*;
         use vstd::raw_ptr;
@@ -526,42 +525,39 @@ test_verify_one_file_with_options! {
         use vstd::cell::CellId;
         use vstd::invariant::{LocalInvariant, InvariantPredicate};
         use vstd::open_local_invariant;
-        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
-        use vstd::std_specs::rust_1_100::{spec_layout_size, spec_layout_align};
+        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, Handout, hand_out, reclaim};
         use std::alloc::{Allocator, AllocError, Layout};
         use std::ptr::NonNull;
 
         verus! {
 
-        /// What the allocator holds: the cell's permission, and the permissions of the block it handed out
         pub tracked struct Slot {
             pub tracked perm: CellPerm<(*mut u8, usize, usize)>,
-            pub tracked blk: Option<(raw_ptr::PointsToRaw, raw_ptr::Dealloc)>,
+            pub tracked blk: Option<(raw_ptr::Dealloc, Handout)>,
         }
 
         pub struct SlotPred;
 
         impl InvariantPredicate<CellId, Slot> for SlotPred {
             open spec fn inv(k: CellId, s: Slot) -> bool {
-                let (p, size, align) = s.perm.value();
+                let (p, size, align) = *s.perm.value();
                 &&& s.perm.id() == k
                 &&& match s.blk {
                     None => p@.addr == 0,
-                    Some((pt, d)) => {
+                    Some((d, h)) => {
                         &&& p@.addr != 0
                         &&& d.addr() == p@.addr
                         &&& d.size() == size
                         &&& d.align() == align
-                        &&& d.provenance() == pt.provenance()
-                        &&& pt.is_range(d.addr() as int, d.size() as int)
+                        &&& h.addr() == p@.addr
+                        &&& h.len() == size
+                        &&& h.provenance() == d.provenance()
                         &&& p@.provenance == d.provenance()
                     }
                 }
             }
         }
 
-        /// Hands out at most one block at a time, from the global allocator through `vstd::raw_ptr`, and
-        /// frees it with its `Dealloc` permission
         pub struct OneSlot {
             cell: PCell<(*mut u8, usize, usize)>,
             inv: Tracked<LocalInvariant<CellId, Slot, SlotPred>>,
@@ -598,8 +594,9 @@ test_verify_one_file_with_options! {
                         let sp = core::ptr::slice_from_raw_parts_mut(p, size);
                         match NonNull::new(sp) {
                             Some(nn) => {
+                                let tracked h = hand_out(pt, nn);
                                 let _ = self.cell.replace(Tracked(&mut perm), (p, size, align));
-                                proof { slot = Slot { perm, blk: Some((pt, d)) }; }
+                                proof { slot = Slot { perm, blk: Some((d, h)) }; }
                                 r = Ok(nn);
                             }
                             None => {
@@ -624,18 +621,18 @@ test_verify_one_file_with_options! {
                     let tracked Slot { perm: mut perm, blk } = slot;
                     let cur = *self.cell.borrow(Tracked(&perm));
                     if cur.0.addr() != 0 && cur.0.addr() == a && cur.1 == size && cur.2 == align {
-                        let tracked (pt, d) = blk.tracked_unwrap();
+                        let tracked (d, h) = blk.tracked_unwrap();
+                        let tracked pt = reclaim(ptr, layout, h);
                         raw_ptr::deallocate(cur.0, size, align, Tracked(pt), Tracked(d));
                         let _ = self.cell.replace(Tracked(&mut perm), (core::ptr::null_mut(), 0usize, 0usize));
                         proof { slot = Slot { perm, blk: None }; }
                     } else {
-                        // not the block this allocator handed out (std never does this): leave it alone (leak it)
+                        // not the block this allocator handed out (std never does this): leave it alone
                         proof { slot = Slot { perm, blk }; }
                     }
                 });
             }
         }
-
 
         unsafe impl AllocFreeDrop for OneSlot {}
         unsafe impl BoundedAllocator for OneSlot {
@@ -643,11 +640,13 @@ test_verify_one_file_with_options! {
         }
 
         fn use_it(a: &OneSlot) -> (r: u64)
+            ensures r == 5
             allocates 1
         {
             let b = Box::new_in(5u64, a);
             *b
         }
+
         } // verus!
     } => Ok(())
 }

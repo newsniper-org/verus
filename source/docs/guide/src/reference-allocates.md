@@ -195,28 +195,40 @@ under it an allocator cannot forward `deallocate` to another allocator.
 
 Verified code frees memory through `vstd::raw_ptr::deallocate` and its `Dealloc` permission
 instead (`raw_ptr::allocate` is one allocation, `raw_ptr::deallocate` none). An allocator can do
-the same, also under `--no-cheating`, but one thing about it is trusted, not checked: see the
-last point.
-* `allocate` gets a block from `raw_ptr::allocate(layout.size(), layout.align())` (`Layout::size`
-  and `Layout::align` say that the pair is a `valid_layout`), and makes the `NonNull<[u8]>` it
-  returns with `core::ptr::slice_from_raw_parts_mut` and `NonNull::new`;
-* it keeps the `PointsToRaw` and `Dealloc` permissions of the blocks it handed out, with their
-  pointers and layouts, in state it can reach from `&self` (a `LocalInvariant`, or an
-  `AtomicInvariant` for a `Sync` allocator, over a `PCell` that records them);
-* `deallocate` frees a block only if it finds the address and the layout among them, and leaks
-  anything else (std never passes anything else). A type invariant ties the invariant to the cell,
-  since `deallocate` cannot have a precondition.
+the same, also under `--no-cheating`. The memory it returns belongs to the caller (std's
+containers), so Verus checks that the allocator does not keep the block's permission:
+
+* In the body of a user's `allocate` (or `allocate_zeroed`, `grow`, `grow_zeroed`, `shrink`), a
+  block returned in `Ok` must be one whose permission the body gave up with
+  `vstd::alloc_check::hand_out(pt, block)` (which consumes the `PointsToRaw` covering exactly the
+  block, and returns a receipt `Handout`), or one it got from another allocator (whose memory
+  Verus never had a permission for), or from an `external_body` function (trusted, like any
+  `external_body`). It must be the last such block of the call. `hand_out` may be called only in
+  those bodies, not in a function they call or a closure.
+* In the body of `deallocate` (or `grow`, `grow_zeroed`, `shrink`),
+  `vstd::alloc_check::reclaim(ptr, layout, receipt)` takes back the permission of the block being
+  freed: `ptr` must be that method's `ptr`, it may be called once, and a `grow` or `shrink` that
+  returns `Err` must not have called it (the old block is still the caller's). The receipt says
+  which block it was (address, length and provenance). `reclaim` rests on std's `Allocator`
+  contract: `deallocate` (which verified code cannot call: it is `trusted_only`) receives only a
+  live block that this allocator, or an equivalent one, handed out, which the caller no longer
+  uses.
+
+So an allocator that frees:
+
+* `allocate` gets a block from `raw_ptr::allocate(layout.size(), layout.align())`
+  (`Layout::size` and `Layout::align` say that the pair is a `valid_layout`), makes the
+  `NonNull<[u8]>` it returns with `core::ptr::slice_from_raw_parts_mut` and `NonNull::new`, hands
+  it out, and keeps the receipt and the `Dealloc`, with the block's pointer and layout, in state
+  it can reach from `&self` (a `LocalInvariant`, or an `AtomicInvariant` for a `Sync` allocator,
+  over a `PCell` that records them);
+* `deallocate` frees a block only if it finds the address and the layout among them: it reclaims
+  the permission with the receipt and calls `raw_ptr::deallocate`; it leaves anything else alone
+  (std never passes anything else). A type invariant ties the invariant to the cell, since
+  `deallocate` cannot have a precondition.
 
 The test `one_slot_allocator_frees_no_cheating` (`rust_verify_test/tests/alloc_check_custom_allocator.rs`)
 is such an allocator, for one block at a time.
-
-**Trusted:** nothing checks that an allocator gives up the permission of a block it hands out.
-Verus's model of a `Box` or a `Vec` takes the memory that `allocate` returned to be the
-container's alone, but the allocator above still holds the block's `PointsToRaw` while the
-container uses it, and another of its methods could open the invariant and write to the block,
-which makes verified facts about the container's contents false at run time. So a verified
-`Allocator` impl is trusted not to touch the blocks it handed out (also under `--no-cheating`).
-A design that makes `allocate` give up the permission is under review.
 
 The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
 `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.
@@ -691,8 +703,9 @@ What `-V alloc-check` trusts:
   `#[verifier::fip(strict)]`, that std's and vstd's functions use bounded stack space and that
   rustc implements `become` as specified (an incomplete feature of the pinned toolchain; the test
   `fip_strict_tail_calls_*` runs a `become` recursion 10^8 levels deep at `opt-level=0` and `3`);
-* that a user's `Allocator` impl, even a verified one, does not touch the blocks it handed out (see
-  "Custom allocators");
+* std's `Allocator` contract, for `vstd::alloc_check::reclaim`: the block that `deallocate` (or
+  `grow`, `shrink`) receives is a live block that this allocator handed out (see "Custom
+  allocators");
 * calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
   `deallocate`). `--no-cheating` applies only to the crate being verified: the blocks (and the
   `external_body` functions) of a dependency verified without it are trusted all the same, and a

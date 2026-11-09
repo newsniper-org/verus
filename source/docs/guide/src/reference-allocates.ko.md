@@ -189,25 +189,40 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 
 검증된 코드에서 메모리를 해제하려면 대신 `vstd::raw_ptr::deallocate`와 그 `Dealloc` 권한을 씁니다
 (`raw_ptr::allocate`는 할당 한 번, `raw_ptr::deallocate`는 0번). 할당기도 `--no-cheating` 아래에서 같은
-방법을 쓸 수 있지만, 한 가지는 검사되지 않고 신뢰됩니다(마지막 문단 참고).
+방법을 쓸 수 있습니다. 할당기가 돌려준 메모리는 호출자(std의 컨테이너)의 것이므로, Verus는 할당기가 그 블록의
+권한을 쥐고 있지 않은지 검사합니다.
+
+* 사용자의 `allocate`(또는 `allocate_zeroed`, `grow`, `grow_zeroed`, `shrink`) 본문에서 `Ok`로 돌려주는 블록은
+  다음 중 하나여야 하고, 그 호출에서 마지막으로 그렇게 얻은 블록이어야 합니다.
+  * 본문이 `vstd::alloc_check::hand_out(pt, block)`으로 권한을 내놓은 블록. 이 함수는 블록을 정확히 덮는
+    `PointsToRaw`를 소비하고 영수증 `Handout`을 돌려줍니다.
+  * 다른 할당기에서 받은 블록. 그 메모리의 권한은 Verus에 처음부터 없습니다.
+  * `external_body` 함수에서 받은 블록. 다른 `external_body`처럼 신뢰합니다.
+
+  `hand_out`은 이 본문 안에서만 부를 수 있고, 거기서 부르는 함수나 클로저에서는 부를 수 없습니다.
+* `deallocate`(또는 `grow`, `grow_zeroed`, `shrink`) 본문에서 `vstd::alloc_check::reclaim(ptr, layout,
+  receipt)`은 해제되는 블록의 권한을 되찾습니다.
+  * `ptr`은 그 메서드의 `ptr`이어야 하고, 한 번만 부를 수 있습니다.
+  * `Err`를 돌려주는 `grow`나 `shrink`는 이것을 부르지 않았어야 합니다. 옛 블록이 여전히 호출자의 것이기
+    때문입니다.
+  * 영수증이 그 블록이 무엇이었는지(주소, 길이, provenance) 알려 줍니다.
+  * `reclaim`은 std의 `Allocator` 계약에 기댑니다. `deallocate`는 이 할당기(또는 동등한 할당기)가 내준, 아직
+    살아 있고 호출자가 더는 쓰지 않는 블록만 받습니다. 검증된 코드는 `deallocate`를 부를 수 없습니다
+    (`trusted_only`).
+
+그래서 해제하는 할당기는 다음과 같습니다.
+
 * `allocate`는 `raw_ptr::allocate(layout.size(), layout.align())`로 블록을 받습니다(`Layout::size`와
   `Layout::align`이 그 쌍이 `valid_layout`임을 알려 줍니다). 돌려줄 `NonNull<[u8]>`는
-  `core::ptr::slice_from_raw_parts_mut`와 `NonNull::new`로 만듭니다.
-* 내준 블록의 `PointsToRaw`와 `Dealloc` 권한을 그 포인터·layout과 함께 `&self`에서 닿는 상태에 둡니다
-  (그것들을 기록한 `PCell` 위의 `LocalInvariant`, `Sync` 할당기라면 `AtomicInvariant`).
-* `deallocate`는 그 기록에서 주소와 layout을 찾았을 때만 블록을 해제하고, 나머지는 새게 둡니다(std는
-  다른 것을 넘기지 않습니다). `deallocate`에는 전제조건을 붙일 수 없으므로, 불변식과 셀을 잇는 사실은
-  타입 불변식으로 둡니다.
+  `core::ptr::slice_from_raw_parts_mut`와 `NonNull::new`로 만들고, 그 블록을 내놓습니다. 영수증과 `Dealloc`은
+  블록의 포인터·layout과 함께 `&self`에서 닿는 상태에 둡니다(그것들을 기록한 `PCell` 위의 `LocalInvariant`,
+  `Sync` 할당기라면 `AtomicInvariant`).
+* `deallocate`는 그 기록에서 주소와 layout을 찾았을 때만 블록을 해제합니다. 영수증으로 권한을 되찾고
+  `raw_ptr::deallocate`를 부릅니다. 나머지는 건드리지 않습니다(std는 다른 것을 넘기지 않습니다).
+  `deallocate`에는 전제조건을 붙일 수 없으므로, 불변식과 셀을 잇는 사실은 타입 불변식으로 둡니다.
 
 테스트 `one_slot_allocator_frees_no_cheating`(`rust_verify_test/tests/alloc_check_custom_allocator.rs`)이
 한 번에 블록 하나를 다루는 이런 할당기입니다.
-
-**신뢰하는 것:** 할당기가 내준 블록의 권한을 내놓는지는 아무것도 검사하지 않습니다. Verus의 `Box`, `Vec`
-모델은 `allocate`가 돌려준 메모리를 컨테이너만의 것으로 봅니다. 그러나 위의 할당기는 컨테이너가 그 블록을
-쓰는 동안에도 그 `PointsToRaw`를 쥐고 있고, 다른 메서드가 불변식을 열어 그 블록에 쓸 수 있습니다. 그러면
-컨테이너 내용에 대해 검증된 사실이 실행 시 거짓이 됩니다. 그래서 검증된 `Allocator` impl은 내준 블록을
-건드리지 않는다고 신뢰합니다(`--no-cheating`에서도). `allocate`가 그 권한을 내놓게 하는 설계를 검토하고
-있습니다.
 
 `Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
 `grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의
@@ -652,7 +667,8 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * `#[verifier::fip(strict)]`의 경우: std와 vstd의 함수가 유한한 스택 공간을 쓴다는 점, 그리고 rustc가
   `become`을 명세대로 구현한다는 점(고정된 toolchain의 incomplete feature이며, 테스트
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
-* 사용자의 `Allocator` impl이, 검증된 것이라도, 내준 블록을 건드리지 않는다는 점("사용자 정의 할당기" 참고)
+* `vstd::alloc_check::reclaim`을 위한 std의 `Allocator` 계약: `deallocate`(또는 `grow`, `shrink`)가 받는 블록은
+  이 할당기가 내준, 아직 살아 있는 블록이라는 점("사용자 정의 할당기" 참고)
 * `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등). `--no-cheating`은 지금
   검증하는 crate에만 적용됩니다. 그것 없이 검증된 의존 crate의 블록(과 `external_body` 함수)은 그대로
   신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다
