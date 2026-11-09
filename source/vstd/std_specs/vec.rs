@@ -98,6 +98,7 @@ pub broadcast proof fn axiom_spec_len<T, A: Allocator>(v: &Vec<T, A>)
 }
 
 #[verifier::when_used_as_spec(spec_vec_len)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::len ](vec: &Vec<T, A>) -> (len: usize)
     ensures
         len == spec_vec_len(vec),
@@ -310,6 +311,7 @@ pub open spec fn vec_reserved<T, A: Allocator>(old_v: &Vec<T, A>, new_v: &Vec<T,
 }
 
 #[verifier::when_used_as_spec(spec_vec_capacity)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::capacity ](vec: &Vec<T, A>) -> (capacity: usize)
     ensures
         capacity == spec_vec_capacity(vec),
@@ -319,6 +321,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::capacity ](vec: &Vec<T, 
 ;
 
 ////// Other functions
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ Vec::<T>::new ]() -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
@@ -333,6 +336,7 @@ pub assume_specification<T>[ <Vec<T> as core::default::Default>::default ]() -> 
     allocates 0
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::new_in ](alloc: A) -> (v: Vec<T, A>)
     ensures
         v@ == Seq::<T>::empty(),
@@ -436,6 +440,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::push ](vec: &mut Vec<T, 
     allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), 1), vec_regrows(old(vec), 1))
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::pop ](vec: &mut Vec<T, A>) -> (value:
     Option<T>)
     ensures
@@ -490,6 +495,7 @@ impl<T: Sized, I: SliceIndex<[T]>, A: Allocator> super::core::IndexSpecImpl<I> f
     }
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index](
     vec: &Vec<T, A>,
     i: I,
@@ -500,6 +506,7 @@ pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index
     allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::swap_remove ](
     vec: &mut Vec<T, A>,
     i: usize,
@@ -533,6 +540,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::insert ](
     allocates deallocates_when(vec_reserve_cost_in(crate::alloc_heap::old_allocator_heap(), old(vec), 1), vec_regrows(old(vec), 1))
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator> [ <Vec<T, A>>::is_empty ](
     v: &Vec<T, A>,
 ) -> (res: bool)
@@ -542,6 +550,7 @@ pub assume_specification<T, A: Allocator> [ <Vec<T, A>>::is_empty ](
     allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::remove ](
     vec: &mut Vec<T, A>,
     i: usize,
@@ -566,6 +575,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::clear ](vec: &mut Vec<T,
     allocates deallocates_when(0int, old(vec)@.len() > 0 && crate::alloc_check::drop_may_deallocate::<T>())
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_slice ](vec: &Vec<T, A>) -> (slice: &[T])
     ensures
         slice@ == vec@,
@@ -586,6 +596,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::convert::AsRef<[T
 ;
 
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_mut_slice ](vec: &mut Vec<T, A>) -> (slice: &mut [T])
     ensures
         spec_vec_allocator(final(vec)) == spec_vec_allocator(old(vec)),
@@ -597,6 +608,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::as_mut_slice ](vec: &mut
     allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::Deref>::deref ](
     vec: &Vec<T, A>,
 ) -> (slice: &[T])
@@ -605,6 +617,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::Deref>::dere
     allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::ops::DerefMut>::deref_mut ](
     vec: &mut Vec<T, A>,
 ) -> (slice: &mut [T])

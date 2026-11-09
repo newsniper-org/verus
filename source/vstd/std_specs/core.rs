@@ -174,6 +174,7 @@ pub trait ExMetaSized {
     type ExternalTraitSpecificationFor: core::marker::MetaSized;
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
     ensures
         *final(a) == *old(b),
@@ -182,6 +183,7 @@ pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ core::mem::replace::<T> ](dest: &mut T, src: T) -> (res: T)
     ensures
         *final(dest) == src,

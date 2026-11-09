@@ -599,6 +599,15 @@ elaboration. This includes the destructors that its drops run.
   and rejected otherwise. A drop (or such a call) whose destructors are not known here, because
   it involves a type parameter, an associated or opaque type, or `dyn`, is rejected; a `Copy`
   bound rules out a destructor.
+* The std functions whose vstd specification is marked `#[verifier::alloc_check_skip_drops]`
+  drop no value of their type arguments, so a call of one runs no destructor of them, and may be
+  instantiated with a type parameter whatever its bounds. These are `mem::swap`, `mem::replace`,
+  the slice views (`len`, `first`, `last`, `get`, `get_unchecked`, indexing, `swap`, `split_at`,
+  `split_first`, `split_last` and their `_mut`, `_checked` and `_unchecked` variants), and
+  `Vec`'s `new`, `new_in`, `len`, `capacity`, `is_empty`, `pop`, `remove`, `swap_remove`,
+  `as_slice`, `as_mut_slice`, `deref`, `deref_mut` and indexing. (`mem::take` is not among
+  them: it runs `T::default`.) The mark is trusted, like `external_body`, and is accepted only in
+  vstd.
 * A cycle of calls between strict functions must consist of `become` calls only. A non-tail call
   adds a frame, so a cycle through one grows the stack.
 

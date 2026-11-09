@@ -81,6 +81,7 @@ pub broadcast axiom fn axiom_spec_len<T>(slice: &[T])
 ;
 
 #[verifier::allow_in_spec]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ <[T]>::len ](slice: &[T]) -> (len: usize)
     returns
         spec_slice_len(slice),

@@ -351,6 +351,10 @@ pub struct Verifier {
     /// paths, `{:?}`): their compilation checked that they use constant stack space, so a strict
     /// function here may call them (and run their types' strict destructors) as leaves
     pub(crate) alloc_checked_strict_fns: Vec<String>,
+    /// -V alloc-check: the functions that vstd (as verified with `--is-vstd`) marks
+    /// `#[verifier::alloc_check_skip_drops]` (their VIR paths, `{:?}`): they drop no value of
+    /// their type arguments, so a call of one runs none of their destructors
+    pub(crate) alloc_no_drop_fns: Vec<String>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -561,6 +565,7 @@ impl Verifier {
             alloc_checked_export: None,
             alloc_checked_deps: Vec::new(),
             alloc_checked_strict_fns: Vec::new(),
+            alloc_no_drop_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -613,6 +618,7 @@ impl Verifier {
             alloc_checked_export: self.alloc_checked_export.clone(),
             alloc_checked_deps: self.alloc_checked_deps.clone(),
             alloc_checked_strict_fns: self.alloc_checked_strict_fns.clone(),
+            alloc_no_drop_fns: self.alloc_no_drop_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -3217,6 +3223,21 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                     compiler.sess.dcx().err(msg);
                     self.verifier.encountered_vir_error = true;
                     return rustc_driver::Compilation::Stop;
+                }
+                // (the passes above make sure that this is the verified vstd that is linked; the
+                // crate named `vstd` is the one Verus provides, see `rust_to_vir`)
+                if linked.is_some_and(|cnum| tcx.crate_name(*cnum).as_str() == "vstd")
+                    && metadata.built_as_vstd
+                    && has_vstd_items
+                {
+                    for f in krate.functions.iter() {
+                        // (only std's functions, through their `assume_specification`: a
+                        // function of vstd with a body may call into its type arguments'
+                        // trait impls, which `fip_mir` does not see)
+                        if f.x.attrs.alloc_check_skip_drops && f.x.body.is_none() {
+                            self.verifier.alloc_no_drop_fns.push(format!("{:?}", f.x.name.path));
+                        }
+                    }
                 }
                 if let (Some(cnum), Some(hash)) = (linked, metadata.crate_hash) {
                     if has_checked && hash == tcx.crate_hash(*cnum).as_u128() {

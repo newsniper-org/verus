@@ -569,6 +569,13 @@ fn sum(n: u64, acc: u64) -> (r: u64)
   그렇지 않으면 거부합니다. 타입 매개변수,
   associated 타입이나 불투명 타입, `dyn`이 관련되어 소멸자를 여기서 알 수 없는 drop(또는 그런 호출)은
   거부합니다. `Copy` bound가 있으면 소멸자가 없습니다.
+* vstd 명세에 `#[verifier::alloc_check_skip_drops]`가 붙은 std 함수는 타입 인자의 값을 drop하지
+  않습니다. 그래서 그 호출은 타입 인자의 소멸자를 실행하지 않고, bound와 상관없이 타입 매개변수로
+  인스턴스화해도 됩니다. 대상은 `mem::swap`, `mem::replace`, slice 뷰(`len`, `first`, `last`, `get`,
+  `get_unchecked`, 인덱싱, `swap`, `split_at`, `split_first`, `split_last`와 그 `_mut`, `_checked`,
+  `_unchecked` 변형), 그리고 `Vec`의 `new`, `new_in`, `len`, `capacity`, `is_empty`, `pop`, `remove`,
+  `swap_remove`, `as_slice`, `as_mut_slice`, `deref`, `deref_mut`, 인덱싱입니다. `mem::take`는 `T::default`를
+  실행하므로 빠집니다. 이 표시는 `external_body`처럼 신뢰하는 것이고, vstd에서만 받습니다.
 * 엄격한 함수들 사이의 호출 순환은 `become` 호출로만 이루어져야 합니다. 꼬리가 아닌 호출은 frame을
   하나 더하므로, 그런 호출을 거치는 순환은 스택을 키웁니다.
 

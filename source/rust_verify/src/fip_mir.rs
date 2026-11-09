@@ -558,9 +558,19 @@ fn strict_err<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
 pub(crate) struct ExternalStrict {
     verus_items: crate::verus_items::VerusItems,
     paths: std::collections::HashSet<String>,
+    /// the std functions (and vstd's) that vstd marks `#[verifier::alloc_check_skip_drops]`: they
+    /// drop no value of their type arguments (`mem::swap`, `<[T]>::split_at_mut`)
+    no_drop: std::collections::HashSet<String>,
 }
 
 impl ExternalStrict {
+    fn drops_nothing<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+        !def_id.is_local()
+            && !self.no_drop.is_empty()
+            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
+                .is_some_and(|p| self.no_drop.contains(&format!("{:?}", p)))
+    }
+
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         !def_id.is_local()
             && !self.paths.is_empty()
@@ -629,9 +639,15 @@ fn strict_edges<'tcx>(
                     }
                 }
                 // std code may drop values of its type arguments (`Vec::<H>::clear`, `truncate`),
-                // which runs their destructors from inside the call
+                // which runs their destructors from inside the call (unless vstd's specification
+                // says that the function drops none of them)
                 if let Some((callee, args)) = func.const_fn_def() {
-                    if is_trusted_leaf_crate(tcx, callee) {
+                    // (a trait method's specification is that of the impl's method, so the
+                    // resolved callee is looked up too)
+                    let drops_nothing = ext.drops_nothing(tcx, callee)
+                        || resolve_callee(tcx, typing_env, func)
+                            .is_some_and(|c| ext.drops_nothing(tcx, c));
+                    if is_trusted_leaf_crate(tcx, callee) && !drops_nothing {
                         let (mut dtors, mut unknown) = (Vec::new(), Vec::new());
                         let mut seen = std::collections::HashSet::new();
                         for t in args.types() {
@@ -790,10 +806,12 @@ pub(crate) fn check_fip_crate<'tcx>(
     tcx: TyCtxt<'tcx>,
     checked: &[(String, u128)],
     strict_fns: &[String],
+    no_drop_fns: &[String],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
         paths: strict_fns.iter().cloned().collect(),
+        no_drop: no_drop_fns.iter().cloned().collect(),
     };
     let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
     if let Some(m) = marker {

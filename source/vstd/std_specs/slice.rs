@@ -427,6 +427,7 @@ impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {
     }
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I>[ <[T]>::get::<I> ](slice: &[T], i: I) -> (b: Option<
     &<I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
@@ -434,6 +435,7 @@ pub assume_specification<T, I>[ <[T]>::get::<I> ](slice: &[T], i: I) -> (b: Opti
         call_ensures(<I as SliceIndex<[T]>>::get, (i, slice), b),  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I>[ <[T]>::get_mut::<I> ](slice: &mut [T], i: I) -> (b: Option<
     &mut <I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
@@ -441,6 +443,7 @@ pub assume_specification<T, I>[ <[T]>::get_mut::<I> ](slice: &mut [T], i: I) -> 
         call_ensures(<I as SliceIndex<[T]>>::get_mut, (i, slice), b),  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as Index<I>>::index ](
     slice: &[T],
     index: I,
@@ -449,6 +452,7 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as Index<I>>::index ](
         call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as IndexMut<I>>::index_mut ](
     slice: &mut [T],
     index: I,
@@ -459,6 +463,7 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as IndexMut<I>>::index_mut
 
 // `get_unchecked(i)`/`get_unchecked_mut(i)` share the contract of `index`/`index_mut`, with
 // the in-bounds check as a safety precondition (UB if violated) rather than a panic.
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I>[ <[T]>::get_unchecked::<I> ](
     slice: &[T],
     index: I,
@@ -469,6 +474,7 @@ pub assume_specification<T, I>[ <[T]>::get_unchecked::<I> ](
         index.index_postcondition(slice, output),  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I>[ <[T]>::get_unchecked_mut::<I> ](
     slice: &mut [T],
     index: I,
@@ -488,6 +494,7 @@ where
     }
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I, const N: usize>[ <[T; N]>::index ](array: &[T; N], index: I) -> (output: &<[T; N] as Index<I>>::Output)
     where
         [T]: Index<I>,
@@ -495,6 +502,7 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index ](array: &[T; N]
         call_ensures(<[T]>::index, (array, index), output),  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, I, const N: usize>[ <[T; N]>::index_mut ](array: &mut [T; N], index: I) -> (output: &mut <[T; N] as Index<I>>::Output)
     where
         [T]: IndexMut<I>,
@@ -554,6 +562,7 @@ pub assume_specification<T>[ <[T]>::reverse ](slice: &mut [T])
 ;
 
 // swap
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ <[T]>::swap ](slice: &mut [T], a: usize, b: usize)
     requires
         a < old(slice)@.len(),
@@ -687,6 +696,7 @@ pub assume_specification<'a, T>[ <[T]>::iter_mut ](slice: &'a mut [T]) -> (iter:
         IteratorSpec::decrease(&iter) is Some,  allocates 0
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::first ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
@@ -694,6 +704,7 @@ pub assume_specification<T> [ <[T]>::first ](slice: &[T]) -> (res: Option<&T>)
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::last ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
@@ -702,6 +713,7 @@ pub assume_specification<T> [ <[T]>::last ](slice: &[T]) -> (res: Option<&T>)
 ;
 
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::first_mut ](slice: &mut [T]) -> (res: Option<&mut T>)
     ensures
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
@@ -711,6 +723,7 @@ pub assume_specification<T> [ <[T]>::first_mut ](slice: &mut [T]) -> (res: Optio
 ;
 
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::last_mut ](slice: &mut [T]) -> (res: Option<&mut T>)
     ensures
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
@@ -719,6 +732,7 @@ pub assume_specification<T> [ <[T]>::last_mut ](slice: &mut [T]) -> (res: Option
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at ](slice: &[T], mid: usize) -> (ret: (&[T], &[T]))
     requires
         0 <= mid <= slice.len(),
@@ -729,6 +743,7 @@ pub assume_specification<T> [ <[T]>::split_at ](slice: &[T], mid: usize) -> (ret
 ;
 
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at_mut ](slice: &mut [T], mid: usize) -> (ret: (&mut [T], &mut [T]))
     requires
         0 <= mid <= slice.len(),
@@ -743,6 +758,7 @@ pub assume_specification<T> [ <[T]>::split_at_mut ](slice: &mut [T], mid: usize)
 
 // The non-panicking (`Option`-returning) form of `split_at`: `Some((a, b))` split at `mid`
 // when `mid <= len`, else `None`.
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at_checked ](slice: &[T], mid: usize) -> (ret: Option<(&[T], &[T])>)
     ensures
         mid <= slice.len() ==> (ret matches Some((a, b))
@@ -752,6 +768,7 @@ pub assume_specification<T> [ <[T]>::split_at_checked ](slice: &[T], mid: usize)
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at_unchecked ](slice: &[T], mid: usize) -> (ret: (&[T], &[T]))
     requires
         0 <= mid <= slice.len(),
@@ -762,6 +779,7 @@ pub assume_specification<T> [ <[T]>::split_at_unchecked ](slice: &[T], mid: usiz
 ;
 
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at_mut_unchecked ](slice: &mut [T], mid: usize) -> (ret: (&mut [T], &mut [T]))
     requires
         0 <= mid <= slice.len(),
@@ -774,6 +792,7 @@ pub assume_specification<T> [ <[T]>::split_at_mut_unchecked ](slice: &mut [T], m
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_first ](slice: &[T]) -> (ret: Option<(&T, &[T])>)
     ensures
         slice.len() == 0 ==> ret.is_none(),
@@ -781,6 +800,7 @@ pub assume_specification<T> [ <[T]>::split_first ](slice: &[T]) -> (ret: Option<
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_first_mut ](slice: &mut [T]) -> (ret: Option<(&mut T, &mut [T])>)
     ensures
         old(slice).len() == 0 ==> ret.is_none() && final(slice)@ == seq![],
@@ -796,6 +816,7 @@ pub assume_specification<T> [ <[T]>::split_first_mut ](slice: &mut [T]) -> (ret:
 // The non-panicking form of `split_at_mut` (std 1.100: `split_at_mut_unchecked` when
 // `mid <= len`, else `None`).
 #[doc(hidden)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_at_mut_checked ](slice: &mut [T], mid: usize) -> (ret: Option<(&mut [T], &mut [T])>)
     ensures
         mid <= old(slice).len() ==> (ret matches Some((a, b))
@@ -808,6 +829,7 @@ pub assume_specification<T> [ <[T]>::split_at_mut_checked ](slice: &mut [T], mid
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_last ](slice: &[T]) -> (ret: Option<(&T, &[T])>)
     ensures
         slice.len() == 0 ==> ret.is_none(),
@@ -815,6 +837,7 @@ pub assume_specification<T> [ <[T]>::split_last ](slice: &[T]) -> (ret: Option<(
     no_unwind  allocates deallocates_when(0int, false)
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::split_last_mut ](slice: &mut [T]) -> (ret: Option<(&mut T, &mut [T])>)
     ensures
         old(slice).len() == 0 ==> ret.is_none() && final(slice)@ == seq![],

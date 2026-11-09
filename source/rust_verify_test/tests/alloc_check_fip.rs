@@ -1196,3 +1196,56 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    // std functions that drop no value of their type arguments (vstd's specifications say so
+    // with `alloc_check_skip_drops`) may be called with a `T` whose destructor is not known
+    // (portable-fip, 2026-11-09 strict-std-calls request)
+    #[test] fip_strict_std_calls_drop_nothing ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        #[verifier::fip(strict)]
+        pub fn swap_lt_any<T: AllocFreeDrop>(xs: &mut [T], i: usize, j: usize)
+            requires i < j, j < old(xs)@.len(),
+            no_unwind allocates 0
+        {
+            let (a, b) = <[T]>::split_at_mut(xs, j);
+            ::core::mem::swap(&mut a[i], &mut b[0]);
+        }
+        #[verifier::fip(strict)]
+        pub fn replace_any<T: AllocFreeDrop>(x: &mut T, y: T) -> (r: T)
+            no_unwind allocates 0
+        {
+            ::core::mem::replace(x, y)
+        }
+        #[verifier::fip(strict)]
+        pub fn views_any<T: AllocFreeDrop>(xs: &mut [T], v: &mut Vec<T>) -> (r: usize)
+            requires old(xs)@.len() >= 2, old(v)@.len() >= 1,
+            allocates 0
+        {
+            xs.swap(0, 1);
+            let _ = xs.split_last_mut();
+            let _ = xs.first();
+            let _ = xs.get(0);
+            let _ = &v[0];
+            let _ = v.as_mut_slice();
+            let _ = v.len();
+            xs.len()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // (`Vec::clear` drops the elements)
+    #[test] fip_strict_std_call_that_drops_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::{AllocFreeDrop, NoDeallocDrop};
+        #[verifier::fip(strict)]
+        pub fn clear_any<T: AllocFreeDrop + NoDeallocDrop>(v: &mut Vec<T>)
+            allocates 0
+        {
+            v.clear();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "which may drop a value of type `T`, whose destructor is not known here")
+}
+
