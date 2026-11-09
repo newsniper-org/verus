@@ -354,6 +354,7 @@ impl Pool {
 
 #[verifier::external_body]
 fn from_chunk(layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+    ensures vstd::std_specs::rust_1_100::allocator_block_fits(r, layout),
     allocates 0
 {
     std::alloc::System.allocate(layout)

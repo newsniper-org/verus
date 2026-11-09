@@ -214,6 +214,15 @@ containers), so Verus checks that the allocator does not keep the block's permis
   live block that this allocator, or an equivalent one, handed out, which the caller no longer
   uses.
 
+* The block must also be big and aligned enough: the `Allocator` declaration's postcondition
+  `allocator_block_fits(r, layout)` (`new_layout` for `grow` and `shrink`) says that a block
+  returned in `Ok` is at least `layout.size()` long and aligned to `layout.align()`, as std's
+  contract says, so a user's impl must show it.
+* A user's `grow`, `grow_zeroed` or `shrink` must move the old block's contents into the new one,
+  which Verus cannot check (the permissions of raw memory do not say what it holds). So it is
+  accepted only as `#[verifier::external_body]` (trusted; `--no-cheating` rejects it); leaving it
+  out uses std's default body (`allocate`, copy, `deallocate`), which is safe.
+
 So an allocator that frees:
 
 * `allocate` gets a block from `raw_ptr::allocate(layout.size(), layout.align())`
@@ -578,9 +587,11 @@ elaboration. This includes the destructors that its drops run.
   the checks above. A function of another crate may be called (also as the target of `become`)
   only if it is strict and its crate was verified and compiled with `-V alloc-check` and
   imported with its library file (see "Libraries and other crates"): that compilation checked it
-  and everything it reaches, and it cannot call back, since a strict function's callees are all
-  known. Calls of other functions of other crates, and calls whose callee is not known (generic
-  calls, function values), are rejected.
+  and everything it reaches. It can call back into this crate only through a user allocator it is
+  instantiated with (`A: FipStrictAllocator`, whose strict methods are this crate's): such a call
+  counts as using a user allocator, so the allocator's methods may not reach it (below). Calls of
+  other functions of other crates, and calls whose callee is not known (generic calls, function
+  values), are rejected.
 * Destructors count as calls: those that the function's drops run, and those of the types that
   a std or vstd call is instantiated with (std may drop such values inside the call, as
   `Vec::<T>::clear` does). The destructor of another crate's type is accepted on the same terms

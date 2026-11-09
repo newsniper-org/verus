@@ -468,16 +468,31 @@ pub broadcast group group_rust_1_100_core_axioms {
 /// default bodies of `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` call `allocate` or
 /// `allocate_zeroed` once (with the new layout) and `deallocate` at most once, so they stay within
 /// `allocate_cost` of the new layout, which is what `BoundedAllocator`'s defaults say.
+/// `Allocator`'s contract for a block it returns: "the returned block of memory meets the size and
+/// alignment guarantees of `layout`" (std 1.100, `Allocator::allocate`; `grow` and `shrink` for
+/// the new layout). std's containers rely on it, and use only the pointer.
+pub open spec fn allocator_block_fits(
+    r: Result<NonNull<[u8]>, AllocError>,
+    layout: Layout,
+) -> bool {
+    r matches Ok(b) ==> super::super::alloc_check::block_len(b) >= spec_layout_size(layout)
+        && super::super::alloc_check::block_addr(b) as nat % spec_layout_align(layout) == 0
+}
+
 #[verifier::external_trait_specification]
 pub unsafe trait ExAllocator {
     type ExternalTraitSpecificationFor: core::alloc::Allocator;
 
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        ensures
+            allocator_block_fits(r, layout),
         allocates
             allocator_allocate_cost::<Self>(self, layout),
     ;
 
-    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>
+    fn allocate_zeroed(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+        ensures
+            allocator_block_fits(r, layout),
         allocates
             allocator_allocate_cost::<Self>(self, layout),
     ;
@@ -489,30 +504,32 @@ pub unsafe trait ExAllocator {
     ;
 
     #[verifier::trusted_only]
-    unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<
+    unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> (r: Result<
         NonNull<[u8]>,
         AllocError,
-    >
+    >)
+        ensures
+            allocator_block_fits(r, new_layout),
         allocates
             allocator_grow_cost::<Self>(self, ptr, old_layout, new_layout),
     ;
 
     #[verifier::trusted_only]
-    unsafe fn grow_zeroed(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError>
+    unsafe fn grow_zeroed(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> (r:
+        Result<NonNull<[u8]>, AllocError>)
+        ensures
+            allocator_block_fits(r, new_layout),
         allocates
             allocator_grow_zeroed_cost::<Self>(self, ptr, old_layout, new_layout),
     ;
 
     #[verifier::trusted_only]
-    unsafe fn shrink(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<
+    unsafe fn shrink(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> (r: Result<
         NonNull<[u8]>,
         AllocError,
-    >
+    >)
+        ensures
+            allocator_block_fits(r, new_layout),
         allocates
             allocator_shrink_cost::<Self>(self, ptr, old_layout, new_layout),
     ;
@@ -534,14 +551,18 @@ macro_rules! std_allocator_specs {
             pub assume_specification[ <$a as core::alloc::Allocator>::allocate ](
                 a: &$a,
                 layout: Layout,
-            ) -> Result<NonNull<[u8]>, AllocError>
+            ) -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_block_fits(r, layout),
                 allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
             ;
 
             pub assume_specification[ <$a as core::alloc::Allocator>::allocate_zeroed ](
                 a: &$a,
                 layout: Layout,
-            ) -> Result<NonNull<[u8]>, AllocError>
+            ) -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_block_fits(r, layout),
                 allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
             ;
 
@@ -560,7 +581,9 @@ macro_rules! std_allocator_specs {
                 ptr: NonNull<u8>,
                 old_layout: Layout,
                 new_layout: Layout,
-            ) -> Result<NonNull<[u8]>, AllocError>
+            ) -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_block_fits(r, new_layout),
             ;
 
             #[verifier::trusted_only]
@@ -569,7 +592,9 @@ macro_rules! std_allocator_specs {
                 ptr: NonNull<u8>,
                 old_layout: Layout,
                 new_layout: Layout,
-            ) -> Result<NonNull<[u8]>, AllocError>
+            ) -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_block_fits(r, new_layout),
             ;
 
             #[verifier::trusted_only]
@@ -578,7 +603,9 @@ macro_rules! std_allocator_specs {
                 ptr: NonNull<u8>,
                 old_layout: Layout,
                 new_layout: Layout,
-            ) -> Result<NonNull<[u8]>, AllocError>
+            ) -> (r: Result<NonNull<[u8]>, AllocError>)
+                ensures
+                    allocator_block_fits(r, new_layout),
             ;
         }
     };
