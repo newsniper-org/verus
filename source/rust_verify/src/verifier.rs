@@ -347,6 +347,10 @@ pub struct Verifier {
     /// together with the linked crate (name and SVH). Their compilation passed the checks of
     /// `fip_mir` too (the mark is written only then), so their marker impls need no new check.
     pub(crate) alloc_checked_deps: Vec<(String, u128)>,
+    /// -V alloc-check: the `#[verifier::fip(strict)]` functions of those dependencies (their VIR
+    /// paths, `{:?}`): their compilation checked that they use constant stack space, so a strict
+    /// function here may call them (and run their types' strict destructors) as leaves
+    pub(crate) alloc_checked_strict_fns: Vec<String>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -556,6 +560,7 @@ impl Verifier {
             export_vir_path_via_cargo: None,
             alloc_checked_export: None,
             alloc_checked_deps: Vec::new(),
+            alloc_checked_strict_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -607,6 +612,7 @@ impl Verifier {
             export_vir_path_via_cargo: self.export_vir_path_via_cargo.clone(),
             alloc_checked_export: self.alloc_checked_export.clone(),
             alloc_checked_deps: self.alloc_checked_deps.clone(),
+            alloc_checked_strict_fns: self.alloc_checked_strict_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -3217,6 +3223,13 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                         self.verifier
                             .alloc_checked_deps
                             .push((tcx.crate_name(*cnum).to_string(), hash));
+                        for f in krate.functions.iter() {
+                            if f.x.attrs.fip_strict && f.x.attrs.alloc_checked_crate {
+                                self.verifier
+                                    .alloc_checked_strict_fns
+                                    .push(format!("{:?}", f.x.name.path));
+                            }
+                        }
                     }
                 }
             }

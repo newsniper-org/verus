@@ -1643,6 +1643,9 @@ pub struct FunctionAttrsX {
     /// memory on a normal return (its calls are checked here; its implicit drops in the compiled
     /// program, by rust_verify on the MIR)
     pub fip: bool,
+    /// `#[verifier::fip(strict)]` (implies `fip`): checked on the compiled program to use constant
+    /// stack space, with every function it can reach (so another crate may call it as a leaf)
+    pub fip_strict: bool,
     /// `#[verifier::trusted_only]`: std's (or the author's) conditions for calling the function
     /// safely cannot be written as a precondition, so verified code may call it (or an
     /// implementation of it, if it is a trait method) only inside a `#[verifier::trusted_call]`

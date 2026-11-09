@@ -550,10 +550,30 @@ fn strict_err<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
 
 /// The calls of one strict fip function (on paths that return normally), checked to go to
 /// strict fip functions or to std/vstd
+/// The `#[verifier::fip(strict)]` functions of other crates that were verified and compiled with
+/// -V alloc-check (by VIR path): their compilation checked that they, and everything they reach,
+/// use constant stack space. They cannot call back into this crate: a strict function's calls
+/// all go to known functions (no generic calls or function values), and those are in its own
+/// crate or below it.
+pub(crate) struct ExternalStrict {
+    verus_items: crate::verus_items::VerusItems,
+    paths: std::collections::HashSet<String>,
+}
+
+impl ExternalStrict {
+    fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+        !def_id.is_local()
+            && !self.paths.is_empty()
+            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
+                .is_some_and(|p| self.paths.contains(&format!("{:?}", p)))
+    }
+}
+
 fn strict_edges<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     at: Option<&AllocTraits>,
+    ext: &ExternalStrict,
 ) -> (Vec<StrictEdge>, bool) {
     let mut uses_allocator = false;
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
@@ -578,11 +598,14 @@ fn strict_edges<'tcx>(
             }
         }
         None if is_trusted_leaf_crate(tcx, callee) => {}
+        // (a strict function of another crate verified with -V alloc-check: a leaf, also as the
+        // target of a tail call, whose own frame is then constant too)
+        None if ext.contains(tcx, callee) => {}
         None => strict_err(
             tcx,
             span,
             format!(
-                "it calls `{}` from another crate, whose stack use is not known here",
+                "it calls `{}` from another crate, whose stack use is not known here (another crate's function is known only if it is `#[verifier::fip(strict)]` and its crate was verified and compiled with -V alloc-check and imported with its library file)",
                 tcx.def_path_str(callee)
             ),
         ),
@@ -687,13 +710,14 @@ fn check_strict_stack<'tcx>(
     strict: &[LocalDefId],
     at: Option<&AllocTraits>,
     allocator_methods: &[(LocalDefId, Span)],
+    ext: &ExternalStrict,
 ) {
     let mut uses_allocator: std::collections::HashSet<LocalDefId> =
         std::collections::HashSet::new();
     let graph: std::collections::HashMap<LocalDefId, Vec<StrictEdge>> = strict
         .iter()
         .map(|f| {
-            let (edges, uses) = strict_edges(tcx, *f, at);
+            let (edges, uses) = strict_edges(tcx, *f, at, ext);
             if uses {
                 uses_allocator.insert(*f);
             }
@@ -760,7 +784,15 @@ fn check_strict_stack<'tcx>(
 /// `FipAllocator` and `FipStrictAllocator` impl; returns
 /// whether there are fip functions. (The impls of other crates were checked when those crates
 /// were compiled: `checked` lists the dependencies verified with -V alloc-check.)
-pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>, checked: &[(String, u128)]) -> bool {
+pub(crate) fn check_fip_crate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    checked: &[(String, u128)],
+    strict_fns: &[String],
+) -> bool {
+    let ext = ExternalStrict {
+        verus_items: crate::verus_items::from_diagnostic_items(tcx),
+        paths: strict_fns.iter().cloned().collect(),
+    };
     let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
     if let Some(m) = marker {
         check_marker_impls(tcx, m, checked);
@@ -788,7 +820,7 @@ pub(crate) fn check_fip_crate<'tcx>(tcx: TyCtxt<'tcx>, checked: &[(String, u128)
         }
         check_fip_body(tcx, def_id, marker, at.as_ref());
     }
-    check_strict_stack(tcx, &strict, at.as_ref(), &allocator_methods);
+    check_strict_stack(tcx, &strict, at.as_ref(), &allocator_methods, &ext);
     any
 }
 

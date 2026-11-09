@@ -552,11 +552,17 @@ elaboration. This includes the destructors that its drops run.
 
 * A call may go to another strict function, or to std or vstd. Their functions do not call back
   into the caller's code, because the calls that could do so (through callbacks) are rejected by
-  the checks above. Calls of functions of other crates, and calls whose callee is not known
-  (generic calls, function values), are rejected.
+  the checks above. A function of another crate may be called (also as the target of `become`)
+  only if it is strict and its crate was verified and compiled with `-V alloc-check` and
+  imported with its library file (see "Libraries and other crates"): that compilation checked it
+  and everything it reaches, and it cannot call back, since a strict function's callees are all
+  known. Calls of other functions of other crates, and calls whose callee is not known (generic
+  calls, function values), are rejected.
 * Destructors count as calls: those that the function's drops run, and those of the types that
   a std or vstd call is instantiated with (std may drop such values inside the call, as
-  `Vec::<T>::clear` does). A drop (or such a call) whose destructors are not known here, because
+  `Vec::<T>::clear` does). The destructor of another crate's type is accepted on the same terms
+  as its functions (a strict `Drop::drop` of a crate verified and compiled with `-V alloc-check`),
+  and rejected otherwise. A drop (or such a call) whose destructors are not known here, because
   it involves a type parameter, an associated or opaque type, or `dyn`, is rejected; a `Copy`
   bound rules out a destructor.
 * A cycle of calls between strict functions must consist of `become` calls only. A non-tail call

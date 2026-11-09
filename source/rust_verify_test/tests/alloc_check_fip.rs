@@ -1004,3 +1004,77 @@ unsafe impl NoDeallocDrop for S {{}}
         stderr
     );
 }
+
+// A strict function may call a strict function of a crate verified and compiled with
+// -V alloc-check, and drop a value of a type whose `Drop` is strict there (as leaves); other
+// functions and destructors of other crates stay unknown (portable-fip, fip-beta 6f6975af2, §2)
+#[test]
+fn fip_strict_across_crates() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{pre}use vstd::alloc_check::{{AllocFreeDrop, NoDeallocDrop}};
+verus! {{
+pub struct H {{ pub n: u64 }}
+impl Drop for H {{
+    #[verifier::fip(strict)]
+    fn drop(&mut self) opens_invariants none no_unwind {{}}
+}}
+unsafe impl AllocFreeDrop for H {{}}
+unsafe impl NoDeallocDrop for H {{}}
+pub struct G {{ pub n: u64 }}
+impl Drop for G {{
+    #[verifier::fip]
+    fn drop(&mut self) opens_invariants none no_unwind {{}}
+}}
+unsafe impl AllocFreeDrop for G {{}}
+unsafe impl NoDeallocDrop for G {{}}
+#[verifier::fip(strict)]
+pub fn inc(x: u64) -> (r: u64) allocates 0 {{ x.wrapping_add(1) }}
+#[verifier::fip]
+pub fn inc_loose(x: u64) -> (r: u64) allocates 0 {{ x.wrapping_add(1) }}
+}}
+"
+        ),
+    )
+    .expect("write");
+    let lib = run_verus_raw(
+        &["--crate-type=lib", "lib.rs", "-V", "alloc-check", "--compile", "--export", "lib.vir"],
+        dir,
+    );
+    assert!(lib.status.success(), "lib:\n{}", String::from_utf8_lossy(&lib.stderr));
+    let run = |name: &str, body: &str| {
+        std::fs::write(dir.join(format!("{name}.rs")), format!("{pre}verus!{{ {body} }}\n"))
+            .expect("write");
+        let out = run_verus_raw(
+            &[
+                "--crate-type=lib",
+                &format!("{name}.rs"),
+                "-V",
+                "alloc-check",
+                "--compile",
+                "--import",
+                "lib=lib.vir",
+                "--extern",
+                "lib=liblib.rlib",
+            ],
+            dir,
+        );
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).to_string())
+    };
+    let (ok, e) = run(
+        "ok",
+        "#[verifier::fip(strict)] fn s(x: u64, h: lib::H) -> (r: u64) allocates 0 { let y = lib::inc(x); y }",
+    );
+    assert!(ok, "{}", e);
+    let (ok, e) = run(
+        "bad1",
+        "#[verifier::fip(strict)] fn s(x: u64) -> (r: u64) allocates 0 { lib::inc_loose(x) }",
+    );
+    assert!(!ok && e.contains("calls `lib::inc_loose` from another crate"), "{}", e);
+    let (ok, e) = run("bad2", "#[verifier::fip(strict)] fn s(g: lib::G) { }");
+    assert!(!ok && e.contains("<lib::G as std::ops::Drop>::drop` from another crate"), "{}", e);
+}
