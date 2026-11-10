@@ -15,6 +15,7 @@ use core::alloc::Allocator;
 use core::clone::Clone;
 use core::marker::PhantomData;
 use core::ops::Index;
+use core::ops::IndexMut;
 use core::option::Option;
 use core::option::Option::None;
 use core::slice::SliceIndex;
@@ -502,6 +503,17 @@ pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index
 ) -> (r: &<Vec<T, A> as Index<I>>::Output)
     ensures
         exists|s: &[T]| #[trigger] s@ == vec@ && call_ensures(<I as SliceIndex<[T]>>::index, (i, s), r),
+    // SliceIndex is sealed: only std's (non-allocating) impls exist
+    allocates deallocates_when(0int, false)
+;
+
+// (`vec[i]` with a `usize` index is verified through `vec_index_mut`; this is the function that
+// the compiled program calls, which only reborrows the slice: it drops nothing)
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<T, I: SliceIndex<[T]>, A: Allocator>[Vec::<T, A>::index_mut](
+    vec: &mut Vec<T, A>,
+    i: I,
+) -> (r: &mut <Vec<T, A> as Index<I>>::Output)
     // SliceIndex is sealed: only std's (non-allocating) impls exist
     allocates deallocates_when(0int, false)
 ;

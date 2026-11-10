@@ -1249,3 +1249,42 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "which may drop a value of type `T`, whose destructor is not known here")
 }
 
+
+test_verify_one_file_with_options! {
+    // `&mut v[i]` calls `<Vec<T> as IndexMut<usize>>::index_mut`, which drops nothing; writing
+    // over the element (`v[0] = x`) still drops the old one in this function, which is rejected
+    // (portable-fip, 2026-11-10 vec-index-mut request)
+    #[test] fip_strict_vec_index_mut ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::AllocFreeDrop;
+        #[verifier::fip(strict)]
+        pub fn via_index_mut<T: AllocFreeDrop>(v: &mut Vec<T>, w: &mut T)
+            requires old(v)@.len() >= 1,
+            allocates 0
+        {
+            ::core::mem::swap(&mut v[0], w);
+        }
+        #[verifier::fip(strict)]
+        pub fn range_index_mut<T: AllocFreeDrop>(v: &mut Vec<T>) -> (r: usize)
+            requires old(v)@.len() >= 1,
+            allocates 0
+        {
+            let s = &mut v[0..1];
+            s.len()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_vec_index_assign_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::{AllocFreeDrop, NoDeallocDrop};
+        #[verifier::fip(strict)]
+        pub fn overwrite<T: AllocFreeDrop + NoDeallocDrop>(v: &mut Vec<T>, x: T)
+            requires old(v)@.len() >= 1,
+            allocates 0
+        {
+            v[0] = x;
+        }
+    } => Err(err) => assert_vir_error_msg(err, "it drops a value of type `T`, whose destructor is not known here")
+}
