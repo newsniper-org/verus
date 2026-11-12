@@ -1288,3 +1288,79 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "it drops a value of type `T`, whose destructor is not known here")
 }
+
+test_verify_one_file_with_options! {
+    // the examples of the guide's "FIP and FBIP" page (docs/guide/src/fip-fbip.md)
+    #[test] fip_guide_examples ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub enum List { Nil, Cons(u64, Box<List>) }
+        pub open spec fn len(l: List) -> nat
+            decreases l
+        {
+            match l { List::Nil => 0, List::Cons(_, t) => 1 + len(*t) }
+        }
+        fn push_one(v: &mut Vec<u64>)
+            allocates 1
+        {
+            v.push(1);
+        }
+        #[verifier::fip]
+        fn halve(mut b: Box<List>) -> (r: Box<List>) {
+            match &mut *b {
+                List::Cons(x, _) => { *x = *x / 2; }
+                List::Nil => {}
+            }
+            b
+        }
+        #[verifier::fip]
+        fn reverse(l: List, acc: List) -> (r: List)
+            ensures len(r) == len(l) + len(acc),
+            decreases l
+        {
+            match l {
+                List::Nil => acc,
+                List::Cons(x, mut b) => {
+                    let next = core::mem::replace(&mut *b, acc);
+                    reverse(next, List::Cons(x, b))
+                }
+            }
+        }
+        #[verifier::fip]
+        fn cons(x: u64, l: List) -> (r: List)
+            allocates 1
+        {
+            List::Cons(x, Box::new(l))
+        }
+        #[verifier::fip(strict)]
+        fn reverse_strict(l: List, acc: List) -> (r: List)
+            ensures len(r) == len(l) + len(acc),
+            decreases l
+        {
+            match l {
+                List::Nil => acc,
+                List::Cons(x, mut b) => {
+                    let next = core::mem::replace(&mut *b, acc);
+                    become reverse_strict(next, List::Cons(x, b))
+                }
+            }
+        }
+        #[verifier::fip]
+        fn first<T: vstd::alloc_check::NoDeallocDrop>(a: T, b: T) -> (r: T) {
+            a
+        }
+        #[verifier::fip(strict)]
+        fn swap_ends<T: vstd::alloc_check::AllocFreeDrop>(xs: &mut [T])
+            requires old(xs)@.len() >= 2,
+            allocates 0
+        {
+            let n = xs.len();
+            xs.swap(0, n - 1);
+        }
+        #[verifier::fip]
+        fn fill(hole: &mut List, v: List)
+            requires *old(hole) is Nil,
+        {
+            core::mem::forget(core::mem::replace(hole, v));
+        }
+    } => Ok(())
+}

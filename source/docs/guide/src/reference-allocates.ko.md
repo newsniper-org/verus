@@ -2,6 +2,8 @@
 
 > **fork 확장, 실험적 기능.** `allocates` 절과 `-V alloc-check` / `-V alloc-check-strict` 옵션은
 > 이 Verus fork에만 있습니다. 이 문서의 영어판은 [여기](./reference-allocates.md)에 있습니다.
+>
+> 완전 제자리 함수(FP²의 `fip`과 `fbip`)를 예와 함께 소개하는 글은 [FIP와 FBIP](./fip-fbip.ko.md)에 있습니다.
 
 `exec` 함수는 자신이 하는 할당기 호출 수의 상한을 명시할 수 있습니다.
 

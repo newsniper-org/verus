@@ -3,6 +3,9 @@
 > **Fork extension, experimental.** The `allocates` clause and the `-V alloc-check` /
 > `-V alloc-check-strict` options exist in this fork of Verus only. A Korean version of this
 > page is [here](./reference-allocates.ko.md).
+>
+> For an introduction to fully in-place functions (FP²'s `fip` and `fbip`) with examples, see
+> [FIP and FBIP](./fip-fbip.md).
 
 An `exec` function can state an upper bound on the number of allocator calls it makes:
 
