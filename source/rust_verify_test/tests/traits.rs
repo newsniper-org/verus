@@ -5322,3 +5322,32 @@ test_verify_one_file! {
         impl<A: std::io::Write> T for A { spec fn f() -> int { 200 } }
     } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
 }
+
+test_verify_one_file! {
+    #[test] cannot_use_demoted_trait_generically_issue629 code! {
+        use vstd::prelude::*;
+
+        trait Tr {
+            fn foo(&self);
+        }
+
+        verus!{
+            #[verifier::external_body]
+            fn takes_trait<T: Tr>(t: &T) { t.foo() }
+
+            struct X { }
+
+            impl Tr for X {
+                fn foo(&self)
+                    requires false
+                {
+                }
+            }
+
+            fn test() {
+                let x = X{};
+                takes_trait(&x);
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `test_crate::Tr` as a bound without declaring the trait")
+}
