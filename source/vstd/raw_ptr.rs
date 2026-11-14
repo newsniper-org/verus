@@ -468,11 +468,13 @@ pub open spec fn spec_cast_ptr_to_thin_ptr<T: ?Sized, U: Sized>(ptr: *mut T) -> 
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_ptr_to_thin_ptr")]
 #[verifier::when_used_as_spec(spec_cast_ptr_to_thin_ptr)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_ptr_to_thin_ptr<T: ?Sized, U: Sized>(ptr: *mut T) -> (result: *mut U)
     ensures
         result == spec_cast_ptr_to_thin_ptr::<T, U>(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as *mut U
 }
@@ -490,11 +492,13 @@ pub open spec fn spec_cast_array_ptr_to_slice_ptr<T, const N: usize>(ptr: *mut [
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_array_ptr_to_slice_ptr")]
 #[verifier::when_used_as_spec(spec_cast_array_ptr_to_slice_ptr)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_array_ptr_to_slice_ptr<T, const N: usize>(ptr: *mut [T; N]) -> (result: *mut [T])
     ensures
         result == spec_cast_array_ptr_to_slice_ptr(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as *mut [T]
 }
@@ -514,11 +518,13 @@ pub open spec fn spec_cast_slice_ptr_to_slice_ptr<T, U>(ptr: *mut [T]) -> *mut [
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_slice_ptr_to_slice_ptr")]
 #[verifier::when_used_as_spec(spec_cast_slice_ptr_to_slice_ptr)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_slice_ptr_to_slice_ptr<T, U>(ptr: *mut [T]) -> (result: *mut [U])
     ensures
         result == spec_cast_slice_ptr_to_slice_ptr::<T, U>(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as *mut [U]
 }
@@ -538,11 +544,13 @@ pub open spec fn spec_cast_slice_ptr_to_str_ptr<T>(ptr: *mut [T]) -> *mut str {
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_slice_ptr_to_str_ptr")]
 #[verifier::when_used_as_spec(spec_cast_slice_ptr_to_str_ptr)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_slice_ptr_to_str_ptr<T>(ptr: *mut [T]) -> (result: *mut str)
     ensures
         result == spec_cast_slice_ptr_to_str_ptr::<T>(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as *mut str
 }
@@ -562,11 +570,13 @@ pub open spec fn spec_cast_str_ptr_to_slice_ptr<T>(ptr: *mut str) -> *mut [T] {
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_str_ptr_to_slice_ptr")]
 #[verifier::when_used_as_spec(spec_cast_str_ptr_to_slice_ptr)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_str_ptr_to_slice_ptr<T>(ptr: *mut str) -> (result: *mut [T])
     ensures
         result == spec_cast_str_ptr_to_slice_ptr::<T>(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as *mut [T]
 }
@@ -582,11 +592,13 @@ pub open spec fn spec_cast_ptr_to_usize<T: Sized>(ptr: *mut T) -> usize {
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::raw_ptr::cast_ptr_to_usize")]
 #[verifier::when_used_as_spec(spec_cast_ptr_to_usize)]
+#[verifier::alloc_check_skip_drops]
 pub fn cast_ptr_to_usize<T: Sized>(ptr: *mut T) -> (result: usize)
     ensures
         result == spec_cast_ptr_to_usize(ptr),
     opens_invariants none
     no_unwind
+    allocates deallocates_when(0int, false)
 {
     ptr as usize
 }

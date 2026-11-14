@@ -1898,3 +1898,92 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `T: std::cmp::Ord`, which are not known here")
 }
+
+// `as` casts to and from floats, pointer casts, array indexing, array fill and the array -> slice
+// coercions are instructions, not calls: vstd's internal functions for them (`float_cast`,
+// `cast_ptr_to_usize`, `array_index_get`, `array_fill_for_copy_types`, `array_as_slice`,
+// `ref_mut_array_unsizing_coercion`) allocate nothing, free nothing and drop nothing, so bounded,
+// fip and strict functions may use them. (Before: "cannot bound the allocations of this call:
+// `vstd::float::float_cast` has no `allocates` specification", and "`vstd::array::array_as_slice`
+// is not `#[verifier::fip]` and has no `deallocates_when` condition".)
+test_verify_one_file_with_options! {
+    #[test] fip_casts_and_array_coercions_accepted ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn cast(n: usize) -> (r: f64)
+            no_unwind
+            allocates 0
+        {
+            n as f64
+        }
+
+        #[verifier::fip(strict)]
+        fn narrow(x: f64) -> (r: f32)
+            no_unwind
+            allocates 0
+        {
+            x as f32
+        }
+
+        #[verifier::fip(strict)]
+        fn to_int(x: f64) -> (r: i32)
+            no_unwind
+            allocates 0
+        {
+            x as i32
+        }
+
+        #[verifier::fip(strict)]
+        fn first_mut(a: &mut [i32; 4]) -> (r: i32)
+            allocates 0
+        {
+            let s: &mut [i32] = a;
+            s[0]
+        }
+
+        #[verifier::fip(strict)]
+        fn first_shared(a: &[i32; 4]) -> (r: i32)
+            allocates 0
+        {
+            let s: &[i32] = a;
+            s[0]
+        }
+
+        #[verifier::fip(strict)]
+        fn third(a: &[u8; 4]) -> (r: u8)
+            no_unwind
+            allocates 0
+        {
+            a[2]
+        }
+
+        #[verifier::fip(strict)]
+        fn fill(x: u8) -> (r: [u8; 8])
+            no_unwind
+            allocates 0
+        {
+            [x; 8]
+        }
+
+        #[verifier::fip(strict)]
+        fn address(p: *mut u32) -> (r: usize)
+            no_unwind
+            allocates 0
+        {
+            p as usize
+        }
+    } => Ok(())
+}
+
+// The casts are still charged: a function that allocates next to one keeps its bound.
+test_verify_one_file_with_options! {
+    #[test] fip_cast_does_not_hide_an_allocation ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn boxed(n: usize) -> (r: Box<f64>)
+            allocates 0 // FAILS
+        {
+            Box::new(n as f64)
+        }
+    } => Err(err) => assert_one_fails(err)
+}

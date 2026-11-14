@@ -73,11 +73,15 @@ impl<T, const N: usize> ArrayAdditionalExecFns<T> for [T; N] {
 
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::array::array_index_get")]
+#[verifier::alloc_check_skip_drops]
 pub exec fn array_index_get<T, const N: usize>(ar: &[T; N], i: usize) -> (out: &T)
     requires
         0 <= i < N,
     ensures
         *out == ar@.index(i as int),
+    opens_invariants none
+    no_unwind
+    allocates deallocates_when(0int, false)
 {
     &ar[i]
 }
@@ -114,10 +118,14 @@ pub assume_specification<
 #[verifier::external_body]
 #[verifier::when_used_as_spec(spec_array_as_slice)]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::array::array_as_slice")]
+#[verifier::alloc_check_skip_drops]
 pub fn array_as_slice<T, const N: usize>(ar: &[T; N]) -> (out: &[T])
     ensures
         out == spec_array_as_slice(ar),
         ar@ == out@,
+    opens_invariants none
+    no_unwind
+    allocates deallocates_when(0int, false)
 {
     ar
 }
@@ -147,9 +155,13 @@ pub broadcast axiom fn axiom_spec_array_fill_for_copy_type<T: Copy, const N: usi
 #[verifier::external_body]
 #[verifier::when_used_as_spec(spec_array_fill_for_copy_type)]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::array::array_fill_for_copy_types")]
+#[verifier::alloc_check_skip_drops]
 pub fn array_fill_for_copy_types<T: Copy, const N: usize>(t: T) -> (res: [T; N])
     ensures
         res == spec_array_fill_for_copy_type::<T, N>(t),
+    opens_invariants none
+    no_unwind
+    allocates deallocates_when(0int, false)
 {
     [t;N]
 }
@@ -178,12 +190,15 @@ pub broadcast axiom fn axiom_array_has_resolved<T, const N: usize>(array: [T; N]
 #[doc(hidden)]
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::array::ref_mut_array_unsizing_coercion")]
+#[verifier::alloc_check_skip_drops]
 pub fn ref_mut_array_unsizing_coercion<T, const N: usize>(r: &mut [T; N]) -> (out: &mut [T])
     ensures
         out.view() == old(r).view(),
         final(out).view() == final(r).view(),
     opens_invariants none
     no_unwind
+    // An unsizing coercion of a reference changes the pointer's metadata only.
+    allocates deallocates_when(0int, false)
 {
     r
 }
