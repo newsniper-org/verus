@@ -53,10 +53,16 @@ adsmt can write a certificate for each query it proves. On this branch:
   `$ADSMT_CERT_DIR/emit-isabelle` (or `emit-rocq`). `VERUS_ADSMT_EMIT_PATH` names the `adsmt-emit`
   executable. This needs an installed `adsmt-emit` and its emitters.
 
+  **Known issue, not fixed:** the Isabelle emitter writes every assumption of a certificate as an
+  axiom. For a proof by refutation those assumptions include the negated goal and are jointly
+  unsatisfiable, so the theory it writes is inconsistent and proves any statement. This has been
+  reported to adsmt. Until it is fixed, an emitted theory is not evidence that anything holds, and
+  must not be imported into another development.
+
 ## Other adsmt options
 
-* `-V emit-lukb`: write each query also as a `.lukb` file (adsmt's own input language) in the log
-  directory, next to the `.smt2` log. Constructs it cannot express yet become `#` comments. The `.lukb` file is a log
+* `-V emit-lukb`: write each query also as a `.lukb` file (adsmt's own input language) into the
+  log directory (`--log-dir`, or `.verus-log` by default). Constructs it cannot express yet become `#` comments. The `.lukb` file is a log
   only: the verdict still comes from the SMT-LIB query.
 * `-V jit-trace-load=<path>` (or `VERUS_ADSMT_JIT_TRACE`) and `VERUS_ADSMT_AOT_LUART`: pass a
   replay trace and a precompiled prelude to adsmt (`--jit-trace-load`, `--aot-load`). They are
@@ -72,7 +78,8 @@ adsmt can write a certificate for each query it proves. On this branch:
 * `scripts/`: `aot-bake-prelude.sh` (see above), `a2-abduction-regression.sh` (a regression run
   of `-V request-abductive-on-unknown` on the fixtures in `scripts/a2-fixtures/`), and
   `snapshot-status.sh` (a progress snapshot for the people working on the fork). The `justfile`
-  has recipes for these and for the fork's own bookkeeping. `examples/consumer/` is a `justfile`
+  runs the first and the last (`just aot-bake-prelude`, `just status`) and has recipes for the
+  fork's own bookkeeping. `examples/consumer/` is a `justfile`
   for a project that uses this fork with several backends.
 * `docs/roadmap-interactive-tooling.md`: plans for interactive tooling on top of the backends.
 * The `.local-*` directories and `.claude-memories/` hold working notes and the correspondence
