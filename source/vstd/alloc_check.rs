@@ -552,3 +552,119 @@ pub axiom fn reclaim(
 ;
 
 } // verus!
+// Marker traits for the operator traits of `core` (FP²'s `fip` and `fbip` for one trait's
+// methods). For an operator trait `Op` (`Add`, `PartialEq`, `Index`, ...), there are three
+// levels, each a supertrait of the next:
+//
+// - `FbipOp`: every method of `X`'s `Op` impl that the impl defines is bounded by `allocates 0`
+//   (FP²'s `fbip`: no allocation). A generic call of an `Op` method through `T: FbipOp` is
+//   charged 0 by `-V alloc-check`.
+// - `FipOp`: also, each of those methods is `#[verifier::fip]` (FP²'s `fip`: no allocation, no
+//   deallocation). A `#[verifier::fip]` function may call an `Op` method through `T: FipOp`.
+// - `FipStrictOp`: also, each of those methods is `#[verifier::fip(strict)]` (constant stack
+//   space). A `#[verifier::fip(strict)]` function may call an `Op` method through
+//   `T: FipStrictOp` (except `Ord::{max, min, clamp}`, which drop a `T`).
+//
+// The methods an impl does not define run `core`'s provided bodies, which call only the trait's
+// own methods (`ne` calls `eq`, `lt` calls `partial_cmp`). `Ord`'s provided `max`, `min` and
+// `clamp` also drop a value of `Self`: so `FbipOrd` needs `AllocFreeDrop` and `FipOrd` needs
+// `NoDeallocDrop`. The markers follow the supertraits of the operator traits (`FipOrd` implies
+// `FipPartialOrd` and `FipPartialEq`, `FipIndexMut` implies `FipIndex`).
+//
+// The traits are `unsafe`, and every impl outside vstd is checked by `-V alloc-check` (an impl
+// in a crate that was not verified with it is rejected where it is used). vstd's impls for the
+// primitive types are trusted.
+macro_rules! def_op_markers {
+    ($($op:path => $fbip:ident, $fip:ident, $strict:ident [$($g:tt)*] [$($a:tt)*] [$($sup_fbip:tt)*] [$($sup_fip:tt)*] [$($sup_strict:tt)*];)*) => {
+        verus! {
+            $(
+                pub unsafe trait $fbip<$($g)*>: $op<$($a)*> $($sup_fbip)* {}
+                pub unsafe trait $fip<$($g)*>: $fbip<$($a)*> $($sup_fip)* {}
+                pub unsafe trait $strict<$($g)*>: $fip<$($a)*> $($sup_strict)* {}
+            )*
+        }
+    };
+}
+
+def_op_markers! {
+    core::ops::Neg => FbipNeg, FipNeg, FipStrictNeg [] [] [] [] [];
+    core::ops::Not => FbipNot, FipNot, FipStrictNot [] [] [] [] [];
+    core::ops::Add => FbipAdd, FipAdd, FipStrictAdd [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Sub => FbipSub, FipSub, FipStrictSub [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Mul => FbipMul, FipMul, FipStrictMul [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Div => FbipDiv, FipDiv, FipStrictDiv [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Rem => FbipRem, FipRem, FipStrictRem [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitAnd => FbipBitAnd, FipBitAnd, FipStrictBitAnd [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitOr => FbipBitOr, FipBitOr, FipStrictBitOr [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitXor => FbipBitXor, FipBitXor, FipStrictBitXor [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Shl => FbipShl, FipShl, FipStrictShl [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Shr => FbipShr, FipShr, FipStrictShr [Rhs = Self] [Rhs] [] [] [];
+    core::ops::AddAssign => FbipAddAssign, FipAddAssign, FipStrictAddAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::SubAssign => FbipSubAssign, FipSubAssign, FipStrictSubAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::MulAssign => FbipMulAssign, FipMulAssign, FipStrictMulAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::DivAssign => FbipDivAssign, FipDivAssign, FipStrictDivAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::RemAssign => FbipRemAssign, FipRemAssign, FipStrictRemAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitAndAssign => FbipBitAndAssign, FipBitAndAssign, FipStrictBitAndAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitOrAssign => FbipBitOrAssign, FipBitOrAssign, FipStrictBitOrAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::BitXorAssign => FbipBitXorAssign, FipBitXorAssign, FipStrictBitXorAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::ShlAssign => FbipShlAssign, FipShlAssign, FipStrictShlAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::ShrAssign => FbipShrAssign, FipShrAssign, FipStrictShrAssign [Rhs = Self] [Rhs] [] [] [];
+    core::ops::Index => FbipIndex, FipIndex, FipStrictIndex [Idx: ?Sized] [Idx] [] [] [];
+    core::ops::IndexMut => FbipIndexMut, FipIndexMut, FipStrictIndexMut [Idx: ?Sized] [Idx] [+ FbipIndex<Idx>] [+ FipIndex<Idx>] [+ FipStrictIndex<Idx>];
+    core::ops::Deref => FbipDeref, FipDeref, FipStrictDeref [] [] [] [] [];
+    core::ops::DerefMut => FbipDerefMut, FipDerefMut, FipStrictDerefMut [] [] [+ FbipDeref] [+ FipDeref] [+ FipStrictDeref];
+    core::cmp::PartialEq => FbipPartialEq, FipPartialEq, FipStrictPartialEq [Rhs: ?Sized = Self] [Rhs] [] [] [];
+    core::cmp::PartialOrd => FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd [Rhs: ?Sized = Self] [Rhs] [+ FbipPartialEq<Rhs>] [+ FipPartialEq<Rhs>] [+ FipStrictPartialEq<Rhs>];
+    core::cmp::Ord => FbipOrd, FipOrd, FipStrictOrd [] [] [+ FbipPartialOrd + AllocFreeDrop] [+ FipPartialOrd + NoDeallocDrop] [+ FipStrictPartialOrd];
+}
+
+// vstd's impls for the primitive types (trusted: std's arithmetic, bit operations and comparisons
+// of primitives neither allocate nor deallocate, and use bounded stack space)
+macro_rules! op_marker_impls {
+    ($markers:tt [$($t:ty)*]) => {
+        $(op_marker_impls!(@one $t $markers);)*
+    };
+    (@one $t:ty [$($fbip:ident, $fip:ident, $strict:ident);*]) => {
+        verus! {
+            $(
+                unsafe impl $fbip for $t {}
+                unsafe impl $fip for $t {}
+                unsafe impl $strict for $t {}
+            )*
+        }
+    };
+}
+
+op_marker_impls!([
+    FbipAdd, FipAdd, FipStrictAdd; FbipSub, FipSub, FipStrictSub; FbipMul, FipMul, FipStrictMul;
+    FbipDiv, FipDiv, FipStrictDiv; FbipRem, FipRem, FipStrictRem;
+    FbipBitAnd, FipBitAnd, FipStrictBitAnd; FbipBitOr, FipBitOr, FipStrictBitOr;
+    FbipBitXor, FipBitXor, FipStrictBitXor; FbipShl, FipShl, FipStrictShl;
+    FbipShr, FipShr, FipStrictShr; FbipNot, FipNot, FipStrictNot;
+    FbipAddAssign, FipAddAssign, FipStrictAddAssign; FbipSubAssign, FipSubAssign, FipStrictSubAssign;
+    FbipMulAssign, FipMulAssign, FipStrictMulAssign; FbipDivAssign, FipDivAssign, FipStrictDivAssign;
+    FbipRemAssign, FipRemAssign, FipStrictRemAssign;
+    FbipBitAndAssign, FipBitAndAssign, FipStrictBitAndAssign;
+    FbipBitOrAssign, FipBitOrAssign, FipStrictBitOrAssign;
+    FbipBitXorAssign, FipBitXorAssign, FipStrictBitXorAssign;
+    FbipShlAssign, FipShlAssign, FipStrictShlAssign; FbipShrAssign, FipShrAssign, FipStrictShrAssign;
+    FbipPartialEq, FipPartialEq, FipStrictPartialEq; FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd;
+    FbipOrd, FipOrd, FipStrictOrd
+] [u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize]);
+
+op_marker_impls!([FbipNeg, FipNeg, FipStrictNeg] [i8 i16 i32 i64 i128 isize]);
+
+op_marker_impls!([
+    FbipNot, FipNot, FipStrictNot; FbipBitAnd, FipBitAnd, FipStrictBitAnd;
+    FbipBitOr, FipBitOr, FipStrictBitOr; FbipBitXor, FipBitXor, FipStrictBitXor;
+    FbipBitAndAssign, FipBitAndAssign, FipStrictBitAndAssign;
+    FbipBitOrAssign, FipBitOrAssign, FipStrictBitOrAssign;
+    FbipBitXorAssign, FipBitXorAssign, FipStrictBitXorAssign;
+    FbipPartialEq, FipPartialEq, FipStrictPartialEq; FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd;
+    FbipOrd, FipOrd, FipStrictOrd
+] [bool]);
+
+op_marker_impls!([
+    FbipPartialEq, FipPartialEq, FipStrictPartialEq; FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd;
+    FbipOrd, FipOrd, FipStrictOrd
+] [char]);

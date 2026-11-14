@@ -1152,6 +1152,7 @@ pub fn func_def_to_sst(
         alloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
         state.alloc_counter = Some(counter.clone());
         state.fip = function.x.attrs.fip;
+        state.op_markers = crate::alloc_check::op_marker_bounds(&function.x.typ_bounds);
         let le = |a: Exp, b: Exp| {
             SpannedTyped::new(
                 &b.span.clone(),

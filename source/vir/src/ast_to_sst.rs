@@ -132,6 +132,9 @@ pub(crate) struct State<'a> {
     /// `-V alloc-check`: the body of a `#[verifier::fip]` function (whose calls must not
     /// deallocate)
     pub(crate) fip: bool,
+    /// `-V alloc-check`: the operator markers (`T: FipAdd`, ...) on the function's types, which
+    /// cover generic calls of the operator traits' methods
+    pub(crate) op_markers: Vec<(Typs, &'static str, crate::alloc_check::OpLevel)>,
 
     /// Function arguments to be used in the construction of the update
     /// predicate for the atomic update by the atomic function call.
@@ -283,6 +286,7 @@ impl<'a> State<'a> {
             alloc_reclaim: None,
             alloc_heap: None,
             fip: false,
+            op_markers: Vec::new(),
             au_pred_args: Vec::new(),
             au_var_exp_to_resolve: None,
             au_var_exp: None,
@@ -1874,6 +1878,7 @@ fn stm_call(
                     &counter,
                     &alloc_target,
                     &small_args,
+                    &state.op_markers,
                 )?),
             }
         }
@@ -2014,6 +2019,18 @@ fn fip_call_check(
     args: &Exps,
 ) -> Result<Option<Stm>, VirErr> {
     let target_fun = get_function(ctx, span, target)?;
+    // (`T: FipOp` covers the operator trait's methods for `T`, also through std's impls for
+    // references)
+    if let crate::ast::FunctionKind::TraitMethodDecl { trait_path, .. } = &target_fun.x.kind {
+        if crate::alloc_check::op_marker_covers_call(
+            &state.op_markers,
+            trait_path,
+            target_typs,
+            crate::alloc_check::OpLevel::Fip,
+        ) {
+            return Ok(None);
+        }
+    }
     // (a trait method call resolved to an impl is checked against that impl)
     let (callee, callee_typs) = match resolved {
         Some((r, ts)) => (get_function(ctx, span, r)?, ts.clone()),
@@ -2071,6 +2088,7 @@ fn alloc_count_after_call(
     counter: &VarIdent,
     (target, target_typs, resolved): &(Fun, Typs, Option<Fun>),
     args: &Exps,
+    op_markers: &[(Typs, &'static str, crate::alloc_check::OpLevel)],
 ) -> Result<Stm, VirErr> {
     let target_fun = get_function(ctx, span, target)?;
     if matches!(
@@ -2086,7 +2104,19 @@ fn alloc_count_after_call(
             "`catch_unwind` cannot be used in a function checked with -V alloc-check: allocations on the caught panic path are not counted",
         ));
     }
-    if let Some(resolved) = resolved {
+    // (`T: FbipOp` says that the operator trait's methods allocate nothing for `T`)
+    let marker_covered = match &target_fun.x.kind {
+        crate::ast::FunctionKind::TraitMethodDecl { trait_path, .. } => {
+            crate::alloc_check::op_marker_covers_call(
+                op_markers,
+                trait_path,
+                target_typs,
+                crate::alloc_check::OpLevel::Fbip,
+            )
+        }
+        _ => false,
+    };
+    if let (Some(resolved), false) = (resolved, marker_covered) {
         let resolved_fun = get_function(ctx, span, resolved)?;
         if resolved_fun.x.allocates.is_none() && target_fun.x.allocates.is_none() {
             return Err(error(
@@ -2101,7 +2131,9 @@ fn alloc_count_after_call(
     let int_typ = Arc::new(TypX::Int(IntRange::Int));
     let is_trait_method =
         matches!(target_fun.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. });
-    let bound = if is_trait_method {
+    let bound = if marker_covered {
+        SpannedTyped::new(span, &int_typ, ExpX::Const(Constant::Int(BigInt::zero())))
+    } else if is_trait_method {
         // A call through a trait method (resolved or not): charge `call_allocates(T::m, args)`.
         // The FnDef axioms of each impl tie it to that impl's own bound, so a resolved call gets
         // the impl's bound and an unresolved one (`x.clone()` for `T: Clone`) stays symbolic,

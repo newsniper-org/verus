@@ -1362,5 +1362,302 @@ test_verify_one_file_with_options! {
         {
             core::mem::forget(core::mem::replace(hole, v));
         }
+
+        // fip-fbip.md, operator markers
+        #[verifier::fip]
+        fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
+            if a < b { b } else { a }
+        }
+
+        // reference-allocates.md, operator traits
+        #[verifier::fip]
+        fn lt_gen<T: vstd::alloc_check::FipOrd>(a: &T, b: &T) -> bool {
+            a < b
+        }
+
+        #[verifier::fip(strict)]
+        fn eq_gen<T: vstd::alloc_check::FipStrictPartialEq>(a: &T, b: &T) -> bool {
+            a == b
+        }
     } => Ok(())
+}
+
+// Marker traits for core's operator traits (`vstd::alloc_check::{FbipOp, FipOp, FipStrictOp}`): a
+// generic call of an operator trait's method is charged 0 through `FbipOp`, may be made in a fip
+// function through `FipOp`, and in a strict one through `FipStrictOp`
+test_verify_one_file_with_options! {
+    #[test] fip_op_markers_generic_calls ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+        use vstd::std_specs::ops::AddSpec;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            #[verifier::fip]
+            fn eq(&self, o: &L) -> bool allocates 0 { self.x == o.x }
+        }
+        impl vstd::std_specs::cmp::PartialEqSpecImpl for L {
+            open spec fn obeys_eq_spec() -> bool { false }
+            open spec fn eq_spec(&self, other: &L) -> bool { self.x == other.x }
+        }
+        unsafe impl FbipPartialEq for L {}
+        unsafe impl FipPartialEq for L {}
+
+        #[verifier::fip]
+        fn add_gen<T: FipAdd<Output = T> + NoDeallocDrop>(a: T, b: T) -> T
+            requires a.add_req(b),
+        {
+            a + b
+        }
+
+        fn add_counted<T: FbipAdd<Output = T> + AllocFreeDrop>(a: T, b: T) -> T
+            requires a.add_req(b),
+            allocates 0
+        {
+            a + b
+        }
+
+        #[verifier::fip]
+        fn eq_gen<T: FipPartialEq>(a: &T, b: &T) -> bool {
+            a == b
+        }
+
+        #[verifier::fip]
+        fn lt_gen<T: FipOrd>(a: &T, b: &T) -> bool {
+            a < b
+        }
+
+        #[verifier::fip]
+        fn cmp_gen<T: FipOrd>(a: &T, b: &T) -> core::cmp::Ordering {
+            a.cmp(b)
+        }
+
+        #[verifier::fip]
+        fn uses() -> bool {
+            let a = add_gen(1u64, 2u64);
+            let l = L { x: a };
+            let m = L { x: 3 };
+            let _o = cmp_gen(&1u8, &2u8);
+            eq_gen(&l, &m) && lt_gen(&1u8, &2u8)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_op_markers_missing_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn eq_gen<T: PartialEq>(a: &T, b: &T) -> bool {
+            a == b
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_op_marker_impl_not_fip_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            fn eq(&self, o: &L) -> bool allocates 0 { self.x == o.x }
+        }
+        unsafe impl FbipPartialEq for L {}
+        unsafe impl FipPartialEq for L {}
+    } => Err(err) => assert_vir_error_msg(err, "this `vstd::alloc_check::FipPartialEq` impl is not accepted")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_op_marker_impl_allocates_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            fn eq(&self, o: &L) -> bool allocates 1 { self.x == o.x }
+        }
+        unsafe impl FbipPartialEq for L {}
+    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_op_marker_impl_derived_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[derive(PartialEq)]
+        pub struct L { pub x: u64 }
+        unsafe impl FbipPartialEq for L {}
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: ")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_op_marker_impl_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            #[verifier::fip]
+            fn eq(&self, o: &L) -> bool allocates 0 { self.x == o.x }
+        }
+        unsafe impl FbipPartialEq for L {}
+        unsafe impl FipPartialEq for L {}
+        unsafe impl FipStrictPartialEq for L {}
+    } => Err(err) => assert_vir_error_msg(err, "must be `#[verifier::fip(strict)]`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_op_markers ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn cmp_gen<T: FipStrictOrd>(a: &T, b: &T) -> core::cmp::Ordering {
+            a.cmp(b)
+        }
+
+        #[verifier::fip(strict)]
+        fn eq_gen<T: FipStrictPartialEq>(a: &T, b: &T) -> bool {
+            a == b
+        }
+
+        #[verifier::fip(strict)]
+        fn uses() -> bool {
+            let _o = cmp_gen(&1u64, &2u64);
+            eq_gen(&1u8, &1u8)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_op_marker_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn cmp_gen<T: FipOrd>(a: &T, b: &T) -> core::cmp::Ordering {
+            a.cmp(b)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "whose callee is not known here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_op_marker_max_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn max_gen<T: FipStrictOrd + Copy>(a: T, b: T) -> T {
+            a.max(b)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "whose callee is not known here")
+}
+
+// `L::eq` calls `same::<L>`, which calls `L::eq` again: within one crate, the verifier already
+// rejects the cycle (the compiled-program check would too: a strict generic function's call
+// through a marker may reach any strict method of this crate's impls of the operator trait)
+test_verify_one_file_with_options! {
+    #[test] fip_strict_op_marker_cycle_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            #[verifier::fip(strict)]
+            #[verifier::exec_allows_no_decreases_clause]
+            fn eq(&self, o: &L) -> bool allocates 0 { same(self, o) }
+        }
+        unsafe impl FbipPartialEq for L {}
+        unsafe impl FipPartialEq for L {}
+        unsafe impl FipStrictPartialEq for L {}
+
+        #[verifier::fip(strict)]
+        #[verifier::exec_allows_no_decreases_clause]
+        fn same<T: FipStrictPartialEq>(a: &T, b: &T) -> bool allocates 0 {
+            let r = a == b;
+            r
+        }
+    } => Err(err) => assert_vir_error_msg(err, "found a cyclic self-reference in a definition")
+}
+
+// A strict function of another crate, generic through a marker, instantiated with a type of this
+// crate: its calls of the type's methods are calls back into this crate
+#[test]
+fn fip_strict_op_marker_across_crates() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\nuse vstd::alloc_check::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{pre}verus! {{
+#[verifier::fip(strict)]
+pub fn same<T: FipStrictPartialEq>(a: &T, b: &T) -> (r: bool) allocates 0 {{ let r = a == b; r }}
+}}
+"
+        ),
+    )
+    .expect("write");
+    let lib = run_verus_raw(
+        &["--crate-type=lib", "lib.rs", "-V", "alloc-check", "--compile", "--export", "lib.vir"],
+        dir,
+    );
+    assert!(lib.status.success(), "lib:\n{}", String::from_utf8_lossy(&lib.stderr));
+    let run = |name: &str, body: &str| {
+        std::fs::write(dir.join(format!("{name}.rs")), format!("{pre}verus!{{ {body} }}\n"))
+            .expect("write");
+        let out = run_verus_raw(
+            &[
+                "--crate-type=lib",
+                &format!("{name}.rs"),
+                "-V",
+                "alloc-check",
+                "--compile",
+                "--import",
+                "lib=lib.vir",
+                "--extern",
+                "lib=liblib.rlib",
+            ],
+            dir,
+        );
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).to_string())
+    };
+    let l = |eq_body: &str| {
+        format!(
+            "pub struct L {{ pub x: u64 }}
+impl PartialEq for L {{
+    #[verifier::fip(strict)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eq(&self, o: &L) -> bool allocates 0 {{ {eq_body} }}
+}}
+impl vstd::std_specs::cmp::PartialEqSpecImpl for L {{
+    open spec fn obeys_eq_spec() -> bool {{ false }}
+    open spec fn eq_spec(&self, other: &L) -> bool {{ self.x == other.x }}
+}}
+unsafe impl FbipPartialEq for L {{}}
+unsafe impl FipPartialEq for L {{}}
+unsafe impl FipStrictPartialEq for L {{}}
+"
+        )
+    };
+    let (ok, e) = run(
+        "ok",
+        &format!(
+            "{}
+#[verifier::fip(strict)] fn s(a: &L, b: &L) -> (r: bool) allocates 0 {{ lib::same(a, b) }}",
+            l("self.x == o.x")
+        ),
+    );
+    assert!(ok, "{}", e);
+    // (the verifier rejects the cycle through the trait bound first; the compiled-program check,
+    // which follows `lib::same::<L>`'s bounds back to `L::eq`, would too)
+    let (ok, e) = run("cyc", &l("let r = lib::same(self, o); r"));
+    assert!(
+        !ok && (e.contains("is not a tail call and can lead back to")
+            || e.contains("found a cyclic self-reference in a definition")),
+        "{}",
+        e
+    );
 }

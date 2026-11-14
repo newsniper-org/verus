@@ -788,6 +788,7 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
             let name = vir::ast_util::path_as_friendly_rust_name(p);
             name == "vstd::alloc_check::AllocFreeDrop"
                 || name == "vstd::alloc_check::BoundedAllocator"
+                || vir::alloc_check::op_marker(p).is_some()
         })
         .cloned()
         .collect();

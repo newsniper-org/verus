@@ -358,12 +358,66 @@ fn report<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
     );
 }
 
+/// In a (non-strict) fip function, a call of another crate's function: the functions of this
+/// crate that it may call back must be `#[verifier::fip]`
+fn check_callbacks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    ext: &ExternalStrict,
+    om: &OpMarkers,
+    target: DefId,
+    targs: ty::GenericArgsRef<'tcx>,
+    span: Span,
+) {
+    let cb = callbacks(tcx, typing_env, target, targs);
+    let err = |what: String| {
+        tcx.dcx().span_err(
+            span,
+            format!(
+                "-V alloc-check: a `#[verifier::fip]` function must not deallocate, but this call of `{}` may call {}",
+                tcx.def_path_str(target),
+                what
+            ),
+        );
+    };
+    for (d, why) in cb.local.iter() {
+        if !d.as_local().is_some_and(|l| is_fip_local(tcx, l)) {
+            err(format!(
+                "`{}` (through {}), which is not `#[verifier::fip]`",
+                tcx.def_path_str(*d),
+                why
+            ));
+        }
+    }
+    for (d, why) in cb.foreign.iter() {
+        if !ext.contains(tcx, *d) {
+            err(format!(
+                "`{}` (through {}), which is not known here to be `#[verifier::fip]`",
+                tcx.def_path_str(*d),
+                why
+            ));
+        }
+    }
+    for tr in cb.unknown.iter() {
+        if om.marked(tcx, typing_env, *tr, false) {
+            continue;
+        }
+        err(format!(
+            "the methods of `{}: {}`, which are not known here (an operator trait's methods are known to be `#[verifier::fip]` through its marker, e.g. `vstd::alloc_check::FipOrd`)",
+            tr.self_ty(),
+            tcx.def_path_str(tr.def_id)
+        ));
+    }
+}
+
 /// The drops of one `#[verifier::fip]` function, on paths that return normally
 fn check_fip_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     marker: Option<DefId>,
     at: Option<&AllocTraits>,
+    ext: &ExternalStrict,
+    om: &OpMarkers,
 ) {
     let strict = fip_kind_local(tcx, def_id) == Some(true);
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
@@ -398,6 +452,15 @@ fn check_fip_body<'tcx>(
                 // were moved out, which frees the box)
                 let is_drop_method =
                     drop_trait.is_some() && tcx.trait_of_assoc(callee) == drop_trait;
+                // another crate's code may call back into this crate's (a strict function's
+                // callbacks are checked by `strict_edges`)
+                if !strict && !is_drop_method && Some(callee) != drop_in_place {
+                    if let Some((target, targs)) = call_target(tcx, typing_env, func) {
+                        if !target.is_local() {
+                            check_callbacks(tcx, typing_env, ext, om, target, targs, span);
+                        }
+                    }
+                }
                 if is_drop_method || Some(callee) == drop_in_place {
                     let ty = args.type_at(0);
                     let ty = if Some(callee) == drop_in_place {
@@ -434,13 +497,303 @@ fn check_fip_body<'tcx>(
 }
 
 /// The crates whose functions a `#[verifier::fip(strict)]` function may call (non-tail) as
-/// leaves: std's and vstd's functions do not recurse into the caller's code (the calls that could,
-/// through callbacks, are rejected by the verifier's fip checks), so they use bounded stack space.
-/// (By name: under -V alloc-check, which fip needs, rust_to_vir accepts a dependency with one of
-/// these names only if it is the real one.)
+/// leaves: std's and vstd's functions use bounded stack space, and reach the caller's code only
+/// through the trait bounds of their type arguments, which `callbacks` follows (each function of
+/// this crate found there is an edge of its own). (By name: under -V alloc-check, which fip
+/// needs, rust_to_vir accepts a dependency with one of these names only if it is the real one.)
 fn is_trusted_leaf_crate(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let name = tcx.crate_name(def_id.krate);
     matches!(name.as_str(), "core" | "alloc" | "std" | "vstd" | "verus_builtin")
+}
+
+/// What a call of another crate's function may call back: the code of a generic function can
+/// call the methods of its type arguments only through its trait bounds. So the callee's bounds,
+/// instantiated with the call's type arguments (with their supertraits and the bounds of their
+/// associated types), lead to the impls it may use; a std impl's own bounds lead further (`Vec<L>:
+/// PartialEq` needs `L: PartialEq`). Every function of a selected impl is counted, whichever of
+/// them the callee actually uses (a trait's provided methods call only the trait's own methods).
+#[derive(Default)]
+struct Callbacks<'tcx> {
+    /// functions of this crate (impl methods, closures, function items), with the bound that
+    /// leads to each
+    local: Vec<(DefId, String)>,
+    /// functions of crates other than std, vstd and this one
+    foreign: Vec<(DefId, String)>,
+    /// bounds whose impl is not known here (a type parameter, `dyn`, a function pointer)
+    unknown: Vec<ty::TraitRef<'tcx>>,
+}
+
+/// Is `def_id` a function that a fip check need not follow as a callback: the hidden methods
+/// that `derive(Eq)` generates (they only check, at compile time, that fields are `Eq`)
+fn is_compile_time_only(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    matches!(tcx.item_name(def_id).as_str(), "assert_receiver_is_total_eq" | "assert_fields_are_eq")
+}
+
+/// The operator traits of `core` that vstd has markers for (`vstd::alloc_check::FipAdd`, ...):
+/// for each, its name and its `Fip` and `FipStrict` markers
+pub(crate) struct OpMarkers {
+    ops: std::collections::HashMap<DefId, (&'static str, Option<DefId>, Option<DefId>)>,
+}
+
+impl OpMarkers {
+    fn new(tcx: TyCtxt<'_>) -> Self {
+        let mut ops = std::collections::HashMap::new();
+        let traits: Vec<DefId> = tcx.all_traits_including_private().collect();
+        for d in traits.iter() {
+            if tcx.crate_name(d.krate).as_str() != "core" {
+                continue;
+            }
+            let path = tcx.def_path_str(*d);
+            if !(path.contains("::ops::") || path.contains("::cmp::")) {
+                continue;
+            }
+            let name = tcx.item_name(*d);
+            let Some(op) = vir::alloc_check::OP_TRAITS.iter().find(|n| **n == name.as_str()) else {
+                continue;
+            };
+            let find = |m: String| {
+                traits.iter().copied().find(|t| {
+                    tcx.crate_name(t.krate).as_str() == "vstd" && tcx.def_path_str(*t) == m
+                })
+            };
+            let fip = find(format!("vstd::alloc_check::Fip{}", op));
+            let strict = find(format!("vstd::alloc_check::FipStrict{}", op));
+            ops.insert(*d, (*op, fip, strict));
+        }
+        OpMarkers { ops }
+    }
+
+    /// Does the bound `trait_ref` (of an operator trait) hold through its `Fip` (`FipStrict`)
+    /// marker?
+    fn marked<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        typing_env: TypingEnv<'tcx>,
+        trait_ref: ty::TraitRef<'tcx>,
+        strict: bool,
+    ) -> bool {
+        let Some((_, fip, st)) = self.ops.get(&trait_ref.def_id) else { return false };
+        let Some(marker) = (if strict { *st } else { *fip }) else { return false };
+        implements_args(tcx, typing_env, marker, trait_ref.args)
+    }
+
+    /// The functions of this crate that a strict function may reach through a strict marker of
+    /// `op` (for any type): the `#[verifier::fip(strict)]` methods of this crate's impls of `op`
+    /// and of its supertraits (an over-approximation: which type the marker is for is not known
+    /// where the call is made)
+    fn strict_methods(&self, tcx: TyCtxt<'_>, op: DefId) -> Vec<LocalDefId> {
+        let mut traits = vec![op];
+        for c in rustc_infer::traits::util::supertrait_def_ids(tcx, op) {
+            if self.ops.contains_key(&c) && !traits.contains(&c) {
+                traits.push(c);
+            }
+        }
+        let mut out = Vec::new();
+        for tr in traits {
+            for imp in tcx.all_impls(tr) {
+                let Some(_) = imp.as_local() else { continue };
+                for item in tcx.associated_items(imp).in_definition_order() {
+                    if let Some(l) = item.def_id.as_local() {
+                        if item.is_fn() && fip_kind_local(tcx, l) == Some(true) {
+                            out.push(l);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+fn implements_args<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    marker: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+) -> bool {
+    let args = tcx.erase_and_anonymize_regions(args);
+    let (infcx, param_env) = tcx.infer_ctxt().build_with_typing_env(typing_env);
+    infcx.type_implements_trait(marker, args.iter(), param_env).must_apply_modulo_regions()
+}
+
+fn callbacks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    def_id: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+) -> Callbacks<'tcx> {
+    use rustc_middle::ty::{ClauseKind, Upcast};
+    let mut out = Callbacks::default();
+    let allocator_traits: Vec<DefId> = tcx
+        .all_traits_including_private()
+        .filter(|d| {
+            tcx.crate_name(d.krate).as_str() == "core"
+                && matches!(tcx.item_name(*d).as_str(), "Allocator" | "AllocatorClone")
+        })
+        .collect();
+    let has_fns = |tr: DefId| {
+        tcx.associated_items(tr)
+            .in_definition_order()
+            .any(|i| i.is_fn() && !is_compile_time_only(tcx, i.def_id))
+    };
+    let mut work: Vec<ty::Clause<'tcx>> = tcx
+        .clauses_of(def_id)
+        .instantiate(tcx, args)
+        .clauses
+        .into_iter()
+        .map(|c| c.skip_norm_wip())
+        .collect();
+    let mut seen: std::collections::HashSet<ty::Clause<'tcx>> = std::collections::HashSet::new();
+    let impl_fns = |impl_def_id: DefId| -> Vec<DefId> {
+        tcx.associated_items(impl_def_id)
+            .in_definition_order()
+            .filter(|i| i.is_fn())
+            .map(|i| i.def_id)
+            .filter(|d| !is_compile_time_only(tcx, *d))
+            .collect()
+    };
+    let mut steps = 0;
+    while let Some(clause) = work.pop() {
+        steps += 1;
+        if steps > 10000 {
+            break;
+        }
+        let clause = match tcx
+            .try_normalize_erasing_regions(typing_env, ty::Unnormalized::new_wip(clause))
+        {
+            Ok(c) => c,
+            Err(_) => tcx.erase_and_anonymize_regions(clause),
+        };
+        if !seen.insert(clause) {
+            continue;
+        }
+        // supertraits
+        for c in rustc_infer::traits::util::elaborate(tcx, [clause]).skip(1) {
+            work.push(c);
+        }
+        let ClauseKind::Trait(tp) = clause.kind().skip_binder() else { continue };
+        if tp.polarity != ty::ClausePolarity::Positive {
+            continue;
+        }
+        let trait_ref = tp.trait_ref;
+        let tr = trait_ref.def_id;
+        if allocator_traits.contains(&tr) {
+            // (a user allocator is checked by `check_allocator_use`)
+            continue;
+        }
+        // the bounds of the trait's associated types (`I: IntoIterator` lets the callee call
+        // `next` on `I::IntoIter`)
+        for item in tcx.associated_items(tr).in_definition_order() {
+            if item.is_type() {
+                for c in tcx
+                    .item_bounds(item.def_id)
+                    .instantiate(tcx, trait_ref.args)
+                    .skip_norm_wip()
+                    .iter()
+                {
+                    work.push(c);
+                }
+            }
+        }
+        if !has_fns(tr) {
+            continue;
+        }
+        let what = format!("`{}: {}`", trait_ref.self_ty(), tcx.def_path_str(tr));
+        let self_ty = trait_ref.self_ty();
+        if tcx.fn_trait_kind_from_def_id(tr).is_some() {
+            match self_ty.kind() {
+                ty::Closure(d, _) | ty::CoroutineClosure(d, _) if d.is_local() => {
+                    out.local.push((*d, what));
+                    continue;
+                }
+                ty::FnDef(d, fargs) => {
+                    let Some(fargs) = fargs.no_bound_vars() else {
+                        out.unknown.push(trait_ref);
+                        continue;
+                    };
+                    if d.is_local() {
+                        out.local.push((*d, what));
+                    } else {
+                        if !is_trusted_leaf_crate(tcx, *d) {
+                            out.foreign.push((*d, what));
+                        }
+                        work.extend(
+                            tcx.clauses_of(*d)
+                                .instantiate(tcx, fargs)
+                                .clauses
+                                .into_iter()
+                                .map(|c| c.skip_norm_wip()),
+                        );
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        match tcx.codegen_select_candidate(typing_env.as_query_input(trait_ref)) {
+            Ok(rustc_middle::traits::ImplSource::UserDefined(u)) => {
+                if u.impl_def_id.is_local() {
+                    for f in impl_fns(u.impl_def_id) {
+                        out.local.push((f, what.clone()));
+                    }
+                } else {
+                    if !is_trusted_leaf_crate(tcx, u.impl_def_id) {
+                        for f in impl_fns(u.impl_def_id) {
+                            out.foreign.push((f, what.clone()));
+                        }
+                    }
+                    work.extend(
+                        tcx.clauses_of(u.impl_def_id)
+                            .instantiate(tcx, u.args)
+                            .clauses
+                            .into_iter()
+                            .map(|c| c.skip_norm_wip()),
+                    );
+                }
+            }
+            Ok(rustc_middle::traits::ImplSource::Builtin(_, _)) => {
+                // compiler-provided impls: `Clone` of tuples, arrays and closures clones the
+                // parts; the others (`Sized`, `Copy`, `Fn` of function pointers, ...) run no user
+                // code, except through `dyn` and function pointers
+                let is_clone = Some(tr) == tcx.lang_items().clone_trait();
+                let parts: Vec<Ty<'tcx>> = match self_ty.kind() {
+                    ty::Dynamic(..) | ty::FnPtr(..) => {
+                        out.unknown.push(trait_ref);
+                        continue;
+                    }
+                    _ if !is_clone => vec![],
+                    ty::Tuple(ts) => ts.iter().collect(),
+                    ty::Array(t, _) | ty::Slice(t) => vec![*t],
+                    ty::Closure(_, cargs) => cargs.as_closure().upvar_tys().iter().collect(),
+                    _ => vec![],
+                };
+                for t in parts {
+                    let tref = ty::TraitRef::new(tcx, tr, [t]);
+                    work.push(tref.upcast(tcx));
+                }
+            }
+            Ok(rustc_middle::traits::ImplSource::Param(_)) | Err(_) => {
+                out.unknown.push(trait_ref);
+            }
+        }
+    }
+    out
+}
+
+/// The function (and its type arguments) that a call runs, if that is known here: the impl
+/// method that a trait method call resolves to
+fn call_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    func: &rustc_middle::mir::Operand<'tcx>,
+) -> Option<(DefId, ty::GenericArgsRef<'tcx>)> {
+    let (def_id, args) = func.const_fn_def()?;
+    match ty::Instance::try_resolve(tcx, typing_env, def_id, args) {
+        Ok(Some(instance)) => Some((instance.def_id(), instance.args)),
+        // (a generic call of a trait method: its impl is not known here, which the checks of
+        // generic calls handle)
+        _ => None,
+    }
 }
 
 /// A call (or a destructor run by a drop) of a strict fip function: the callee, and whether it
@@ -548,13 +901,12 @@ fn strict_err<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
     );
 }
 
-/// The calls of one strict fip function (on paths that return normally), checked to go to
-/// strict fip functions or to std/vstd
 /// The `#[verifier::fip(strict)]` functions of other crates that were verified and compiled with
-/// -V alloc-check (by VIR path): their compilation checked that they, and everything they reach,
-/// use constant stack space. They cannot call back into this crate: a strict function's calls
-/// all go to known functions (no generic calls or function values), and those are in its own
-/// crate or below it.
+/// -V alloc-check (by VIR path): their compilation checked that they, and everything they reach in
+/// their own crate, use constant stack space. They can call back into this crate only through the
+/// trait bounds of the type arguments a call gives them (a strict function's own calls go to
+/// known functions, or to an operator trait's methods through a strict marker, which is such a
+/// bound): `callbacks` follows those bounds to this crate's functions.
 pub(crate) struct ExternalStrict {
     verus_items: crate::verus_items::VerusItems,
     paths: std::collections::HashSet<String>,
@@ -579,11 +931,15 @@ impl ExternalStrict {
     }
 }
 
+/// The calls of one strict fip function (on paths that return normally), checked to go to strict
+/// fip functions, std/vstd or strict functions of other crates; with the functions of this crate
+/// that those may call back, and the destructors that drops run, as edges
 fn strict_edges<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     at: Option<&AllocTraits>,
     ext: &ExternalStrict,
+    om: &OpMarkers,
 ) -> (Vec<StrictEdge>, bool) {
     let mut uses_allocator = false;
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
@@ -641,7 +997,9 @@ fn strict_edges<'tcx>(
                 // std code may drop values of its type arguments (`Vec::<H>::clear`, `truncate`),
                 // which runs their destructors from inside the call (unless vstd's specification
                 // says that the function drops none of them)
-                if let Some((callee, args)) = func.const_fn_def() {
+                if let (Some((callee, args)), Some(_)) =
+                    (func.const_fn_def(), resolve_callee(tcx, typing_env, func))
+                {
                     // (a trait method's specification is that of the impl's method, so the
                     // resolved callee is looked up too)
                     let drops_nothing = ext.drops_nothing(tcx, callee)
@@ -676,8 +1034,87 @@ fn strict_edges<'tcx>(
                         }
                     }
                 }
+                // another crate's code may call back into this crate's (a non-tail call: the
+                // callee's frame stays below)
+                if let Some((target, targs)) = call_target(tcx, typing_env, func) {
+                    let is_drop = func.const_fn_def().is_some_and(|(c, _)| {
+                        Some(c) == tcx.lang_items().drop_glue_fn()
+                            || (tcx.lang_items().drop_trait().is_some()
+                                && tcx.trait_of_assoc(c) == tcx.lang_items().drop_trait())
+                    });
+                    if !target.is_local() && !is_drop {
+                        let cb = callbacks(tcx, typing_env, target, targs);
+                        for (d, why) in cb.local.iter() {
+                            match d.as_local() {
+                                Some(l) if fip_kind_local(tcx, l) == Some(true) => {
+                                    edges.push(StrictEdge { callee: l, tail: false, span });
+                                }
+                                _ => strict_err(
+                                    tcx,
+                                    span,
+                                    format!(
+                                        "it calls `{}`, which may call `{}` (through {}), which is not `#[verifier::fip(strict)]`",
+                                        tcx.def_path_str(target),
+                                        tcx.def_path_str(*d),
+                                        why
+                                    ),
+                                ),
+                            }
+                        }
+                        for (d, why) in cb.foreign.iter() {
+                            if !ext.contains(tcx, *d) {
+                                strict_err(
+                                    tcx,
+                                    span,
+                                    format!(
+                                        "it calls `{}`, which may call `{}` (through {}), whose stack use is not known here",
+                                        tcx.def_path_str(target),
+                                        tcx.def_path_str(*d),
+                                        why
+                                    ),
+                                );
+                            }
+                        }
+                        for tr in cb.unknown.iter() {
+                            if om.marked(tcx, typing_env, *tr, true) {
+                                for m in om.strict_methods(tcx, tr.def_id) {
+                                    edges.push(StrictEdge { callee: m, tail: false, span });
+                                }
+                                continue;
+                            }
+                            strict_err(
+                                tcx,
+                                span,
+                                format!(
+                                    "it calls `{}`, which may call the methods of `{}: {}`, which are not known here (an operator trait's methods are known to be `#[verifier::fip(strict)]` through its marker, e.g. `vstd::alloc_check::FipStrictOrd`)",
+                                    tcx.def_path_str(target),
+                                    tr.self_ty(),
+                                    tcx.def_path_str(tr.def_id)
+                                ),
+                            );
+                        }
+                    }
+                }
+                // a generic call of an operator trait's method, through its strict marker (not
+                // `Ord::{max, min, clamp}`, which drop a value whose destructor is not known)
+                let marked_op = func.const_fn_def().and_then(|(callee, args)| {
+                    let tr = tcx.trait_of_assoc(callee)?;
+                    if !om.ops.contains_key(&tr)
+                        || matches!(tcx.item_name(callee).as_str(), "max" | "min" | "clamp")
+                    {
+                        return None;
+                    }
+                    let n = tcx.generics_of(tr).count();
+                    let trait_ref = ty::TraitRef::new_from_args(tcx, tr, tcx.mk_args(&args[..n]));
+                    om.marked(tcx, typing_env, trait_ref, true).then_some(tr)
+                });
                 match resolve_callee(tcx, typing_env, func) {
                     Some(callee) => add(callee, tail, span, &mut edges),
+                    None if marked_op.is_some() => {
+                        for m in om.strict_methods(tcx, marked_op.unwrap()) {
+                            edges.push(StrictEdge { callee: m, tail: false, span });
+                        }
+                    }
                     None => strict_err(
                         tcx,
                         span,
@@ -729,13 +1166,14 @@ fn check_strict_stack<'tcx>(
     at: Option<&AllocTraits>,
     allocator_methods: &[(LocalDefId, Span)],
     ext: &ExternalStrict,
+    om: &OpMarkers,
 ) {
     let mut uses_allocator: std::collections::HashSet<LocalDefId> =
         std::collections::HashSet::new();
     let graph: std::collections::HashMap<LocalDefId, Vec<StrictEdge>> = strict
         .iter()
         .map(|f| {
-            let (edges, uses) = strict_edges(tcx, *f, at, ext);
+            let (edges, uses) = strict_edges(tcx, *f, at, ext, om);
             if uses {
                 uses_allocator.insert(*f);
             }
@@ -813,6 +1251,7 @@ pub(crate) fn check_fip_crate<'tcx>(
         paths: strict_fns.iter().cloned().collect(),
         no_drop: no_drop_fns.iter().cloned().collect(),
     };
+    let om = OpMarkers::new(tcx);
     let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
     if let Some(m) = marker {
         check_marker_impls(tcx, m, checked);
@@ -838,9 +1277,9 @@ pub(crate) fn check_fip_crate<'tcx>(
         if fip_kind_local(tcx, def_id) == Some(true) {
             strict.push(def_id);
         }
-        check_fip_body(tcx, def_id, marker, at.as_ref());
+        check_fip_body(tcx, def_id, marker, at.as_ref(), &ext, &om);
     }
-    check_strict_stack(tcx, &strict, at.as_ref(), &allocator_methods, &ext);
+    check_strict_stack(tcx, &strict, at.as_ref(), &allocator_methods, &ext, &om);
     any
 }
 

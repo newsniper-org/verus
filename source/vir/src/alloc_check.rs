@@ -32,11 +32,12 @@
 
 use crate::ast::{
     Constant, CrateId, Datatype, Dt, ExprX, Function, GenericBoundX, GenericBounds, Ident, Krate,
-    Path, Primitive, TraitId, Typ, TypDecoration, TypX, VirErr,
+    Path, Primitive, TraitId, Typ, TypDecoration, TypX, Typs, VirErr,
 };
 use crate::context::Ctx;
 use crate::messages::{Span, error};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Crates whose own `Drop` implementations are trusted not to allocate
 /// (the std containers: dropping them only drops their contents).
@@ -162,6 +163,248 @@ pub(crate) fn is_literal_zero(e: &crate::ast::Expr) -> bool {
         ExprX::Const(Constant::Int(i)) => *i == num_bigint::BigInt::from(0),
         _ => false,
     }
+}
+
+/// The operator traits of `core` that have marker traits in `vstd::alloc_check` (by the last
+/// segment of their path)
+pub const OP_TRAITS: &[&str] = &[
+    "Neg",
+    "Not",
+    "Add",
+    "Sub",
+    "Mul",
+    "Div",
+    "Rem",
+    "BitAnd",
+    "BitOr",
+    "BitXor",
+    "Shl",
+    "Shr",
+    "AddAssign",
+    "SubAssign",
+    "MulAssign",
+    "DivAssign",
+    "RemAssign",
+    "BitAndAssign",
+    "BitOrAssign",
+    "BitXorAssign",
+    "ShlAssign",
+    "ShrAssign",
+    "Index",
+    "IndexMut",
+    "Deref",
+    "DerefMut",
+    "PartialEq",
+    "PartialOrd",
+    "Ord",
+];
+
+/// The levels of the operator markers: `FbipOp` (the impl's methods are bounded by `allocates
+/// 0`), `FipOp` (also `#[verifier::fip]`), `FipStrictOp` (also `#[verifier::fip(strict)]`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OpLevel {
+    Fbip,
+    Fip,
+    Strict,
+}
+
+/// `vstd::alloc_check::{Fbip, Fip, FipStrict}<Op>`: the operator trait and the level
+pub fn op_marker(path: &Path) -> Option<(&'static str, OpLevel)> {
+    let name = crate::ast_util::path_as_friendly_rust_name(path);
+    let rest = name.strip_prefix("vstd::alloc_check::")?;
+    let (level, op) = if let Some(op) = rest.strip_prefix("FipStrict") {
+        (OpLevel::Strict, op)
+    } else if let Some(op) = rest.strip_prefix("Fip") {
+        (OpLevel::Fip, op)
+    } else if let Some(op) = rest.strip_prefix("Fbip") {
+        (OpLevel::Fbip, op)
+    } else {
+        return None;
+    };
+    OP_TRAITS.iter().find(|t| **t == op).map(|t| (*t, level))
+}
+
+/// A `core` operator trait (`core::ops::arith::Add`, `core::cmp::Ord`): its last segment
+pub(crate) fn op_trait(path: &Path) -> Option<&'static str> {
+    let name = crate::ast_util::path_as_friendly_rust_name(path);
+    if !(name.starts_with("core::ops::") || name.starts_with("core::cmp::")) {
+        return None;
+    }
+    let last = name.rsplit("::").next()?;
+    OP_TRAITS.iter().find(|t| **t == last).copied()
+}
+
+/// The operator traits whose markers the marker of `op` implies (its supertraits')
+fn op_supertraits(op: &'static str) -> &'static [&'static str] {
+    match op {
+        "IndexMut" => &["Index"],
+        "DerefMut" => &["Deref"],
+        "PartialOrd" => &["PartialEq"],
+        "Ord" => &["PartialOrd", "PartialEq"],
+        _ => &[],
+    }
+}
+
+/// The operator markers on a function's type parameters (or other types), with the markers they
+/// imply: (the marker's type arguments: `Self` and the operator trait's own, the operator trait,
+/// the level)
+pub(crate) fn op_marker_bounds(bounds: &GenericBounds) -> Vec<(Typs, &'static str, OpLevel)> {
+    let mut out = Vec::new();
+    for bound in bounds.iter() {
+        if let GenericBoundX::Trait(TraitId::Path(path), args) = &**bound {
+            if let Some((op, level)) = op_marker(path) {
+                out.push((args.clone(), op, level));
+                // (`PartialOrd<Rhs>` implies `PartialEq<Rhs>`; `Ord` implies them for `Self`)
+                for sup in op_supertraits(op) {
+                    let sup_args = if op == "Ord" {
+                        Arc::new(vec![args[0].clone(), args[0].clone()])
+                    } else {
+                        args.clone()
+                    };
+                    out.push((sup_args, sup, level));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Does a marker in `markers` (at `level` or above) cover a generic call of the trait method
+/// `trait_path` with type arguments `typs` (the trait's `Self` and type arguments first)?
+pub(crate) fn op_marker_covers(
+    markers: &[(Typs, &'static str, OpLevel)],
+    trait_path: &Path,
+    typs: &Typs,
+    level: OpLevel,
+) -> bool {
+    let Some(op) = op_trait(trait_path) else { return false };
+    markers.iter().any(|(args, o, l)| {
+        *o == op
+            && *l >= level
+            && args.len() <= typs.len()
+            && args.iter().zip(typs.iter()).all(|(a, t)| crate::ast_util::types_equal(a, t))
+    })
+}
+
+/// As `op_marker_covers`, also for a comparison of references (`&A == &B`, `&A < &B`): std's
+/// impls for references call `A`'s method, so the marker must cover `A` and `B`
+pub(crate) fn op_marker_covers_call(
+    markers: &[(Typs, &'static str, OpLevel)],
+    trait_path: &Path,
+    typs: &Typs,
+    level: OpLevel,
+) -> bool {
+    if op_marker_covers(markers, trait_path, typs, level) {
+        return true;
+    }
+    if !matches!(op_trait(trait_path), Some("PartialEq" | "PartialOrd" | "Ord")) {
+        return false;
+    }
+    let strip = |t: &Typ| match &**t {
+        TypX::Decorate(TypDecoration::Ref, _, inner) => Some(inner.clone()),
+        TypX::MutRef(inner) => Some(inner.clone()),
+        _ => None,
+    };
+    let n = if op_trait(trait_path) == Some("Ord") { 1 } else { 2 };
+    if typs.len() < n {
+        return false;
+    }
+    let mut stripped: Vec<Typ> = Vec::new();
+    for t in typs.iter().take(n) {
+        match strip(t) {
+            Some(i) => stripped.push(i),
+            None => return false,
+        }
+    }
+    stripped.extend(typs.iter().skip(n).cloned());
+    op_marker_covers_call(markers, trait_path, &Arc::new(stripped), level)
+}
+
+/// Marker rule: `unsafe impl FbipOp for X` (`FipOp`, `FipStrictOp`) is accepted only if `X`'s
+/// `Op` impl (for the same type, written the same way) is one that Verus checks, and each method
+/// it defines is bounded by `allocates 0` (and is `#[verifier::fip]`, `#[verifier::fip(strict)]`).
+/// The methods it does not define run `core`'s provided bodies, which call only the trait's own
+/// methods. The literal `0` matters: a generic call through the marker is charged 0, which must
+/// agree with the impl's own bound. (vstd's impls, for the primitive types, are trusted.)
+pub(crate) fn check_op_marker_impls(krate: &Krate) -> Result<(), VirErr> {
+    for imp in krate.trait_impls.iter() {
+        let Some((op, level)) = op_marker(&imp.x.trait_path) else { continue };
+        if imp.x.impl_path.is_vstd_path() {
+            continue;
+        }
+        let marker = crate::ast_util::path_as_friendly_rust_name(&imp.x.trait_path);
+        let self_str = imp
+            .x
+            .trait_typ_args
+            .first()
+            .map(|t| crate::ast_util::typ_to_diagnostic_str(t))
+            .unwrap_or_default();
+        if imp.x.auto_imported {
+            return Err(error(
+                &imp.span,
+                format!(
+                    "-V alloc-check: this `{}` impl is not checked by Verus (every impl of it must be one that Verus checks)",
+                    marker
+                ),
+            ));
+        }
+        let op_impl = krate.trait_impls.iter().find(|i| {
+            op_trait(&i.x.trait_path) == Some(op)
+                && i.x.trait_typ_args.len() == imp.x.trait_typ_args.len()
+                && i.x
+                    .trait_typ_args
+                    .iter()
+                    .zip(imp.x.trait_typ_args.iter())
+                    .all(|(a, b)| crate::ast_util::types_equal(a, b))
+        });
+        let Some(op_impl) = op_impl.filter(|i| !i.x.auto_imported) else {
+            return Err(error(
+                &imp.span,
+                format!(
+                    "-V alloc-check: `{}` for `{}` needs its `{}` impl to be checked by Verus (inside `verus!`, for the same type written the same way)",
+                    marker, self_str, op
+                ),
+            ));
+        };
+        for f in krate.functions.iter() {
+            let crate::ast::FunctionKind::TraitMethodImpl {
+                impl_path,
+                inherit_body_from: None,
+                ..
+            } = &f.x.kind
+            else {
+                continue;
+            };
+            if impl_path != &op_impl.x.impl_path {
+                continue;
+            }
+            let name = crate::ast_util::fun_as_friendly_rust_name(&f.x.name);
+            let unverified_body = f.x.attrs.is_external_body || f.x.proxy.is_some();
+            let zero = f.x.allocates.as_ref().is_some_and(|e| is_literal_zero(e))
+                && !unverified_body
+                && f.x.attrs.alloc_checked_crate;
+            let why = if !zero {
+                Some("be checked by Verus and bounded by `allocates 0`")
+            } else if level >= OpLevel::Fip && !f.x.attrs.fip {
+                Some("be `#[verifier::fip]`")
+            } else if level >= OpLevel::Strict && !f.x.attrs.fip_strict {
+                Some("be `#[verifier::fip(strict)]`")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                return Err(error(
+                    &imp.span,
+                    format!(
+                        "-V alloc-check: this `{}` impl is not accepted: `{}` must {}",
+                        marker, name, why
+                    ),
+                )
+                .secondary_span(&f.span));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `vstd::alloc_check::AllocFreeDrop`: types whose drop glue performs no allocation
@@ -1775,6 +2018,7 @@ pub fn check_merged_krate(krate: &Krate) -> Result<(), VirErr> {
         }
     }
     check_bounded_allocator_impls(krate)?;
+    check_op_marker_impls(krate)?;
     let table = drop_impl_table(krate);
     let copies = copy_datatypes(krate);
     check_alloc_free_drop_impls(krate, &table, &copies)
