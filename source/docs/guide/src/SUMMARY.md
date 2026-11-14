@@ -3,6 +3,8 @@
 [Verus overview](./overview.md)
 [Changes from upstream Verus (fork)](./fork-changes.md)
 [업스트림 Verus 대비 변경 사항 (fork, 한국어)](./fork-changes.ko.md)
+[Pluggable SMT backends (fork)](./fork-changes-backend-pluggable.md)
+[교체 가능한 SMT backend (fork, 한국어)](./fork-changes-backend-pluggable.ko.md)
 
 # Getting started
 
