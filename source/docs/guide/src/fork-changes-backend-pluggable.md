@@ -77,3 +77,11 @@ adsmt can write a certificate for each query it proves. On this branch:
 * `docs/roadmap-interactive-tooling.md`: plans for interactive tooling on top of the backends.
 * The `.local-*` directories and `.claude-memories/` hold working notes and the correspondence
   with the adsmt project (requests, replies, reproductions). They do not affect how Verus runs.
+
+## `backend-pluggable-inline-beta`
+
+The branch `backend-pluggable-inline-beta` is `backend-pluggable-beta` plus a design memo for
+*inline proofs*: proof fragments in another language (an SMT query with its own logic and
+backend, MaxSAT/MaxSMT, ASP, or an interactive prover) embedded in a Verus proof, much as inline
+assembly is embedded in code. The memo is in `.local-backlog/inline-proof/`. It is at the
+discussion stage and waits on adsmt's input language. The branch does not change Verus.
