@@ -179,6 +179,22 @@ fn swap_ends<T: vstd::alloc_check::AllocFreeDrop>(xs: &mut [T])
 }
 ```
 
+A generic call of an operator (`+`, `==`, `<`, indexing, ...) has no known impl. For the operator
+traits of `core`, vstd has marker traits that say what every impl does: `FbipOp` (its methods
+allocate nothing), `FipOp` (they are also `#[verifier::fip]`) and `FipStrictOp` (also strict),
+such as `FipAdd`, `FipPartialEq` and `FipOrd`. vstd implements them for the primitive types. A
+generic operator call goes through the marker:
+
+```rust
+#[verifier::fip]
+fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
+    if a < b { b } else { a }
+}
+```
+
+An impl of a marker for your own type is accepted only if that type's operator impl is checked by
+Verus and its methods are `allocates 0` (and fip, or strict).
+
 ## Common rejections
 
 | Code | Why it is rejected | Instead |
@@ -188,6 +204,7 @@ fn swap_ends<T: vstd::alloc_check::AllocFreeDrop>(xs: &mut [T])
 | a parameter that is not used on some path | it is dropped at the end of the function | return it, store it, or move it into the result |
 | `v.push(x)` in a fip function | `push` may free the old buffer when it grows | require `old(v)@.len() < spec_vec_capacity(&*old(v))`, or reserve beforehand outside the fip function |
 | `fn f<T>(a: T, b: T)` dropping `b` | the drop of a `T` is not known | `T: NoDeallocDrop` (not available in a strict function) |
+| `a == b` with `T: PartialEq` | a generic call, whose impl is not known | `T: FipPartialEq` (`FipStrictPartialEq` in a strict function) |
 | `count(n - 1, acc)` in a strict function | a plain tail call may still grow the stack | `become count(n - 1, acc)` |
 | `len(t) + 1` in a strict function | not a tail call | use an accumulator and `become`, or a loop |
 
@@ -222,7 +239,10 @@ The reference describes when the rewrite applies.
 * **Leaks.** FP²'s functions use each cell they own exactly once. Here `#[verifier::fip]` only
   promises that nothing is freed: `mem::forget` is allowed and leaks what it forgets.
 * **Trust.** The specifications of std in vstd (when `Vec::push` may free, which std functions drop
-  nothing) and the marker trait impls are trusted. The stack rule trusts rustc's guarantee for
+  nothing) and vstd's marker trait impls (for std's allocators and the primitive types) are
+  trusted. A call of std, vstd or another crate is followed through its trait bounds to the code
+  of yours it may call back, which must be fip (or strict); this relies on generic code reaching
+  its type arguments only through its bounds. The stack rule trusts rustc's guarantee for
   `become`, and the claim that std and vstd functions use bounded stack space.
 * **Allocators.** A fip function may use a container with an allocator other than the global or
   the system allocator only if the allocator implements `FipAllocator` (or `FipStrictAllocator`

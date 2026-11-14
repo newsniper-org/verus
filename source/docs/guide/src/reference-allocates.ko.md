@@ -507,7 +507,10 @@ fn push_spare(v: &mut Vec<u64>)
   재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 할당기의 `allocate`만 불러서
   키웁니다. 전역 할당기와 시스템 할당기의 `allocate`는 해제하지 않습니다. 다른 할당기의 `allocate`는
   사용자 코드입니다(아래 참고).
-  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)과 클로저 호출은 거부합니다.
+  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)과 클로저 호출은 거부합니다. 다만 연산자 trait의
+  메서드를 그 표시 trait을 통해 부르는 제네릭 호출은 받습니다(아래 "연산자 trait" 참고). std, vstd, 다른
+  crate의 함수 호출은 그 함수가 이 crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른
+  crate에서 오는 콜백" 참고).
 * **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
   검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
   drop되는 값은 타입에 drop glue가 아예 없거나, unsafe 표시 trait `vstd::alloc_check::NoDeallocDrop`을
@@ -557,14 +560,15 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 엄격한 함수의 호출은 컴파일되는 프로그램의 MIR에서, drop elaboration 뒤에 검사합니다. 그 함수의 drop이
 실행하는 소멸자도 포함합니다.
 
-* 호출 대상은 다른 엄격한 함수이거나 std나 vstd의 함수일 수 있습니다. std와 vstd의 함수는 호출자의
-  코드로 되돌아 부르지 않습니다. 그렇게 할 수 있는 호출(콜백을 통한 호출)은 위의 검사가 거부하기
-  때문입니다. 다른 crate의 함수는 엄격한 함수이고, 그 crate가 `-V alloc-check`로 검증·컴파일되어 라이브러리
-  파일과 함께 import된 경우에만 부를 수 있습니다(`become`의 대상으로도). 그 컴파일이 그 함수와 거기서 닿는
-  모든 함수를 검사했습니다("라이브러리와 다른 crate" 참고). 그 함수가 이 crate로 되돌아 부를 수 있는 길은
-  그 함수를 인스턴스화한 사용자 할당기(`A: FipStrictAllocator`, 엄격한 메서드가 이 crate에 있음)뿐입니다.
-  그런 호출은 사용자 할당기를 쓰는 것으로 치므로, 할당기의 메서드가 거기에 닿을 수 없습니다(아래). 그 밖의 다른 crate 함수 호출과 callee를 알 수 없는 호출(제네릭 호출, 함수 값)은
-  거부합니다.
+* 호출 대상은 다른 엄격한 함수이거나 std나 vstd의 함수일 수 있습니다. 다른 crate의 함수는 엄격한 함수이고,
+  그 crate가 `-V alloc-check`로 검증·컴파일되어 라이브러리 파일과 함께 import된 경우에만 부를 수 있습니다
+  (`become`의 대상으로도). 그 컴파일이 그 함수와, 그 crate 안에서 거기서 닿는 모든 함수를 검사했습니다
+  ("라이브러리와 다른 crate" 참고). 이런 함수는 호출이 인스턴스화한 타입의 trait bound를 통해서만 이
+  crate의 코드에 닿습니다. 그 콜백은 따라가서 꼬리 호출이 아닌 호출로 칩니다(아래 "다른 crate에서 오는
+  콜백" 참고). 사용자 할당기의 메서드는 예외입니다. 사용자 할당기(`A: FipStrictAllocator`, 엄격한
+  메서드가 이 crate에 있음)로 인스턴스화한 호출은 사용자 할당기를 쓰는 것으로 치므로, 할당기의 메서드가
+  거기에 닿을 수 없습니다(아래). 그 밖의 다른 crate 함수 호출과 callee를 알 수 없는 호출(함수 값, 그리고
+  `FipStrictOp`를 통한 연산자 trait 메서드 호출이 아닌 제네릭 호출)은 거부합니다.
 * 소멸자도 호출로 칩니다. 그 함수의 drop이 실행하는 소멸자와, std나 vstd 호출이 인스턴스화된 타입의
   소멸자(std는 `Vec::<T>::clear`처럼 호출 안에서 그런 값을 drop할 수 있습니다)입니다. 다른 crate 타입의
   소멸자는 그 crate의 함수와 같은 조건(`-V alloc-check`로 검증·컴파일된 crate의 엄격한 `Drop::drop`)일 때 받고,
@@ -650,6 +654,75 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 * 함수가 여럿일 때, 제네릭 매개변수가 서로 다르거나, `decreases` 식이 함수마다 둘 이상이거나, 모두가
   `allocates`를 갖지는 않은 경우
 
+### 연산자 trait: `FipAdd`, `FipOrd` 등
+
+trait 메서드의 제네릭 호출은 impl을 알 수 없습니다. 그래서 `-V alloc-check`는 호출자 자신의 상한
+(`call_allocates`)으로만 그 호출을 제한할 수 있고, fip 함수는 그 호출을 아예 할 수 없습니다. `core`의
+연산자 trait에 대해서는 vstd가 unsafe 표시 trait을 제공합니다. 표시 trait은 어떤 타입의 그 trait impl이
+무엇을 하는지 말합니다. 연산자 trait `Op`마다 셋이 있고, 각각 다음 것의 상위 trait입니다.
+
+| 표시 trait | `X`의 `Op` impl의 메서드 | `T: 표시 trait`을 통한 제네릭 호출 |
+|---|---|---|
+| `FbipOp` | `allocates 0`로 제한됨 | 0으로 셈 |
+| `FipOp` | 또한 `#[verifier::fip]` | `#[verifier::fip]` 함수에서 할 수 있음 |
+| `FipStrictOp` | 또한 `#[verifier::fip(strict)]` | `#[verifier::fip(strict)]` 함수에서 할 수 있음 |
+
+`Op`는 vstd가 명세하는 trait 가운데 하나입니다. `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`, `BitAnd`,
+`BitOr`, `BitXor`, `Shl`, `Shr`, 이들의 `*Assign` 꼴, `Index`, `IndexMut`, `Deref`, `DerefMut`, `PartialEq`,
+`PartialOrd`, `Ord`입니다. 표시 trait은 원래 trait의 타입 매개변수를 가지고(`FipAdd<Rhs = Self>`,
+`FipIndex<Idx>`), 원래 trait의 상위 trait을 따릅니다. `FipOrd`는 `FipPartialOrd`와 `FipPartialEq`를,
+`FipIndexMut`는 `FipIndex`를 함축합니다.
+
+```rust
+use vstd::alloc_check::{FipOrd, FipStrictPartialEq};
+
+#[verifier::fip]
+fn lt_gen<T: FipOrd>(a: &T, b: &T) -> bool {
+    a < b
+}
+
+#[verifier::fip(strict)]
+fn eq_gen<T: FipStrictPartialEq>(a: &T, b: &T) -> bool {
+    a == b
+}
+```
+
+참조끼리의 비교(`a: &T`일 때 `a == b`)는 참조에 대한 std의 impl을 거쳐 `T`의 메서드를 부릅니다. 그래서
+`T`의 표시 trait이 이 비교도 다룹니다.
+
+vstd는 기본 정수 타입, `bool`, `char`에 대해 (그 타입이 구현하는 trait의) 표시 trait을 구현합니다. 이 impl은
+신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `FipStrictOp`)는 다음일 때만 받습니다. 같은
+타입을 같은 꼴로 적은 `X`의 `Op` impl을 Verus가 검사하고, 그 impl이 정의하는 메서드마다 `allocates 0`
+(리터럴 `0`)로 제한되어 있고, 위 단계에서는 `#[verifier::fip]`이나 `#[verifier::fip(strict)]`이어야 합니다.
+impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행하고, 그 본문은 trait 자신의 메서드만
+부릅니다. 파생 impl(`#[derive(PartialEq)]`)은 받지 않습니다. 다른 표시 trait처럼, `verus!` 밖의 impl이나
+`-V alloc-check`로 검증하지 않은 crate의 impl은 거부합니다.
+
+`Ord`가 제공하는 `max`, `min`, `clamp`는 `Self`의 값을 drop합니다. 그래서 `FbipOrd`에는 `AllocFreeDrop`이,
+`FipOrd`에는 `NoDeallocDrop`이 필요합니다. 그리고 엄격한 함수는 이 셋을 표시 trait을 통해 부를 수
+없습니다(거기서는 타입 매개변수의 소멸자를 알 수 없기 때문입니다).
+
+### 다른 crate에서 오는 콜백
+
+std, vstd, 다른 crate의 코드는 자신을 인스턴스화한 타입의 trait bound를 통해서만 이 crate의 함수를 부를 수
+있습니다. 제네릭 함수는 타입 인자의 메서드를 자신의 bound를 통해 부르기 때문입니다. Verus는 fip 함수 안의
+그런 함수 호출마다, 컴파일되는 프로그램의 MIR에서 다음을 합니다. callee의 bound를 호출의 타입 인자로
+인스턴스화하고, 그 상위 trait과 연관 타입의 bound를 더한 뒤, 그 bound가 고르는 impl을 찾습니다. std의
+impl이면 그 impl 자신의 bound로 이어 갑니다(`Vec<L>: PartialEq`에는 `L: PartialEq`가 필요합니다). 이렇게
+찾은 이 crate의 impl의 모든 함수와, `Fn` bound로 찾은 모든 클로저와 함수 항목은 되불릴 수 있습니다.
+
+* `#[verifier::fip]` 함수에서는 `#[verifier::fip]`이어야 합니다.
+* `#[verifier::fip(strict)]` 함수에서는 엄격한 함수여야 하고, 꼬리 호출이 아닌 호출로 칩니다.
+* 제3의 crate의 함수는 `-V alloc-check`로 검증·컴파일된 crate의 엄격한 함수여야 합니다.
+* impl을 알 수 없는 타입 매개변수의 bound는 그 trait의 연산자 표시 trait(`FipOp`, 엄격한 함수에서는
+  `FipStrictOp`)을 통해서만 받습니다. 엄격한 함수에서는 그런 콜백이 이 crate에 있는, 그 trait과 상위
+  trait의 impl의 모든 엄격한 메서드에 닿을 수 있다고 보고, 각각을 꼬리 호출이 아닌 호출로 칩니다.
+* 그 밖의 경우(`dyn`의 bound, 함수 포인터)는 거부합니다.
+
+`core::alloc::Allocator`의 bound는 위의 할당기 규칙에 맡깁니다. 콜백을 받는 std 함수의 호출은 대부분
+검증기의 검사가 이미 거부합니다. vstd 명세에 `deallocates_when` 조건이 없기 때문입니다. 이 검사는 그것에
+기대지 않고, 이 crate의 타입으로 인스턴스화한 다른 crate의 엄격한 함수도 다룹니다.
+
 ## 라이브러리와 다른 crate
 
 import한 crate의 상한은 그 crate가 다음 조건으로 검증되었을 때만 신뢰합니다.
@@ -692,8 +765,9 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
   신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다
 * `drop`이 아닌 `external_body` 함수, 그리고 `external_body` 타입(숨은 필드의 drop은 vstd가 선언한 std
   타입에 대해서만 신뢰)
-* crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자를 통해서만 사용자 코드에
-  닿고, 유한한 스택 공간을 씁니다. 이름으로 알아보되, 이 이름의 crate는 진짜일 때만 받습니다. `std`,
+* crate `std`, `core`, `alloc`, `vstd`, `verus_builtin`: 이들의 함수는 타입 인자의 trait bound를 통해서만
+  사용자 코드에 닿고(fip 검사가 이것을 따라갑니다. "다른 crate에서 오는 콜백" 참고), 유한한 스택 공간을
+  씁니다. 이름으로 알아보되, 이 이름의 crate는 진짜일 때만 받습니다. `std`,
   `core`, `alloc`은 toolchain의 sysroot에서 온 그 이름의 유일한 crate여야 합니다. `vstd`와
   `verus_builtin`은 Verus가 직접 `--extern vstd=..`, `--extern verus_builtin=..`으로 넘긴 파일이어야
   하고(`--no-vstd`에서는 어떤 의존 crate도 `vstd`라는 이름일 수 없음), 가져온 `vstd`는 vstd로 검증된
@@ -701,6 +775,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
   내부 테스트 모드에서는 넘기지 않으므로, 그때는 명령줄에 준 것을 신뢰합니다. -V alloc-check로 검증하는
   crate는 이 이름을 쓸 수 없습니다. 다만 `--is-vstd`로 검증하는 crate는 `vstd`입니다(그때는 자기
   `external_body` drop과 불투명 타입을 신뢰하며, `--no-cheating`은 `--is-vstd`를 거부합니다)
+* vstd가 기본 타입에 대해 제공하는 연산자 표시 trait(`FipAdd`, `FipOrd` 등)의 impl
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.

@@ -173,6 +173,21 @@ fn swap_ends<T: vstd::alloc_check::AllocFreeDrop>(xs: &mut [T])
 }
 ```
 
+연산자(`+`, `==`, `<`, 인덱싱 등)의 제네릭 호출은 impl을 알 수 없습니다. `core`의 연산자 trait에 대해 vstd는
+모든 impl이 무엇을 하는지 말하는 marker trait을 제공합니다. `FbipOp`(메서드가 할당하지 않음), `FipOp`(또한
+`#[verifier::fip]`), `FipStrictOp`(또한 strict)이고, 예를 들어 `FipAdd`, `FipPartialEq`, `FipOrd`가
+있습니다. vstd는 기본 타입에 대해 이들을 구현합니다. 제네릭 연산자 호출은 marker trait을 통해 합니다.
+
+```rust
+#[verifier::fip]
+fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
+    if a < b { b } else { a }
+}
+```
+
+직접 만든 타입에 marker trait을 구현하면, 그 타입의 연산자 impl을 Verus가 검사하고 그 메서드가
+`allocates 0`(그리고 fip이나 strict)일 때만 받습니다.
+
 ## 자주 만나는 거부
 
 | 코드 | 거부되는 이유 | 대신 |
@@ -182,6 +197,7 @@ fn swap_ends<T: vstd::alloc_check::AllocFreeDrop>(xs: &mut [T])
 | 어떤 경로에서 쓰지 않는 매개변수 | 함수 끝에서 drop됩니다 | 돌려주거나, 저장하거나, 결과에 옮겨 넣습니다 |
 | fip 함수 안의 `v.push(x)` | `push`는 커질 때 옛 버퍼를 해제할 수 있습니다 | `old(v)@.len() < spec_vec_capacity(&*old(v))`를 요구하거나, fip 함수 밖에서 미리 reserve합니다 |
 | `b`를 drop하는 `fn f<T>(a: T, b: T)` | `T`의 drop이 알려져 있지 않습니다 | `T: NoDeallocDrop` (strict 함수에서는 쓸 수 없습니다) |
+| `T: PartialEq`일 때 `a == b` | impl을 알 수 없는 제네릭 호출입니다 | `T: FipPartialEq` (strict 함수에서는 `FipStrictPartialEq`) |
 | strict 함수 안의 `count(n - 1, acc)` | 평범한 꼬리 호출은 여전히 스택을 키울 수 있습니다 | `become count(n - 1, acc)` |
 | strict 함수 안의 `len(t) + 1` | 꼬리 호출이 아닙니다 | 누산기와 `become`을 쓰거나 루프로 바꿉니다 |
 
@@ -216,8 +232,10 @@ fn fill(hole: &mut List, v: List)
 * **누수.** FP²의 함수는 소유한 칸을 정확히 한 번씩 씁니다. 여기서 `#[verifier::fip]`은 해제가 없다는 것만
   약속합니다. `mem::forget`은 허용되고, forget한 것은 샙니다.
 * **신뢰.** vstd에 있는 std 명세(`Vec::push`가 언제 해제할 수 있는지, 어떤 std 함수가 아무것도 drop하지 않는지)와
-  marker trait impl은 신뢰합니다. 스택 규칙은 `become`에 대한 rustc의 보장과, std와 vstd 함수가 유한한 스택을 쓴다는
-  가정을 신뢰합니다.
+  vstd의 marker trait impl(std 할당기와 기본 타입에 대한 것)은 신뢰합니다. std, vstd, 다른 crate의 함수 호출은 trait
+  bound를 따라가서, 그 함수가 되부를 수 있는 사용자 코드를 찾고, 그 코드가 fip(또는 strict)인지 검사합니다. 이 검사는
+  제네릭 코드가 타입 인자에 bound를 통해서만 닿는다는 점에 기댑니다. 스택 규칙은 `become`에 대한 rustc의 보장과,
+  std와 vstd 함수가 유한한 스택을 쓴다는 가정을 신뢰합니다.
 * **할당기.** 전역 할당기나 시스템 할당기가 아닌 할당기를 쓰는 컨테이너는, 그 할당기가 `FipAllocator`(strict
   함수에서는 `FipStrictAllocator`)를 구현할 때만 fip 함수에서 쓸 수 있습니다.
   [사용자 정의 할당기](./reference-allocates.ko.md)를 보세요.

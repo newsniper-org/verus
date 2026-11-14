@@ -62,11 +62,13 @@ What this changes for verified code:
 | Bound specifications | `T: Tr with { .. }` on type parameters, in `where` clauses, impls and structs | `fip-beta` | [Bound specifications](./reference-allocates.md#bound-specifications-t-tr-with---) |
 | Fully in-place functions (no deallocation) | `#[verifier::fip]` | `fip-beta` | [FIP and FBIP](./fip-fbip.md), [reference](./reference-allocates.md#fully-in-place-functions-verifierfip) |
 | Constant stack space | `#[verifier::fip(strict)]` with `become` | `fip-beta` | [reference](./reference-allocates.md#constant-stack-space-verifierfipstrict) |
+| Generic operator calls in fip code | `T: FipAdd`, `T: FipOrd`, ... (`FbipOp`, `FipOp`, `FipStrictOp` for each operator trait of `core`) | `fip-beta` | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
 | Stack-growth linter | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP and FBIP: Tools](./fip-fbip.md#tools) |
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |
 
 The new vstd items for these features are in `vstd::alloc_check` (marker traits such as
-`AllocFreeDrop`, `NoDeallocDrop`, `BoundedAllocator`, `FipAllocator`), `vstd::alloc_heap`, and
+`AllocFreeDrop`, `NoDeallocDrop`, `BoundedAllocator`, `FipAllocator`, and the operator markers
+such as `FipAdd` and `FipOrd`), `vstd::alloc_heap`, and
 `vstd::resource::impls::preorder_auth` (`PreorderAuth`, an authoritative state with an exclusive
 lower-bound fragment, which the allocator heap uses).
 

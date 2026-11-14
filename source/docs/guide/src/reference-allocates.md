@@ -534,7 +534,10 @@ Two things are checked:
   vector without a buffer grows by calling only its allocator's `allocate`, which does not
   deallocate for the global and the system allocator. For any other allocator, `allocate` is
   user code (see below). Calls of trait methods that do not resolve to an impl (generic calls),
-  and calls of closures, are rejected.
+  and calls of closures, are rejected, except generic calls of an operator trait's methods
+  through its marker (see "Operator traits" below). A call of a function of std, vstd or another
+  crate is also checked, on the MIR, for the functions of this crate it may call back (see
+  "Callbacks from other crates" below).
 * **Drops.** The compiler inserts drops that do not appear in the source. They are checked on
   the MIR of the compiled program, after ghost code is erased and after drop elaboration. A value
   may be dropped on a path that returns normally only if its type has no drop glue at all, or
@@ -585,16 +588,17 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 The calls of a strict function are checked on the MIR of the compiled program, after drop
 elaboration. This includes the destructors that its drops run.
 
-* A call may go to another strict function, or to std or vstd. Their functions do not call back
-  into the caller's code, because the calls that could do so (through callbacks) are rejected by
-  the checks above. A function of another crate may be called (also as the target of `become`)
-  only if it is strict and its crate was verified and compiled with `-V alloc-check` and
-  imported with its library file (see "Libraries and other crates"): that compilation checked it
-  and everything it reaches. It can call back into this crate only through a user allocator it is
-  instantiated with (`A: FipStrictAllocator`, whose strict methods are this crate's): such a call
-  counts as using a user allocator, so the allocator's methods may not reach it (below). Calls of
-  other functions of other crates, and calls whose callee is not known (generic calls, function
-  values), are rejected.
+* A call may go to another strict function, or to std or vstd. A function of another crate may
+  be called (also as the target of `become`) only if it is strict and its crate was verified and
+  compiled with `-V alloc-check` and imported with its library file (see "Libraries and other
+  crates"): that compilation checked it and everything it reaches in its own crate. Such
+  functions reach this crate's code only through the trait bounds of what the call instantiates
+  them with. Those callbacks are followed and count as calls that are not tail calls (see
+  "Callbacks from other crates" below), except calls of a user allocator's methods: a call with a
+  user allocator (`A: FipStrictAllocator`, whose strict methods are this crate's) counts as using
+  a user allocator, so the allocator's methods may not reach it (below). Calls of other functions
+  of other crates, and calls whose callee is not known (function values, and generic calls other
+  than an operator trait's methods through `FipStrictOp`), are rejected.
 * Destructors count as calls: those that the function's drops run, and those of the types that
   a std or vstd call is instantiated with (std may drop such values inside the call, as
   `Vec::<T>::clear` does). The destructor of another crate's type is accepted on the same terms
@@ -692,6 +696,82 @@ The rewrite is not offered, and the warning says why, when:
 * several functions have different generic parameters, have more than one `decreases` expression
   each, or do not all have `allocates`.
 
+### Operator traits: `FipAdd`, `FipOrd`, ...
+
+A generic call of a trait method has no known impl. So `-V alloc-check` can bound it only through
+the caller's own bound (`call_allocates`), and a fip function cannot make it at all. For the
+operator traits of `core`, vstd has unsafe marker traits that say what every impl of the trait for
+a type does. For each operator trait `Op` there are three, each a supertrait of the next:
+
+| Marker | The methods of `X`'s `Op` impl | A generic call through `T: Marker` |
+|---|---|---|
+| `FbipOp` | are bounded by `allocates 0` | is charged 0 |
+| `FipOp` | are also `#[verifier::fip]` | may be made in a `#[verifier::fip]` function |
+| `FipStrictOp` | are also `#[verifier::fip(strict)]` | may be made in a `#[verifier::fip(strict)]` function |
+
+`Op` is one of the traits that vstd specifies: `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`,
+`BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, their `*Assign` forms, `Index`, `IndexMut`, `Deref`,
+`DerefMut`, `PartialEq`, `PartialOrd` and `Ord`. A marker has the type parameters of its trait
+(`FipAdd<Rhs = Self>`, `FipIndex<Idx>`) and follows its supertraits: `FipOrd` implies
+`FipPartialOrd` and `FipPartialEq`, and `FipIndexMut` implies `FipIndex`.
+
+```rust
+use vstd::alloc_check::{FipOrd, FipStrictPartialEq};
+
+#[verifier::fip]
+fn lt_gen<T: FipOrd>(a: &T, b: &T) -> bool {
+    a < b
+}
+
+#[verifier::fip(strict)]
+fn eq_gen<T: FipStrictPartialEq>(a: &T, b: &T) -> bool {
+    a == b
+}
+```
+
+A comparison of references (`a == b` with `a: &T`) runs std's impl for references, which calls
+`T`'s method, so the marker of `T` covers it.
+
+vstd implements the markers for the primitive integer types, `bool` and `char` (for the traits
+they implement); these impls are trusted. Any other `unsafe impl FbipOp for X` (or `FipOp`,
+`FipStrictOp`) is accepted only if `X`'s `Op` impl, for the same type written the same way, is
+checked by Verus, and each method that impl defines is bounded by `allocates 0` (a literal `0`)
+and, for the higher levels, is `#[verifier::fip]` or `#[verifier::fip(strict)]`. A method that the
+impl does not define runs `core`'s provided body, which calls only the trait's own methods. A
+derived impl (`#[derive(PartialEq)]`) is not accepted. As for the other markers, an impl outside
+`verus!`, or in a crate that was not verified with `-V alloc-check`, is rejected.
+
+`Ord`'s provided `max`, `min` and `clamp` drop a value of `Self`. So `FbipOrd` needs
+`AllocFreeDrop` and `FipOrd` needs `NoDeallocDrop`, and a strict function cannot call them
+through a marker (the destructor of a type parameter is not known there).
+
+### Callbacks from other crates
+
+The code of std, vstd or another crate can call this crate's functions only through the trait
+bounds of what it is instantiated with: a generic function calls the methods of its type
+arguments through its bounds. For every call of such a function in a fip function, Verus takes
+the callee's bounds on the MIR of the compiled program, instantiates them with the call's type
+arguments, adds their supertraits and the bounds of their associated types, and finds the impls
+they select. For an impl of std it continues with the impl's own bounds (`Vec<L>: PartialEq`
+needs `L: PartialEq`). Every function of an impl of this crate found this way, and every closure
+or function item found through an `Fn` bound, may be called back:
+
+* in a `#[verifier::fip]` function, it must be `#[verifier::fip]`;
+* in a `#[verifier::fip(strict)]` function, it must be strict, and it counts as a call that is not
+  a tail call;
+* a function of a third crate must be a strict function of a crate that was verified and compiled
+  with `-V alloc-check`;
+* a bound on a type parameter, whose impl is not known, is accepted only through the operator
+  marker of its trait (`FipOp`, or `FipStrictOp` in a strict function). In a strict function, such
+  a callback may reach any strict method of this crate's impls of that trait and of its
+  supertraits; each counts as a call that is not a tail call;
+* anything else (a bound on `dyn`, a function pointer) is rejected.
+
+The bounds of `core::alloc::Allocator` are left to the allocator rules above. The verifier's
+checks already reject most calls of std functions that take callbacks, since their vstd
+specifications have no `deallocates_when` condition. This check does not depend on that, and it
+also covers strict functions of other crates that are instantiated with this crate's types.
+
 ## Libraries and other crates
 
 A bound in an imported crate is trusted only if that crate was verified with `-V alloc-check`,
@@ -736,7 +816,8 @@ What `-V alloc-check` trusts:
 * `external_body` functions other than `drop`, and `external_body` types (their hidden fields'
   drops are trusted only for std types that vstd declares);
 * the crates `std`, `core`, `alloc`, `vstd` and `verus_builtin`: their functions reach user code
-  only through their type arguments, and use bounded stack space. They are recognized by name,
+  only through the trait bounds of their type arguments (which the fip checks follow, see
+  "Callbacks from other crates"), and use bounded stack space. They are recognized by name,
   and a crate of one of these names is accepted only if it is the real one: `std`, `core` and
   `alloc` from the toolchain's sysroot, each the only crate of its name; `vstd` and
   `verus_builtin` from the files that Verus itself gives with `--extern vstd=..` and
@@ -747,6 +828,7 @@ What `-V alloc-check` trusts:
   cannot take one of these names, except that a crate verified with `--is-vstd` is `vstd` (it
   then trusts its own `external_body` drops and opaque types; `--no-cheating` rejects
   `--is-vstd`);
+* vstd's impls of the operator markers (`FipAdd`, `FipOrd`, ...) for the primitive types;
 * the toolchain's std (its trusted drops and opaque types).
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not

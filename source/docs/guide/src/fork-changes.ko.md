@@ -56,11 +56,12 @@ that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변�
 | bound 명세 | 타입 매개변수, `where` 절, impl, struct의 `T: Tr with { .. }` | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "bound 명세" 절 |
 | 완전한 제자리 함수 (해제 없음) | `#[verifier::fip]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
 | 상수 스택 공간 | `become`과 함께 `#[verifier::fip(strict)]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
+| fip 코드의 제네릭 연산자 호출 | `T: FipAdd`, `T: FipOrd` 등 (`core`의 연산자 trait마다 `FbipOp`, `FipOp`, `FipStrictOp`) | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |
 | 스택 증가 린터 | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md)의 "도구" 절 |
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 
 이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop`, `BoundedAllocator`,
-`FipAllocator` 같은 marker trait), `vstd::alloc_heap`, `vstd::resource::impls::preorder_auth`에 있습니다.
+`FipAllocator` 같은 marker trait, 그리고 `FipAdd`, `FipOrd` 같은 연산자 marker), `vstd::alloc_heap`, `vstd::resource::impls::preorder_auth`에 있습니다.
 `PreorderAuth`는 권위 있는 상태와 배타적인 하한 조각을 짝지은 것으로, 할당기 heap이 씁니다.
 
 ## 새 옵션 없이도 적용되는 변경
