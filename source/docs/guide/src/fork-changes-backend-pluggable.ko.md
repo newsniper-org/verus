@@ -48,10 +48,15 @@ adsmt는 증명한 질의마다 인증서를 쓸 수 있습니다. 이 브랜치
   기본 출력 디렉터리는 `$ADSMT_CERT_DIR/emit-isabelle`(또는 `emit-rocq`)입니다. `adsmt-emit` 실행 파일은
   `VERUS_ADSMT_EMIT_PATH`로 지정합니다. `adsmt-emit`과 그 emitter가 설치되어 있어야 합니다.
 
+  **알려진 문제, 고쳐지지 않음:** Isabelle emitter는 인증서의 가정을 모두 공리로 씁니다. 반박에 의한 증명에서
+  그 가정들에는 부정한 목표가 들어 있고, 모두 함께는 충족될 수 없습니다. 그래서 emitter가 쓰는 theory는
+  모순이고, 어떤 명제든 증명합니다. adsmt에 보고했습니다. 고쳐지기 전까지 emit된 theory는 무엇이 성립한다는
+  근거가 되지 못하고, 다른 개발에 가져다 쓰면 안 됩니다.
+
 ## 그 밖의 adsmt 옵션
 
-* `-V emit-lukb`: 각 질의를 `.lukb` 파일(adsmt 자체의 입력 언어)로도 로그 디렉터리의 `.smt2` 로그 옆에
-  씁니다. 아직 표현할 수 없는 구성은 `#` 주석이 됩니다. `.lukb` 파일은 기록일 뿐이고, 판정은 여전히 SMT-LIB
+* `-V emit-lukb`: 각 질의를 `.lukb` 파일(adsmt 자체의 입력 언어)로도 로그 디렉터리(`--log-dir`, 기본값은
+  `.verus-log`)에 씁니다. 아직 표현할 수 없는 구성은 `#` 주석이 됩니다. `.lukb` 파일은 기록일 뿐이고, 판정은 여전히 SMT-LIB
   질의에서 나옵니다.
 * `-V jit-trace-load=<path>`(또는 `VERUS_ADSMT_JIT_TRACE`)와 `VERUS_ADSMT_AOT_LUART`: replay trace와 미리
   컴파일한 prelude를 adsmt에 넘깁니다(`--jit-trace-load`, `--aot-load`). adsmt가 답하는 속도를 바꾸려는
@@ -65,7 +70,8 @@ adsmt는 증명한 질의마다 인증서를 쓸 수 있습니다. 이 브랜치
 
 * `scripts/`: `aot-bake-prelude.sh`(위 참고), `a2-abduction-regression.sh`(`scripts/a2-fixtures/`의 fixture로
   `-V request-abductive-on-unknown`을 회귀 검사), `snapshot-status.sh`(fork 작업자를 위한 진행 상황
-  스냅숏). `justfile`에는 이것들과 fork 자체의 기록 관리를 위한 recipe가 있습니다. `examples/consumer/`는 이
+  스냅숏). `justfile`은 첫째와 마지막을 실행하고(`just aot-bake-prelude`, `just status`), fork 자체의 기록
+  관리를 위한 recipe도 있습니다. `examples/consumer/`는 이
   fork를 여러 backend와 함께 쓰는 프로젝트를 위한 `justfile`입니다.
 * `docs/roadmap-interactive-tooling.md`: backend 위에 올릴 대화형 도구의 계획입니다.
 * `.local-*` 디렉터리와 `.claude-memories/`에는 작업 메모와 adsmt 프로젝트와 주고받은 기록(요청, 회신, 재현
