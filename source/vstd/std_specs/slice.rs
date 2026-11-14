@@ -573,14 +573,23 @@ pub uninterp spec fn slice_sort_unstable_allocates<T>(s: Seq<T>) -> int;
 /// What `<[T]>::binary_search` on `s` for `x` allocates (0 for `T: FbipOrd`)
 pub uninterp spec fn slice_binary_search_allocates<T>(s: Seq<T>, x: &T) -> int;
 
+/// `s` is sorted by `T`'s `cmp_spec` (each element is not `Greater` than any later one)
+pub open spec fn spec_sorted_by_cmp<T: Ord>(s: Seq<T>) -> bool {
+    crate::relations::sorted_by(
+        s,
+        |a: T, b: T| <T as super::cmp::OrdSpec>::cmp_spec(&a, &b) != core::cmp::Ordering::Greater,
+    )
+}
+
 // The elements end up permuted (it sorts in place, by `T::lt`), so none is dropped on a normal
-// return. (Whether they are sorted depends on `Ord` being a total order, which is not specified
-// here.)
+// return. They are sorted when `T`'s comparisons are a total order (`laws_cmp::obeys_cmp`); for
+// other `Ord`s, std leaves the order unspecified and may panic.
 #[verifier::alloc_check_skip_drops]
 pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](slice: &mut [T])
     ensures
         final(slice)@.len() == old(slice)@.len(),
         final(slice)@.to_multiset() == old(slice)@.to_multiset(),
+        crate::laws_cmp::obeys_cmp::<T>() ==> spec_sorted_by_cmp(final(slice)@),
     allocates
         deallocates_when(
             if crate::alloc_check::ord_is_fbip::<T>() {
@@ -592,6 +601,9 @@ pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](slice: &mut [T])
         ),
 ;
 
+// `binary_search(x)` is `binary_search_by(|p| p.cmp(x))`. On a slice sorted by a total order:
+// `Ok(i)` for some `i` with `slice[i] == x` (which one, if several, is unspecified), and
+// otherwise `Err(i)` for the point where `x` could be inserted keeping the order.
 #[verifier::alloc_check_skip_drops]
 pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> (r: Result<
     usize,
@@ -603,6 +615,19 @@ pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> 
                 ==> <T as super::cmp::OrdSpec>::cmp_spec(&slice@[i as int], x)
                 == core::cmp::Ordering::Equal),
             Err(i) => i <= slice@.len(),
+        },
+        crate::laws_cmp::obeys_cmp::<T>() && spec_sorted_by_cmp(slice@) ==> match r {
+            Ok(i) => true,
+            Err(i) => {
+                &&& forall|j: int|
+                    0 <= j < i ==> #[trigger] <T as super::cmp::OrdSpec>::cmp_spec(&slice@[j], x)
+                        == core::cmp::Ordering::Less
+                &&& forall|j: int|
+                    i <= j < slice@.len() ==> #[trigger] <T as super::cmp::OrdSpec>::cmp_spec(
+                        &slice@[j],
+                        x,
+                    ) == core::cmp::Ordering::Greater
+            },
         },
     allocates
         deallocates_when(

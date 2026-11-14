@@ -1593,3 +1593,51 @@ test_verify_one_file! {
         }
     } => Err(err) => assert_fails(err, 3)
 }
+
+test_verify_one_file! {
+    #[test] test_sort_unstable_binary_search verus_code! {
+        use vstd::prelude::*;
+        use vstd::std_specs::cmp::OrdSpec;
+        use vstd::std_specs::slice::spec_sorted_by_cmp;
+
+        fn sort_then_search(s: &mut [u64], x: u64) -> (r: bool)
+            ensures
+                forall|i: int, j: int| 0 <= i < j < final(s)@.len() ==> final(s)@[i] <= final(s)@[j],
+                final(s)@.to_multiset() == old(s)@.to_multiset(),
+                r <==> final(s)@.contains(x),
+        {
+            broadcast use vstd::laws_cmp::group_laws_cmp;
+            s.sort_unstable();
+            assert forall|i: int, j: int| 0 <= i < j < s@.len() implies s@[i] <= s@[j] by {
+                assert(spec_sorted_by_cmp(s@));
+                let le = |a: u64, b: u64| a.cmp_spec(&b) != core::cmp::Ordering::Greater;
+                assert(le(s@[i], s@[j]));
+            }
+            match s.binary_search(&x) {
+                Ok(i) => {
+                    assert(s@[i as int] == x);
+                    true
+                }
+                Err(i) => {
+                    assert forall|j: int| 0 <= j < s@.len() implies s@[j] != x by {
+                        assert(s@[j].cmp_spec(&x) != core::cmp::Ordering::Equal);
+                    }
+                    false
+                }
+            }
+        }
+
+        fn unsorted_search(s: &[u64], x: u64) {
+            broadcast use vstd::laws_cmp::group_laws_cmp;
+            match s.binary_search(&x) {
+                Ok(i) => assert(s@[i as int] == x),
+                Err(i) => assert(!s@.contains(x)), // FAILS
+            }
+        }
+
+        fn no_order<T: Ord>(s: &mut [T]) {
+            s.sort_unstable();
+            assert(spec_sorted_by_cmp(s@)); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}

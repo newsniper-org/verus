@@ -677,10 +677,16 @@ verus! {
 // `<[T]>::contains`, `<[T]>::sort_unstable`, ...): such a function deallocates only if a
 // comparison it makes does, and allocates only what its comparisons allocate.
 /// `T`'s `PartialEq<Rhs>` methods neither allocate nor deallocate (`T: FipPartialEq<Rhs>`)
-pub uninterp spec fn partial_eq_is_fip<T: core::marker::PointeeSized, Rhs: core::marker::PointeeSized>() -> bool;
+pub uninterp spec fn partial_eq_is_fip<
+    T: core::marker::PointeeSized,
+    Rhs: core::marker::PointeeSized,
+>() -> bool;
 
 /// `T`'s `PartialOrd<Rhs>` methods neither allocate nor deallocate (`T: FipPartialOrd<Rhs>`)
-pub uninterp spec fn partial_ord_is_fip<T: core::marker::PointeeSized, Rhs: core::marker::PointeeSized>() -> bool;
+pub uninterp spec fn partial_ord_is_fip<
+    T: core::marker::PointeeSized,
+    Rhs: core::marker::PointeeSized,
+>() -> bool;
 
 /// `T`'s `Ord` methods neither allocate nor deallocate, and neither does dropping a `T`
 /// (`T: FipOrd`)

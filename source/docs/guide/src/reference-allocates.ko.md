@@ -726,9 +726,11 @@ fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
 대상은 `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable`, `binary_search`, `Option`의 `eq`,
 `partial_cmp`, `cmp`, 참조끼리의 비교, `Range::contains`, `RangeInclusive::contains`, 그리고 `cmp::min`,
 `cmp::max`입니다. 마지막 둘을 뺀 나머지는 아무것도 drop하지 않으므로(`#[verifier::alloc_check_skip_drops]`),
-엄격한 함수도 `FipStrictOp`를 통해 부를 수 있습니다. (vstd는 `sort_unstable`과 `binary_search`에 약한 명세만
-줍니다. 결과는 입력의 순열이고, 인덱스는 범위 안에 있다는 것입니다. 할당량은 타입이 `FbipOrd`가 아니면
-해석되지 않는 항입니다.) vstd는 `Option<T>`와 참조에 대해서도, `T`(참조 대상)가 비교 표시 trait을 가지면
+엄격한 함수도 `FipStrictOp`를 통해 부를 수 있습니다. (`sort_unstable`의 결과는 입력의 순열이고, `T`의 비교가
+전순서이면(`vstd::laws_cmp::obeys_cmp::<T>()`) `cmp_spec`으로 정렬되어 있습니다. 그렇게 정렬된 slice에서
+`binary_search`는 원소가 `Equal`로 비교되는 `i`에 대해 `Ok(i)`를 돌려주거나, `i` 앞의 원소는 모두 `Less`이고
+`i`부터의 원소는 모두 `Greater`인 `Err(i)`를 돌려줍니다. 비교를 몇 번 하는지는 정해져 있지 않아서, 할당량은
+타입이 `FbipOrd`가 아니면 해석되지 않는 항입니다.) vstd는 `Option<T>`와 참조에 대해서도, `T`(참조 대상)가 비교 표시 trait을 가지면
 그 표시 trait을 구현합니다. 표시 trait이 없는 타입은, 비교가 fip이더라도 거짓임을 보일 수 있는
 `deallocates_when`을 얻지 못합니다. 그런 타입에는 표시 trait을 주세요.
 

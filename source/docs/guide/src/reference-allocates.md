@@ -772,9 +772,12 @@ These are `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable` and `bi
 `Option`'s `eq`, `partial_cmp` and `cmp`, the comparisons of references, `Range::contains` and
 `RangeInclusive::contains`, and `cmp::min` and `cmp::max`. All but the last two drop nothing
 (`#[verifier::alloc_check_skip_drops]`), so a strict function may call them too, through
-`FipStrictOp`. (vstd gives `sort_unstable` and `binary_search` only weak specifications: the
-result is a permutation of the input, and the index is in bounds; their allocations are an
-uninterpreted term unless the type is `FbipOrd`.) vstd also implements the comparison markers for
+`FipStrictOp`. (`sort_unstable`'s result is a permutation of its input, and
+sorted by `cmp_spec` when `T`'s comparisons are a total order, `vstd::laws_cmp::obeys_cmp::<T>()`.
+On a slice so sorted, `binary_search` returns `Ok(i)` for an `i` whose element compares `Equal`,
+or `Err(i)` with every element before `i` `Less` and every element from `i` on `Greater`. How
+many comparisons they make is not specified, so their allocations are an uninterpreted term
+unless the type is `FbipOrd`.) vstd also implements the comparison markers for
 `Option<T>` and for references, when `T` (the referent) has them. A type without a marker gets
 no `deallocates_when` that it can show false, even if its comparisons are fip: give it the
 marker.
