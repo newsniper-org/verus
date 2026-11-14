@@ -507,10 +507,14 @@ fn push_spare(v: &mut Vec<u64>)
   재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 할당기의 `allocate`만 불러서
   키웁니다. 전역 할당기와 시스템 할당기의 `allocate`는 해제하지 않습니다. 다른 할당기의 `allocate`는
   사용자 코드입니다(아래 참고).
-  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)과 클로저 호출은 거부합니다. 다만 연산자 trait의
-  메서드를 그 표시 trait을 통해 부르는 제네릭 호출은 받습니다(아래 "연산자 trait" 참고). std, vstd, 다른
-  crate의 함수 호출은 그 함수가 이 crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른
-  crate에서 오는 콜백" 참고).
+  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)은 그 메서드의 선언이 `#[verifier::fip]`이거나, 연산자
+  trait의 메서드를 그 표시 trait을 통해 부를 때만 허용합니다(아래 "연산자 trait" 참고). 선언에 붙은 이 속성은
+  계약입니다. 그 메서드의 모든 구현도 `#[verifier::fip]`여야 하고(strict 선언이면
+  `#[verifier::fip(strict)]`) 그래야 구현의 호출과 drop이 검사됩니다. Verus가 검사하지 않는 구현은
+  거부합니다(`allocates` 상한이 있는 선언과 같습니다). 기본 본문은 선언된 곳에서 검사합니다. 클로저 호출은
+  거부합니다. (strict 함수는 연산자 trait의 strict 표시 trait을 통해서만 제네릭 호출을 할 수 있습니다. 그
+  밖에는 호출 대상의 스택 사용을 알 수 없기 때문입니다.) std, vstd, 다른 crate의 함수 호출은 그 함수가 이
+  crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른 crate에서 오는 콜백" 참고).
 * **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
   검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
   drop되는 값은 타입에 drop glue가 아예 없거나, unsafe 표시 trait `vstd::alloc_check::NoDeallocDrop`을

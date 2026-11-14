@@ -1987,3 +1987,147 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+// `#[verifier::fip]` on a trait method declaration is a contract: a generic call of the method
+// is accepted in a fip function, and every implementation must be `#[verifier::fip]` itself, so
+// that its calls and its drops are checked. (Before, the generic call was accepted while an
+// implementation without the attribute was not checked: it could free memory.)
+test_verify_one_file_with_options! {
+    #[test] fip_trait_method_contract_accepted ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait T {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64;
+
+            // a default body is checked where it is declared
+            #[verifier::fip]
+            fn g(&self, x: u64) -> (r: u64) {
+                x
+            }
+        }
+
+        pub struct S;
+
+        impl T for S {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64 {
+                x / 2
+            }
+        }
+
+        #[verifier::fip]
+        pub fn generic<A: T>(a: &A, x: u64) -> u64 {
+            a.f(x)
+        }
+
+        #[verifier::fip]
+        pub fn caller(x: u64) -> u64 {
+            generic(&S, x)
+        }
+
+        // the inherited default body of a concrete type
+        #[verifier::fip]
+        pub fn inherited(s: &S, x: u64) -> u64 {
+            s.g(x)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_method_impl_without_attribute_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait T {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64;
+        }
+
+        pub struct S;
+
+        impl T for S {
+            // not fip, and it frees a box
+            fn f(&self, x: u64) -> u64 {
+                let b: Option<Box<u64>> = None;
+                x
+            }
+        }
+
+        #[verifier::fip]
+        pub fn generic<A: T>(a: &A, x: u64) -> u64 {
+            a.f(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the implementation must be `#[verifier::fip]` too")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_method_impl_that_frees_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait T {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64;
+        }
+
+        pub struct S;
+
+        impl T for S {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64 {
+                let b: Option<Box<u64>> = None;
+                x
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_trait_method_impl_must_be_strict ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait T {
+            #[verifier::fip(strict)]
+            fn f(&self, x: u64) -> u64;
+        }
+
+        pub struct S;
+
+        impl T for S {
+            #[verifier::fip]
+            fn f(&self, x: u64) -> u64 {
+                x
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the implementation must be `#[verifier::fip(strict)]` too")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_method_default_body_that_frees_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait K {
+            #[verifier::fip]
+            fn m(&self, x: u64) -> (r: u64) {
+                let b: Option<Box<u64>> = None;
+                x
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+// The guide's example of a generic call of a fip trait method (fip-fbip.md, "Generic code").
+test_verify_one_file_with_options! {
+    #[test] fip_guide_trait_method_example ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Shape {
+            #[verifier::fip]
+            fn area(&self) -> u64;
+        }
+
+        #[verifier::fip]
+        fn double<S: Shape>(s: &S) -> (r: u64) {
+            s.area().wrapping_mul(2)
+        }
+    } => Ok(())
+}

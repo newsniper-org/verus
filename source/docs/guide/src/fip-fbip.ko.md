@@ -158,6 +158,21 @@ fn first<T: vstd::alloc_check::NoDeallocDrop>(a: T, b: T) -> (r: T) {
 }
 ```
 
+타입 매개변수에 대한 trait 메서드 호출은 그 메서드가 `#[verifier::fip]`로 선언되어 있으면 fip 함수에서 쓸 수
+있습니다. 이때 모든 구현에도 같은 속성이 있어야 합니다.
+
+```rust
+pub trait Shape {
+    #[verifier::fip]
+    fn area(&self) -> u64;
+}
+
+#[verifier::fip]
+fn double<S: Shape>(s: &S) -> (r: u64) {
+    s.area().wrapping_mul(2)
+}
+```
+
 strict 함수는 그런 drop이 어떤 소멸자를 실행하는지도 알아야 합니다. 그래서 타입 매개변수의 값은 아예 drop할 수
 없습니다(`Copy` bound가 있으면 소멸자가 없습니다). 그래도 값을 drop하지 않고 옮기기만 하는 std 함수는 부를 수
 있습니다. `mem::swap`, `mem::replace`, slice와 `Vec`의 뷰 함수들이 그렇습니다.

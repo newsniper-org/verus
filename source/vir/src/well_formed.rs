@@ -1768,6 +1768,31 @@ fn check_function_inner(
         }
     }
 
+    // -V alloc-check: `#[verifier::fip]` (or `fip(strict)`) on a trait method declaration is a
+    // contract of every implementation. A generic call of such a method is accepted in a fip
+    // function (`fip_call_check`: the callee, the declaration, is fip), so an implementation that
+    // is not fip itself (its calls and its drops unchecked) would make that call unsound.
+    if let FunctionKind::TraitMethodImpl { method, .. } = &function.x.kind {
+        if let Some(decl) = ctxt.funs.get(method) {
+            let need = if decl.x.attrs.fip_strict && !function.x.attrs.fip_strict {
+                Some("#[verifier::fip(strict)]")
+            } else if decl.x.attrs.fip && !function.x.attrs.fip {
+                Some("#[verifier::fip]")
+            } else {
+                None
+            };
+            if let Some(attr) = need {
+                return Err(error(
+                    &function.span,
+                    format!(
+                        "this implements `{}`, which is declared `{attr}`: the implementation must be `{attr}` too (a generic call of the method in a fip function relies on every implementation)",
+                        crate::ast_util::fun_as_friendly_rust_name(method),
+                    ),
+                ));
+            }
+        }
+    }
+
     // A user's `Allocator::grow` (`grow_zeroed`, `shrink`) must move the old block's contents into
     // the new one (std's containers rely on it), which Verus cannot check: the permissions of raw
     // memory (`PointsToRaw`) do not say what it holds. So such an impl is trusted, as

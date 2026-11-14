@@ -743,6 +743,10 @@ pub fn inherit_default_bodies(
                         // that VIR drops; for a generic impl, assume so
                         alloc_unmodeled_bounds: !trait_impl.x.typ_params.is_empty()
                             || default_function.x.attrs.alloc_unmodeled_bounds,
+                        // the copy runs the default method's body, which is checked as fip (or
+                        // strict) where it is declared
+                        fip: default_function.x.attrs.fip,
+                        fip_strict: default_function.x.attrs.fip_strict,
                         ..crate::ast::FunctionAttrsX::default()
                     }),
                     body: None,

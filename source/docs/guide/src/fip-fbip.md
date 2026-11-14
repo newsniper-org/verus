@@ -163,6 +163,21 @@ fn first<T: vstd::alloc_check::NoDeallocDrop>(a: T, b: T) -> (r: T) {
 }
 ```
 
+A fip function may call a trait method on a type parameter if the method is declared
+`#[verifier::fip]`. Every implementation must then carry the attribute too:
+
+```rust
+pub trait Shape {
+    #[verifier::fip]
+    fn area(&self) -> u64;
+}
+
+#[verifier::fip]
+fn double<S: Shape>(s: &S) -> (r: u64) {
+    s.area().wrapping_mul(2)
+}
+```
+
 A strict function must also know which destructors such a drop runs, so it cannot drop a value of
 a type parameter at all (a `Copy` bound rules out a destructor). It may still call the std
 functions that move values without dropping them, such as `mem::swap`, `mem::replace` and the

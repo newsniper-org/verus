@@ -533,11 +533,17 @@ Two things are checked:
   when it has to grow an existing buffer. Growing reallocates, which frees the old block. A
   vector without a buffer grows by calling only its allocator's `allocate`, which does not
   deallocate for the global and the system allocator. For any other allocator, `allocate` is
-  user code (see below). Calls of trait methods that do not resolve to an impl (generic calls),
-  and calls of closures, are rejected, except generic calls of an operator trait's methods
-  through its marker (see "Operator traits" below). A call of a function of std, vstd or another
-  crate is also checked, on the MIR, for the functions of this crate it may call back (see
-  "Callbacks from other crates" below).
+  user code (see below). A call of a trait method that does not resolve to an impl (a generic
+  call) is accepted only if the method's declaration is `#[verifier::fip]`, or if it calls an
+  operator trait's method through its marker (see "Operator traits" below). The attribute on a
+  declaration is a contract: every implementation of the method must be `#[verifier::fip]` too
+  (`#[verifier::fip(strict)]` for a strict declaration), so its calls and its drops are
+  checked, and an implementation that Verus does not check is rejected (as for a declaration
+  with an `allocates` bound). A default body is checked where it is declared. Calls of
+  closures are rejected. (A strict function makes a generic call only through an operator
+  trait's strict marker: otherwise its callee's stack use is not known.) A call of a function
+  of std, vstd or another crate is also checked, on the MIR, for the functions of this crate it
+  may call back (see "Callbacks from other crates" below).
 * **Drops.** The compiler inserts drops that do not appear in the source. They are checked on
   the MIR of the compiled program, after ghost code is erased and after drop elaboration. A value
   may be dropped on a path that returns normally only if its type has no drop glue at all, or
