@@ -426,6 +426,9 @@ pub unsafe trait StatefulAllocator: crate::alloc_check::BoundedAllocator {
 
 // ---- The cost and the heap after an allocator call, for any allocator type (the containers'
 // specifications use these; see `std_specs::vec`)
+// `std_specs` exists only under Verus (`vstd.rs`); the spec functions below that use these
+// are erased in a plain build of this crate.
+#[cfg(verus_keep_ghost)]
 use super::std_specs::rust_1_100::{allocator_allocate_cost, allocator_grow_cost};
 
 /// The allocations of `a.allocate(layout)` in heap `h`: at most the stateless cost, and at most
