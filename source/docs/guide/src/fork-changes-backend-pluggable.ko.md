@@ -76,3 +76,11 @@ adsmt는 증명한 질의마다 인증서를 쓸 수 있습니다. 이 브랜치
 * `docs/roadmap-interactive-tooling.md`: backend 위에 올릴 대화형 도구의 계획입니다.
 * `.local-*` 디렉터리와 `.claude-memories/`에는 작업 메모와 adsmt 프로젝트와 주고받은 기록(요청, 회신, 재현
   사례)이 있습니다. Verus의 동작에는 영향이 없습니다.
+
+## `backend-pluggable-inline-beta`
+
+`backend-pluggable-inline-beta` 브랜치는 `backend-pluggable-beta`에 *inline 증명*의 설계 메모를 더한 것입니다.
+inline 증명은 다른 언어로 된 증명 조각(자체 논리와 backend를 고른 SMT 질의, MaxSAT/MaxSMT, ASP, 대화형 증명기)을
+Verus 증명 안에 끼워 넣는 것입니다. 코드에 inline assembly를 끼워 넣는 것과 비슷합니다. 메모는
+`.local-backlog/inline-proof/`에 있습니다. 아직 논의 단계이고, adsmt의 입력 언어가 정해지기를 기다리고 있습니다.
+이 브랜치는 Verus를 바꾸지 않습니다.
