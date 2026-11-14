@@ -253,13 +253,13 @@ impl<A: PointeeSized + PartialOrd<Rhs>, Rhs: PointeeSized> PartialOrdIs<Rhs> for
 pub assume_specification<T: Ord>[ core::cmp::min ](v1: T, v2: T) -> (r: T)
     ensures
         call_ensures(T::min, (v1, v2), r),
-    allocates call_allocates(T::min, (v1, v2))
+    allocates deallocates_when(call_allocates(T::min, (v1, v2)), !crate::alloc_check::ord_is_fip::<T>())
 ;
 
 pub assume_specification<T: Ord>[ core::cmp::max ](v1: T, v2: T) -> (r: T)
     ensures
         call_ensures(T::max, (v1, v2), r),
-    allocates call_allocates(T::max, (v1, v2))
+    allocates deallocates_when(call_allocates(T::max, (v1, v2)), !crate::alloc_check::ord_is_fip::<T>())
 ;
 
 // `min_by` and `max_by` call `compare(&v1, &v2)` once. When it returns `Equal`,
@@ -473,23 +473,27 @@ where
 }
 
 // rustc 1.99.1: `PartialEq::eq(*self, *other)`
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialEq<&B>>::eq ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialEq<B>,
-    allocates call_allocates(<A as PartialEq<B>>::eq, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialEq<B>>::eq, (*a, *b)), !crate::alloc_check::partial_eq_is_fip::<A, B>())
 ;
 
 // rustc 1.99.1: `PartialEq::ne(*self, *other)`
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialEq<&B>>::ne ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialEq<B>,
-    allocates call_allocates(<A as PartialEq<B>>::ne, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialEq<B>>::ne, (*a, *b)), !crate::alloc_check::partial_eq_is_fip::<A, B>())
 ;
 
 impl<A: PointeeSized, B: PointeeSized> PartialOrdSpecImpl<&B> for &A
@@ -505,49 +509,59 @@ where
     }
 }
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::partial_cmp ](
     a: &&'a A,
     b: &&B,
 ) -> Option<core::cmp::Ordering>
 where
     A: PartialOrd<B>,
-    allocates call_allocates(<A as PartialOrd<B>>::partial_cmp, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialOrd<B>>::partial_cmp, (*a, *b)), !crate::alloc_check::partial_ord_is_fip::<A, B>())
 ;
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::lt ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialOrd<B>,
-    allocates call_allocates(<A as PartialOrd<B>>::lt, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialOrd<B>>::lt, (*a, *b)), !crate::alloc_check::partial_ord_is_fip::<A, B>())
 ;
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::le ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialOrd<B>,
-    allocates call_allocates(<A as PartialOrd<B>>::le, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialOrd<B>>::le, (*a, *b)), !crate::alloc_check::partial_ord_is_fip::<A, B>())
 ;
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::gt ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialOrd<B>,
-    allocates call_allocates(<A as PartialOrd<B>>::gt, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialOrd<B>>::gt, (*a, *b)), !crate::alloc_check::partial_ord_is_fip::<A, B>())
 ;
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'_0, 'a, A: PointeeSized, B: PointeeSized>[ <&'a A as PartialOrd<&B>>::ge ](
     a: &&'a A,
     b: &&B,
 ) -> bool
 where
     A: PartialOrd<B>,
-    allocates call_allocates(<A as PartialOrd<B>>::ge, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as PartialOrd<B>>::ge, (*a, *b)), !crate::alloc_check::partial_ord_is_fip::<A, B>())
 ;
 
 impl<A: PointeeSized + Ord> OrdSpecImpl for &A {
@@ -560,11 +574,13 @@ impl<A: PointeeSized + Ord> OrdSpecImpl for &A {
     }
 }
 
+// (forwards to `A`'s method by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<'a, A: PointeeSized + Ord>[ <&'a A as Ord>::cmp ](
     a: &&'a A,
     b: &&'a A,
 ) -> core::cmp::Ordering
-    allocates call_allocates(<A as Ord>::cmp, (*a, *b))
+    allocates deallocates_when(call_allocates(<A as Ord>::cmp, (*a, *b)), !crate::alloc_check::ord_is_fip::<A>())
 ;
 
 } // verus!

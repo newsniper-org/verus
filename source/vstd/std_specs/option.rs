@@ -363,16 +363,21 @@ impl<T: super::cmp::PartialEqSpec> super::cmp::PartialEqSpecImpl for Option<T> {
     }
 }
 
+// (compares by reference, drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T: PartialEq>[ <Option<T> as PartialEq>::eq ](
     x: &Option<T>,
     y: &Option<T>,
 ) -> bool
     allocates
-        if x.is_some() && y.is_some() {
-            call_allocates(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
-        } else {
-            0
-        },
+        deallocates_when(
+            if x.is_some() && y.is_some() {
+                call_allocates(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
+            } else {
+                0
+            },
+            !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+        ),
 ;
 
 // PartialOrd and Ord
@@ -391,16 +396,20 @@ impl<T: super::cmp::PartialOrdSpec> super::cmp::PartialOrdSpecImpl for Option<T>
     }
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T: PartialOrd>[ <Option<T> as PartialOrd>::partial_cmp ](
     x: &Option<T>,
     y: &Option<T>,
 ) -> Option<core::cmp::Ordering>
     allocates
-        if x.is_some() && y.is_some() {
-            call_allocates(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
-        } else {
-            0
-        },
+        deallocates_when(
+            if x.is_some() && y.is_some() {
+                call_allocates(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
+            } else {
+                0
+            },
+            !crate::alloc_check::partial_ord_is_fip::<T, T>(),
+        ),
 ;
 
 impl<T: super::cmp::OrdSpec> super::cmp::OrdSpecImpl for Option<T> {
@@ -418,16 +427,20 @@ impl<T: super::cmp::OrdSpec> super::cmp::OrdSpecImpl for Option<T> {
     }
 }
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T: Ord>[ <Option<T> as Ord>::cmp ](
     x: &Option<T>,
     y: &Option<T>,
 ) -> core::cmp::Ordering
     allocates
-        if x.is_some() && y.is_some() {
-            call_allocates(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
-        } else {
-            0
-        },
+        deallocates_when(
+            if x.is_some() && y.is_some() {
+                call_allocates(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
+            } else {
+                0
+            },
+            !crate::alloc_check::ord_is_fip::<T>(),
+        ),
 ;
 
 // ok_or

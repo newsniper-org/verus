@@ -134,6 +134,7 @@ pub uninterp spec fn std_step_alloc_free<A>() -> bool;
 /// obeys_partial_cmp_spec. Specifically, the comparison must be deterministic, and `lt` (less than)
 /// and `le` (less than or equal to) must define total orders.
 /// If using Range::contains with types that do not satisfy obeys_partial_cmp_spec, no spec is provided.
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
     r: &Range<Idx>,
     i: &U,
@@ -145,12 +146,17 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
 // rustc 1.99.1 `RangeBounds::contains`: `start <= item && item < end`
 
     allocates
-        call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocates(
-            <U as PartialOrd<Idx>>::lt,
-            (i, &r.end),
+        deallocates_when(
+            call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocates(
+                <U as PartialOrd<Idx>>::lt,
+                (i, &r.end),
+            ),
+            !(crate::alloc_check::partial_ord_is_fip::<Idx, U>()
+                && crate::alloc_check::partial_ord_is_fip::<U, Idx>()),
         ),
 ;
 
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contains ](
     r: &RangeInclusive<Idx>,
     i: &U,
@@ -164,11 +170,15 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
 // `start <= item && (if exhausted { item < start } else { item <= end })`
 
     allocates
-        call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
-            call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
-        } else {
-            call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
-        },
+        deallocates_when(
+            call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
+                call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
+            } else {
+                call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+            },
+            !(crate::alloc_check::partial_ord_is_fip::<Idx, U>()
+                && crate::alloc_check::partial_ord_is_fip::<U, Idx>()),
+        ),
 ;
 
 pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty ](

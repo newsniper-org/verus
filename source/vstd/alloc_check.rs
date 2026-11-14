@@ -164,6 +164,7 @@ pub broadcast axiom fn axiom_no_dealloc_drop<T: NoDeallocDrop + ?Sized>()
 
 pub broadcast group group_alloc_check_axioms {
     axiom_no_dealloc_drop,
+    group_op_marker_axioms,
 }
 
 unsafe impl NoDeallocDrop for () {
@@ -668,3 +669,198 @@ op_marker_impls!([
     FbipPartialEq, FipPartialEq, FipStrictPartialEq; FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd;
     FbipOrd, FipOrd, FipStrictOrd
 ] [char]);
+
+verus! {
+
+// The comparison markers at the level of specifications, for the `deallocates_when` conditions
+// and `allocates` bounds of std's functions that compare their arguments (`Option::eq`,
+// `<[T]>::contains`, `<[T]>::sort_unstable`, ...): such a function deallocates only if a
+// comparison it makes does, and allocates only what its comparisons allocate.
+/// `T`'s `PartialEq<Rhs>` methods neither allocate nor deallocate (`T: FipPartialEq<Rhs>`)
+pub uninterp spec fn partial_eq_is_fip<T: core::marker::PointeeSized, Rhs: core::marker::PointeeSized>() -> bool;
+
+/// `T`'s `PartialOrd<Rhs>` methods neither allocate nor deallocate (`T: FipPartialOrd<Rhs>`)
+pub uninterp spec fn partial_ord_is_fip<T: core::marker::PointeeSized, Rhs: core::marker::PointeeSized>() -> bool;
+
+/// `T`'s `Ord` methods neither allocate nor deallocate, and neither does dropping a `T`
+/// (`T: FipOrd`)
+pub uninterp spec fn ord_is_fip<T: core::marker::PointeeSized>() -> bool;
+
+/// `T`'s `Ord` methods (and those of its supertraits) allocate nothing, and neither does dropping
+/// a `T` (`T: FbipOrd`)
+pub uninterp spec fn ord_is_fbip<T: core::marker::PointeeSized>() -> bool;
+
+pub broadcast axiom fn axiom_partial_eq_is_fip<T: FipPartialEq<Rhs> + ?Sized, Rhs: ?Sized>()
+    ensures
+        #[trigger] partial_eq_is_fip::<T, Rhs>(),
+;
+
+pub broadcast axiom fn axiom_partial_ord_is_fip<T: FipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>()
+    ensures
+        #[trigger] partial_ord_is_fip::<T, Rhs>(),
+;
+
+pub broadcast axiom fn axiom_ord_is_fip<T: FipOrd + ?Sized>()
+    ensures
+        #[trigger] ord_is_fip::<T>(),
+;
+
+pub broadcast axiom fn axiom_ord_is_fbip<T: FbipOrd + ?Sized>()
+    ensures
+        #[trigger] ord_is_fbip::<T>(),
+;
+
+// `FbipOp`: the methods of `T`'s impl allocate nothing (each method the impl defines is bounded
+// by a literal `allocates 0`; the others run `core`'s provided bodies, which call only the
+// trait's own methods, and, for `Ord::{max, min, clamp}`, drop a `T`, which `AllocFreeDrop`
+// bounds)
+pub broadcast axiom fn axiom_fbip_eq<T: FbipPartialEq<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialEq<Rhs>>::eq, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_ne<T: FbipPartialEq<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialEq<Rhs>>::ne, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_partial_cmp<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(
+    a: &T,
+    b: &Rhs,
+)
+    ensures
+        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::partial_cmp, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_lt<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::lt, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_le<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::le, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_gt<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::gt, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_ge<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
+    ensures
+        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::ge, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_cmp<T: FbipOrd + ?Sized>(a: &T, b: &T)
+    ensures
+        #[trigger] call_allocates(<T as Ord>::cmp, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_max<T: FbipOrd>(a: T, b: T)
+    ensures
+        #[trigger] call_allocates(<T as Ord>::max, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_min<T: FbipOrd>(a: T, b: T)
+    ensures
+        #[trigger] call_allocates(<T as Ord>::min, (a, b)) == 0,
+;
+
+// vstd's impls for std's impls that compare through their type arguments (trusted: `Option`'s
+// comparisons compare the contents by reference, and the impls for references forward to the
+// referent's methods; `Option`'s drop is covered by its `AllocFreeDrop`/`NoDeallocDrop` impls)
+unsafe impl<T: FbipPartialEq> FbipPartialEq for Option<T> {
+
+}
+
+unsafe impl<T: FipPartialEq> FipPartialEq for Option<T> {
+
+}
+
+unsafe impl<T: FipStrictPartialEq> FipStrictPartialEq for Option<T> {
+
+}
+
+unsafe impl<T: FbipPartialOrd> FbipPartialOrd for Option<T> {
+
+}
+
+unsafe impl<T: FipPartialOrd> FipPartialOrd for Option<T> {
+
+}
+
+unsafe impl<T: FipStrictPartialOrd> FipStrictPartialOrd for Option<T> {
+
+}
+
+unsafe impl<T: FbipOrd> FbipOrd for Option<T> {
+
+}
+
+unsafe impl<T: FipOrd> FipOrd for Option<T> {
+
+}
+
+unsafe impl<T: FipStrictOrd> FipStrictOrd for Option<T> {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FbipPartialEq<B>, B: ?Sized> FbipPartialEq<&'b B> for &'a A {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FipPartialEq<B>, B: ?Sized> FipPartialEq<&'b B> for &'a A {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FipStrictPartialEq<B>, B: ?Sized> FipStrictPartialEq<
+    &'b B,
+> for &'a A {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FbipPartialOrd<B>, B: ?Sized> FbipPartialOrd<&'b B> for &'a A {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FipPartialOrd<B>, B: ?Sized> FipPartialOrd<&'b B> for &'a A {
+
+}
+
+unsafe impl<'a, 'b, A: ?Sized + FipStrictPartialOrd<B>, B: ?Sized> FipStrictPartialOrd<
+    &'b B,
+> for &'a A {
+
+}
+
+unsafe impl<'a, A: ?Sized + FbipOrd> FbipOrd for &'a A {
+
+}
+
+unsafe impl<'a, A: ?Sized + FipOrd> FipOrd for &'a A {
+
+}
+
+unsafe impl<'a, A: ?Sized + FipStrictOrd> FipStrictOrd for &'a A {
+
+}
+
+pub broadcast group group_op_marker_axioms {
+    axiom_partial_eq_is_fip,
+    axiom_partial_ord_is_fip,
+    axiom_ord_is_fip,
+    axiom_ord_is_fbip,
+    axiom_fbip_eq,
+    axiom_fbip_ne,
+    axiom_fbip_partial_cmp,
+    axiom_fbip_lt,
+    axiom_fbip_le,
+    axiom_fbip_gt,
+    axiom_fbip_ge,
+    axiom_fbip_cmp,
+    axiom_fbip_max,
+    axiom_fbip_min,
+}
+
+} // verus!

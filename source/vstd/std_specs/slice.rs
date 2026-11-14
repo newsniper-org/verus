@@ -370,6 +370,7 @@ pub open spec fn spec_slice_starts_with<T: PartialEq>(slice: &[T], needle: &[T])
 }
 
 #[verifier::when_used_as_spec(spec_slice_starts_with)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T: PartialEq>[ <[T]>::starts_with ](
     slice: &[T],
     needle: &[T],
@@ -380,11 +381,14 @@ pub assume_specification<T: PartialEq>[ <[T]>::starts_with ](
             slice,
             needle,
         )),
-    allocates if needle@.len() <= slice@.len() {
-        seq_ne_allocates(needle@, slice@.subrange(0, needle@.len() as int), needle@.len())
-    } else {
-        0
-    }
+    allocates deallocates_when(
+        if needle@.len() <= slice@.len() {
+            seq_ne_allocates(needle@, slice@.subrange(0, needle@.len() as int), needle@.len())
+        } else {
+            0
+        },
+        !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+    )
 ;
 
 // ends_with
@@ -400,6 +404,7 @@ pub open spec fn spec_slice_ends_with<T: PartialEq>(slice: &[T], needle: &[T]) -
 }
 
 #[verifier::when_used_as_spec(spec_slice_ends_with)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
     slice: &[T],
     needle: &[T],
@@ -410,15 +415,18 @@ pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
             slice,
             needle,
         )),
-    allocates if needle@.len() <= slice@.len() {
-        seq_ne_allocates(
-            needle@,
-            slice@.subrange(slice@.len() - needle@.len(), slice@.len() as int),
-            needle@.len(),
-        )
-    } else {
-        0
-    }
+    allocates deallocates_when(
+        if needle@.len() <= slice@.len() {
+            seq_ne_allocates(
+                needle@,
+                slice@.subrange(slice@.len() - needle@.len(), slice@.len() as int),
+                needle@.len(),
+            )
+        } else {
+            0
+        },
+        !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+    )
 ;
 
 impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {
@@ -547,12 +555,64 @@ pub open spec fn spec_slice_contains<T: PartialEq<T>>(slice: &[T], value: &T) ->
 }
 
 #[verifier::when_used_as_spec(spec_slice_contains)]
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ <[T]>::contains ] (slice: &[T], value: &T) -> (result: bool)
     where
         T: PartialEq<T>,
         ensures
             <T as super::cmp::PartialEqSpec<T>>::obeys_eq_spec() ==> result == spec_slice_contains(slice, value),
-        allocates seq_contains_allocates(slice@, value, slice@.len())
+        allocates deallocates_when(seq_contains_allocates(slice@, value, slice@.len()), !crate::alloc_check::partial_eq_is_fip::<T, T>())
+;
+
+// sort_unstable and binary_search (-V alloc-check: they compare their elements with `Ord`'s
+// methods, and do nothing else that allocates or deallocates; how many comparisons they make is
+// not specified, so their bounds are uninterpreted unless the comparisons allocate nothing)
+/// What `<[T]>::sort_unstable` on `s` allocates (0 for `T: FbipOrd`)
+pub uninterp spec fn slice_sort_unstable_allocates<T>(s: Seq<T>) -> int;
+
+/// What `<[T]>::binary_search` on `s` for `x` allocates (0 for `T: FbipOrd`)
+pub uninterp spec fn slice_binary_search_allocates<T>(s: Seq<T>, x: &T) -> int;
+
+// The elements end up permuted (it sorts in place, by `T::lt`), so none is dropped on a normal
+// return. (Whether they are sorted depends on `Ord` being a total order, which is not specified
+// here.)
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](slice: &mut [T])
+    ensures
+        final(slice)@.len() == old(slice)@.len(),
+        final(slice)@.to_multiset() == old(slice)@.to_multiset(),
+    allocates
+        deallocates_when(
+            if crate::alloc_check::ord_is_fbip::<T>() {
+                0
+            } else {
+                slice_sort_unstable_allocates(old(slice)@)
+            },
+            !crate::alloc_check::ord_is_fip::<T>(),
+        ),
+;
+
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> (r: Result<
+    usize,
+    usize,
+>)
+    ensures
+        match r {
+            Ok(i) => i < slice@.len() && (<T as super::cmp::OrdSpec>::obeys_cmp_spec()
+                ==> <T as super::cmp::OrdSpec>::cmp_spec(&slice@[i as int], x)
+                == core::cmp::Ordering::Equal),
+            Err(i) => i <= slice@.len(),
+        },
+    allocates
+        deallocates_when(
+            if crate::alloc_check::ord_is_fbip::<T>() {
+                0
+            } else {
+                slice_binary_search_allocates(slice@, x)
+            },
+            !crate::alloc_check::ord_is_fip::<T>(),
+        ),
 ;
 
 // reverse

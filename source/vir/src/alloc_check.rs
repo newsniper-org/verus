@@ -445,8 +445,8 @@ fn is_copy_trait(path: &Path) -> bool {
 }
 
 /// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
-/// (or `T: BoundedAllocator`, `FipAllocator`, `FipStrictAllocator` or `NoDeallocDrop`, whose
-/// supertraits include `AllocFreeDrop`)
+/// (or `T: BoundedAllocator`, `FipAllocator`, `FipStrictAllocator`, `NoDeallocDrop` or one of
+/// the `Ord` markers, whose supertraits include `AllocFreeDrop`)
 fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     let mut params = HashSet::new();
     for bound in bounds.iter() {
@@ -454,6 +454,8 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
             if is_alloc_free_drop_trait(path)
                 || is_copy_trait(path)
                 || implies_bounded_allocator(path)
+                // (`FbipOrd`, `FipOrd` and `FipStrictOrd` have `AllocFreeDrop` as a supertrait)
+                || op_marker(path).is_some_and(|(op, _)| op == "Ord")
                 || crate::ast_util::path_as_friendly_rust_name(path)
                     == "vstd::alloc_check::NoDeallocDrop"
             {
@@ -1207,7 +1209,7 @@ fn collect_expr_typs_in(
             }
             if let TypX::FnDef(fun, typ_args, _) = &**t {
                 if let Some(g) = lookup(fun) {
-                    if g.x.proxy.is_some() {
+                    if g.x.proxy.is_some() && !g.x.attrs.alloc_check_skip_drops {
                         let substs: HashMap<Ident, Typ> =
                             g.x.typ_params.iter().cloned().zip(typ_args.iter().cloned()).collect();
                         for p in g.x.params.iter() {
@@ -1225,7 +1227,9 @@ fn collect_expr_typs_in(
             }
             // A std function (one given a specification, which says nothing about drops) that
             // receives `&mut C` may drop values inside `C` (`Vec::clear`, `truncate`,
-            // `HashMap::clear`, ...), so the referent's type counts as droppable.
+            // `HashMap::clear`, ...), so the referent's type counts as droppable; unless vstd
+            // marks it `#[verifier::alloc_check_skip_drops]` (it drops none of them, as
+            // `<[T]>::sort_unstable`).
             if let ExprX::Call {
                 target: crate::ast::CallTarget::Fun(kind, fun, ..), args, ..
             } = &e.x
@@ -1234,8 +1238,10 @@ fn collect_expr_typs_in(
                 if let crate::ast::CallTargetKind::DynamicResolved { resolved, .. } = kind {
                     funs.push(resolved);
                 }
-                let std_callee =
-                    funs.iter().any(|f| lookup(*f).map_or(false, |g| g.x.proxy.is_some()));
+                let std_callee = funs.iter().any(|f| {
+                    lookup(*f)
+                        .map_or(false, |g| g.x.proxy.is_some() && !g.x.attrs.alloc_check_skip_drops)
+                });
                 if std_callee {
                     for a in args.iter() {
                         let mut t = &a.typ;

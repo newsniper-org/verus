@@ -1661,3 +1661,120 @@ unsafe impl FipStrictPartialEq for L {{}}
         e
     );
 }
+
+// std's functions that compare their arguments (`contains`, `Option::eq`, `sort_unstable`, ...)
+// deallocate only if a comparison does: their `deallocates_when` conditions name the comparison
+// markers (`partial_eq_is_fip`, `ord_is_fip`, ...)
+test_verify_one_file_with_options! {
+    #[test] fip_std_comparisons_through_markers ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl PartialEq for L {
+            #[verifier::fip]
+            fn eq(&self, o: &L) -> bool allocates 0 { self.x == o.x }
+        }
+        impl vstd::std_specs::cmp::PartialEqSpecImpl for L {
+            open spec fn obeys_eq_spec() -> bool { false }
+            open spec fn eq_spec(&self, other: &L) -> bool { self.x == other.x }
+        }
+        unsafe impl FbipPartialEq for L {}
+        unsafe impl FipPartialEq for L {}
+
+        #[verifier::fip]
+        fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
+            s.contains(x)
+        }
+
+        #[verifier::fip]
+        fn ends<T: FipPartialEq>(s: &[T], p: &[T]) -> bool {
+            s.starts_with(p) && s.ends_with(p)
+        }
+
+        #[verifier::fip]
+        fn opt_eq<T: FipPartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
+            a == b
+        }
+
+        #[verifier::fip]
+        fn opt_cmp<T: FipOrd>(a: &Option<T>, b: &Option<T>) -> core::cmp::Ordering {
+            a.cmp(b)
+        }
+
+        #[verifier::fip]
+        fn sort_it<T: FipOrd>(v: &mut [T]) {
+            v.sort_unstable();
+        }
+
+        #[verifier::fip]
+        fn find<T: FipOrd>(v: &[T], x: &T) -> bool {
+            match v.binary_search(x) {
+                Ok(_) => true,
+                Err(_) => false,
+            }
+        }
+
+        #[verifier::fip]
+        fn in_range(r: &core::ops::Range<u64>, x: &u64) -> bool {
+            r.contains(x)
+        }
+
+        #[verifier::fip]
+        fn bigger<T: FipOrd>(a: T, b: T) -> T {
+            core::cmp::max(a, b)
+        }
+
+        #[verifier::fip]
+        fn uses(v: &mut [u64], l: &[L], k: &L) -> bool {
+            sort_it(v);
+            has(l, k) && opt_eq(&Some(1u8), &None)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_std_comparison_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn has<T: PartialEq>(s: &[T], x: &T) -> bool {
+            s.contains(x)
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_std_comparisons_through_markers ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn sort_it<T: FipStrictOrd>(v: &mut [T]) {
+            v.sort_unstable();
+        }
+
+        #[verifier::fip(strict)]
+        fn has<T: FipStrictPartialEq>(s: &[T], x: &T) -> bool {
+            s.contains(x)
+        }
+
+        #[verifier::fip(strict)]
+        fn uses(v: &mut [u64]) -> bool {
+            sort_it(v);
+            has(v, &1)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_std_comparison_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn sort_it<T: FipOrd>(v: &mut [T]) {
+            v.sort_unstable();
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `T: std::cmp::Ord`, which are not known here")
+}
