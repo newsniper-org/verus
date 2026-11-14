@@ -1,6 +1,8 @@
 # Summary
 
 [Verus overview](./overview.md)
+[Changes from upstream Verus (fork)](./fork-changes.md)
+[업스트림 Verus 대비 변경 사항 (fork, 한국어)](./fork-changes.ko.md)
 
 # Getting started
 
