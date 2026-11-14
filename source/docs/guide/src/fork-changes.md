@@ -37,8 +37,8 @@ What this changes for verified code:
 * **`core::convert::Infallible` is now an alias of `!`.** Verus therefore rejects a datatype with a
   field of type `Infallible` ("never-to-any coercion is not allowed in spec mode"), which it
   accepted with Rust 1.99.1. The never type `!` itself is stable and needs no specification.
-* **`allocator_api` is partly stable.** vstd enables the `allocator_ext` feature for the parts that
-  are not.
+* **`allocator_api` is partly stable.** The parts that are not are now the feature
+  `allocator_ext`. vstd turns it on, and so must a crate that uses those parts.
 * **`BTreeMap` and its iterators require `A: AllocatorClone`**, and vstd's specifications say so.
 * **`[const] Destruct` bounds**, which std 1.100 puts on `Iterator for Range<A>` and others, are
   ignored outside const contexts.

@@ -32,8 +32,8 @@ that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변�
 * **`core::convert::Infallible`이 이제 `!`의 별칭입니다.** 그래서 Verus는 `Infallible` 타입의 필드가 있는
   데이터 타입을 거부합니다("never-to-any coercion is not allowed in spec mode"). Rust 1.99.1에서는 받았습니다.
   never 타입 `!` 자체는 안정화되었고 명세가 필요 없습니다.
-* **`allocator_api`가 일부만 안정화되었습니다.** 안정화되지 않은 부분을 위해 vstd는 `allocator_ext` feature를
-  켭니다.
+* **`allocator_api`가 일부만 안정화되었습니다.** 안정화되지 않은 부분은 이제 `allocator_ext` feature입니다.
+  vstd는 이 feature를 켭니다. 그 부분을 쓰는 crate도 켜야 합니다.
 * **`BTreeMap`과 그 반복자는 `A: AllocatorClone`을 요구합니다.** vstd의 명세도 그렇게 적습니다.
 * **`[const] Destruct` bound**는 std 1.100이 `Iterator for Range<A>` 등에 붙였습니다. const 문맥 밖에서는
   무시합니다.
