@@ -90,6 +90,10 @@ that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변�
   찾습니다.
 * **`alloc_check_runtime`** 테스트 스위트는 검증된 프로그램을 호출 횟수를 세는 `#[global_allocator]`로 여러
   최적화 수준에서 실행합니다. 그리고 실제 할당기 호출을 검증된 상한과 비교합니다.
+* **포매터와 편집기.** 이 fork가 더한 구문(`allocates` 절, bound 명세 `T: Tr with { .. }`, Verus 코드 안의
+  `become`)은 [verusfmt](https://github.com/newsniper-org/verusfmt)와
+  [verus-analyzer](https://github.com/newsniper-org/verus-analyzer)의 fork의 `fip-beta` 브랜치가 파싱합니다.
+  두 도구의 배포판은 이 구문을 구문 오류로 보고합니다. (vstd는 그 verusfmt로 포맷합니다.)
 
 ## 바뀌지 않은 것
 

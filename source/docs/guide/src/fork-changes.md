@@ -102,6 +102,11 @@ The new checks run only when their option is given (`-V alloc-check`, `-V alloc-
 * **`alloc_check_runtime`** (a test suite) runs verified programs with a counting
   `#[global_allocator]` at several optimization levels, and compares the allocator calls they make
   with their verified bounds.
+* **Formatter and editor.** The syntax this fork adds (the `allocates` clause, bound
+  specifications `T: Tr with { .. }`, and `become` in Verus code) is parsed by the `fip-beta`
+  branches of forks of [verusfmt](https://github.com/newsniper-org/verusfmt) and
+  [verus-analyzer](https://github.com/newsniper-org/verus-analyzer). The released versions of
+  both report it as a syntax error. (vstd is formatted with that verusfmt.)
 
 ## What is not changed
 
