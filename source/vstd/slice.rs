@@ -64,7 +64,8 @@ pub exec fn slice_index_get<T>(slice: &[T], i: usize) -> (out: &T)
         0 <= i < slice.view().len(),
     ensures
         *out == slice@.index(i as int),
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     &slice[i]
 }
