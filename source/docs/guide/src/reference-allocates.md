@@ -612,9 +612,12 @@ elaboration. This includes the destructors that its drops run.
   the slice views (`len`, `first`, `last`, `get`, `get_unchecked`, indexing, `swap`, `split_at`,
   `split_first`, `split_last` and their `_mut`, `_checked` and `_unchecked` variants), and
   `Vec`'s `new`, `new_in`, `len`, `capacity`, `is_empty`, `pop`, `remove`, `swap_remove`,
-  `as_slice`, `as_mut_slice`, `deref`, `deref_mut` and indexing. (`mem::take` is not among
-  them: it runs `T::default`.) The mark is trusted, like `external_body`, and is accepted only in
-  vstd.
+  `as_slice`, `as_mut_slice`, `deref`, `deref_mut` and indexing, and the comparisons listed under
+  "Operator traits" below (`<[T]>::contains`, `sort_unstable`, `Option`'s comparisons, ...).
+  (`mem::take` is not among them: it runs `T::default`.) The mark is trusted, like
+  `external_body`, and is accepted only in vstd. The drop rule of `-V alloc-check` also relies on
+  it: a call of such a function with `&mut` to a value does not count as dropping what the value
+  contains.
 * A cycle of calls between strict functions must consist of `become` calls only. A non-tail call
   adds a frame, so a cycle through one grows the stack.
 
@@ -744,6 +747,37 @@ derived impl (`#[derive(PartialEq)]`) is not accepted. As for the other markers,
 `Ord`'s provided `max`, `min` and `clamp` drop a value of `Self`. So `FbipOrd` needs
 `AllocFreeDrop` and `FipOrd` needs `NoDeallocDrop`, and a strict function cannot call them
 through a marker (the destructor of a type parameter is not known there).
+
+The std functions that compare their arguments deallocate only if a comparison does, and
+allocate only what their comparisons allocate. vstd states this with spec-level forms of the
+markers, `partial_eq_is_fip::<T, Rhs>()`, `partial_ord_is_fip::<T, Rhs>()`, `ord_is_fip::<T>()`
+and `ord_is_fbip::<T>()` (each true for a type with the marker), in their `deallocates_when`
+conditions, and with axioms that a method of an `FbipOp` type allocates nothing
+(`call_allocates(<T as PartialEq>::eq, ..) == 0`). So a fip function can call them for a type
+with the marker:
+
+```rust
+#[verifier::fip]
+fn sort_it<T: FipOrd>(v: &mut [T]) {
+    v.sort_unstable();
+}
+
+#[verifier::fip]
+fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
+    s.contains(x)
+}
+```
+
+These are `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable` and `binary_search`,
+`Option`'s `eq`, `partial_cmp` and `cmp`, the comparisons of references, `Range::contains` and
+`RangeInclusive::contains`, and `cmp::min` and `cmp::max`. All but the last two drop nothing
+(`#[verifier::alloc_check_skip_drops]`), so a strict function may call them too, through
+`FipStrictOp`. (vstd gives `sort_unstable` and `binary_search` only weak specifications: the
+result is a permutation of the input, and the index is in bounds; their allocations are an
+uninterpreted term unless the type is `FbipOrd`.) vstd also implements the comparison markers for
+`Option<T>` and for references, when `T` (the referent) has them. A type without a marker gets
+no `deallocates_when` that it can show false, even if its comparisons are fip: give it the
+marker.
 
 ### Callbacks from other crates
 

@@ -580,8 +580,11 @@ fn sum(n: u64, acc: u64) -> (r: u64)
   인스턴스화해도 됩니다. 대상은 `mem::swap`, `mem::replace`, slice 뷰(`len`, `first`, `last`, `get`,
   `get_unchecked`, 인덱싱, `swap`, `split_at`, `split_first`, `split_last`와 그 `_mut`, `_checked`,
   `_unchecked` 변형), 그리고 `Vec`의 `new`, `new_in`, `len`, `capacity`, `is_empty`, `pop`, `remove`,
-  `swap_remove`, `as_slice`, `as_mut_slice`, `deref`, `deref_mut`, 인덱싱입니다. `mem::take`는 `T::default`를
-  실행하므로 빠집니다. 이 표시는 `external_body`처럼 신뢰하는 것이고, vstd에서만 받습니다.
+  `swap_remove`, `as_slice`, `as_mut_slice`, `deref`, `deref_mut`, 인덱싱, 그리고 아래 "연산자 trait"에
+  나오는 비교 함수들(`<[T]>::contains`, `sort_unstable`, `Option`의 비교 등)입니다. `mem::take`는
+  `T::default`를 실행하므로 빠집니다. 이 표시는 `external_body`처럼 신뢰하는 것이고, vstd에서만 받습니다.
+  `-V alloc-check`의 drop 규칙도 이 표시에 기댑니다. 이런 함수에 어떤 값의 `&mut`를 넘기는 호출은 그 값이
+  담은 것을 drop하는 것으로 치지 않습니다.
 * 엄격한 함수들 사이의 호출 순환은 `become` 호출로만 이루어져야 합니다. 꼬리가 아닌 호출은 frame을
   하나 더하므로, 그런 호출을 거치는 순환은 스택을 키웁니다.
 
@@ -701,6 +704,33 @@ impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행
 `Ord`가 제공하는 `max`, `min`, `clamp`는 `Self`의 값을 drop합니다. 그래서 `FbipOrd`에는 `AllocFreeDrop`이,
 `FipOrd`에는 `NoDeallocDrop`이 필요합니다. 그리고 엄격한 함수는 이 셋을 표시 trait을 통해 부를 수
 없습니다(거기서는 타입 매개변수의 소멸자를 알 수 없기 때문입니다).
+
+인자를 비교하는 std 함수는 비교가 해제할 때만 해제하고, 비교가 할당하는 만큼만 할당합니다. vstd는 이것을
+표시 trait의 spec 수준 형태로 적습니다. `partial_eq_is_fip::<T, Rhs>()`, `partial_ord_is_fip::<T, Rhs>()`,
+`ord_is_fip::<T>()`, `ord_is_fbip::<T>()`(각각 표시 trait이 있는 타입에 대해 참)를 `deallocates_when` 조건에
+쓰고, `FbipOp` 타입의 메서드가 할당하지 않는다는 공리(`call_allocates(<T as PartialEq>::eq, ..) == 0`)를
+둡니다. 그래서 fip 함수는 표시 trait이 있는 타입에 대해 이 함수들을 부를 수 있습니다.
+
+```rust
+#[verifier::fip]
+fn sort_it<T: FipOrd>(v: &mut [T]) {
+    v.sort_unstable();
+}
+
+#[verifier::fip]
+fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
+    s.contains(x)
+}
+```
+
+대상은 `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable`, `binary_search`, `Option`의 `eq`,
+`partial_cmp`, `cmp`, 참조끼리의 비교, `Range::contains`, `RangeInclusive::contains`, 그리고 `cmp::min`,
+`cmp::max`입니다. 마지막 둘을 뺀 나머지는 아무것도 drop하지 않으므로(`#[verifier::alloc_check_skip_drops]`),
+엄격한 함수도 `FipStrictOp`를 통해 부를 수 있습니다. (vstd는 `sort_unstable`과 `binary_search`에 약한 명세만
+줍니다. 결과는 입력의 순열이고, 인덱스는 범위 안에 있다는 것입니다. 할당량은 타입이 `FbipOrd`가 아니면
+해석되지 않는 항입니다.) vstd는 `Option<T>`와 참조에 대해서도, `T`(참조 대상)가 비교 표시 trait을 가지면
+그 표시 trait을 구현합니다. 표시 trait이 없는 타입은, 비교가 fip이더라도 거짓임을 보일 수 있는
+`deallocates_when`을 얻지 못합니다. 그런 타입에는 표시 trait을 주세요.
 
 ### 다른 crate에서 오는 콜백
 

@@ -193,7 +193,9 @@ fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
 ```
 
 An impl of a marker for your own type is accepted only if that type's operator impl is checked by
-Verus and its methods are `allocates 0` (and fip, or strict).
+Verus and its methods are `allocates 0` (and fip, or strict). The markers also let a fip function
+call the std functions that compare, such as `v.sort_unstable()` and `s.contains(x)` for
+`T: FipOrd` or `T: FipPartialEq`.
 
 ## Common rejections
 

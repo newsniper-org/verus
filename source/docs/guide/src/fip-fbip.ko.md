@@ -186,7 +186,8 @@ fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
 ```
 
 직접 만든 타입에 marker trait을 구현하면, 그 타입의 연산자 impl을 Verus가 검사하고 그 메서드가
-`allocates 0`(그리고 fip이나 strict)일 때만 받습니다.
+`allocates 0`(그리고 fip이나 strict)일 때만 받습니다. marker trait이 있으면 fip 함수가 비교하는 std 함수도
+부를 수 있습니다. 예를 들어 `T: FipOrd`나 `T: FipPartialEq`일 때 `v.sort_unstable()`과 `s.contains(x)`입니다.
 
 ## 자주 만나는 거부
 
