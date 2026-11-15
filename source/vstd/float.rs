@@ -128,14 +128,15 @@ pub uninterp spec fn float_cast_spec<From, To>(from: From, to: To) -> bool;
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::float::float_cast")]
 #[verifier::when_used_as_spec(ieee_float_cast)]
+// An `as` cast to or from a float is an instruction: no allocator call, no drop.
 #[verifier::alloc_check_skip_drops]
 pub fn float_cast<From: Copy + IeeeFloatCast<To>, To>(from: From) -> (to: To)
     ensures
         float_cast_spec(from, to),
     opens_invariants none
     no_unwind
-    // An `as` cast to or from a float is an instruction: no allocator call, no drop.
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     unimplemented!{}
 }

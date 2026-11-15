@@ -474,7 +474,8 @@ pub fn cast_ptr_to_thin_ptr<T: ?Sized, U: Sized>(ptr: *mut T) -> (result: *mut U
         result == spec_cast_ptr_to_thin_ptr::<T, U>(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as *mut U
 }
@@ -498,7 +499,8 @@ pub fn cast_array_ptr_to_slice_ptr<T, const N: usize>(ptr: *mut [T; N]) -> (resu
         result == spec_cast_array_ptr_to_slice_ptr(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as *mut [T]
 }
@@ -524,7 +526,8 @@ pub fn cast_slice_ptr_to_slice_ptr<T, U>(ptr: *mut [T]) -> (result: *mut [U])
         result == spec_cast_slice_ptr_to_slice_ptr::<T, U>(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as *mut [U]
 }
@@ -550,7 +553,8 @@ pub fn cast_slice_ptr_to_str_ptr<T>(ptr: *mut [T]) -> (result: *mut str)
         result == spec_cast_slice_ptr_to_str_ptr::<T>(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as *mut str
 }
@@ -576,7 +580,8 @@ pub fn cast_str_ptr_to_slice_ptr<T>(ptr: *mut str) -> (result: *mut [T])
         result == spec_cast_str_ptr_to_slice_ptr::<T>(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as *mut [T]
 }
@@ -598,7 +603,8 @@ pub fn cast_ptr_to_usize<T: Sized>(ptr: *mut T) -> (result: usize)
         result == spec_cast_ptr_to_usize(ptr),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ptr as usize
 }

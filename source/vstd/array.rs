@@ -81,7 +81,8 @@ pub exec fn array_index_get<T, const N: usize>(ar: &[T; N], i: usize) -> (out: &
         *out == ar@.index(i as int),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     &ar[i]
 }
@@ -125,7 +126,8 @@ pub fn array_as_slice<T, const N: usize>(ar: &[T; N]) -> (out: &[T])
         ar@ == out@,
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     ar
 }
@@ -161,7 +163,8 @@ pub fn array_fill_for_copy_types<T: Copy, const N: usize>(t: T) -> (res: [T; N])
         res == spec_array_fill_for_copy_type::<T, N>(t),
     opens_invariants none
     no_unwind
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     [t;N]
 }
@@ -190,6 +193,7 @@ pub broadcast axiom fn axiom_array_has_resolved<T, const N: usize>(array: [T; N]
 #[doc(hidden)]
 #[verifier::external_body]
 #[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::array::ref_mut_array_unsizing_coercion")]
+// An unsizing coercion of a reference changes the pointer's metadata only.
 #[verifier::alloc_check_skip_drops]
 pub fn ref_mut_array_unsizing_coercion<T, const N: usize>(r: &mut [T; N]) -> (out: &mut [T])
     ensures
@@ -197,8 +201,8 @@ pub fn ref_mut_array_unsizing_coercion<T, const N: usize>(r: &mut [T; N]) -> (ou
         final(out).view() == final(r).view(),
     opens_invariants none
     no_unwind
-    // An unsizing coercion of a reference changes the pointer's metadata only.
-    allocates deallocates_when(0int, false)
+    allocates
+        deallocates_when(0int, false),
 {
     r
 }
