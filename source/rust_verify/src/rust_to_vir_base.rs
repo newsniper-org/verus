@@ -1427,9 +1427,9 @@ fn is_global_allocator_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: rustc_middle::ty::Ty<'tcx
     match ty.kind() {
         TyKind::Adt(adt, _) => {
             let did = adt.did();
+            // (the path where it is defined: the printed one may go through a re-export)
             tcx.crate_name(did.krate).as_str() == "alloc"
-                && tcx.def_path_str(did).ends_with("::Global")
-                && tcx.item_name(did).as_str() == "Global"
+                && tcx.def_path(did).to_string_no_crate_verbose() == "::alloc::Global"
         }
         _ => false,
     }

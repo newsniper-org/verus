@@ -29,11 +29,27 @@ fn alloc_traits(tcx: TyCtxt<'_>) -> Option<AllocTraits> {
     let allocator = tcx.all_traits_including_private().find(|d| {
         tcx.crate_name(d.krate).as_str() == "core" && tcx.item_name(*d).as_str() == "Allocator"
     })?;
-    let fip = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == FIP_ALLOCATOR)?;
-    let strict = tcx
-        .all_traits_including_private()
-        .find(|d| tcx.def_path_str(*d) == FIP_STRICT_ALLOCATOR)?;
+    let fip = find_trait(tcx, FIP_ALLOCATOR)?;
+    let strict = find_trait(tcx, FIP_STRICT_ALLOCATOR)?;
     Some(AllocTraits { allocator, fip, strict })
+}
+
+/// The path where `d` is defined (`vstd::alloc_check::NoDeallocDrop`). Unlike `def_path_str`,
+/// which prints a path that the user could write and may go through a re-export of a loaded
+/// crate (`y4_fip_core::NoDeallocDrop`), it depends only on `d`.
+fn defined_path(tcx: TyCtxt<'_>, d: DefId) -> String {
+    format!("{}{}", tcx.crate_name(d.krate), tcx.def_path(d).to_string_no_crate_verbose())
+}
+
+/// The trait defined at `path` (see `defined_path`)
+fn find_trait(tcx: TyCtxt<'_>, path: &str) -> Option<DefId> {
+    tcx.all_traits_including_private().find(|d| defined_path(tcx, *d) == path)
+}
+
+/// Is vstd a dependency of this crate? (When this crate is vstd, its traits are its own: one it
+/// does not define cannot be implemented or used in it.)
+fn vstd_dependency(tcx: TyCtxt<'_>) -> bool {
+    tcx.crates(()).iter().any(|c| tcx.crate_name(*c).as_str() == "vstd")
 }
 
 /// The global or the system allocator (std's own, whose methods are not user code)
@@ -543,19 +559,15 @@ impl OpMarkers {
             if tcx.crate_name(d.krate).as_str() != "core" {
                 continue;
             }
-            let path = tcx.def_path_str(*d);
-            if !(path.contains("::ops::") || path.contains("::cmp::")) {
+            let path = defined_path(tcx, *d);
+            if !(path.starts_with("core::ops::") || path.starts_with("core::cmp::")) {
                 continue;
             }
             let name = tcx.item_name(*d);
             let Some(op) = vir::alloc_check::OP_TRAITS.iter().find(|n| **n == name.as_str()) else {
                 continue;
             };
-            let find = |m: String| {
-                traits.iter().copied().find(|t| {
-                    tcx.crate_name(t.krate).as_str() == "vstd" && tcx.def_path_str(*t) == m
-                })
-            };
+            let find = |m: String| traits.iter().copied().find(|t| defined_path(tcx, *t) == m);
             let fip = find(format!("vstd::alloc_check::Fip{}", op));
             let strict = find(format!("vstd::alloc_check::FipStrict{}", op));
             ops.insert(*d, (*op, fip, strict));
@@ -1252,11 +1264,24 @@ pub(crate) fn check_fip_crate<'tcx>(
         no_drop: no_drop_fns.iter().cloned().collect(),
     };
     let om = OpMarkers::new(tcx);
-    let marker = tcx.all_traits_including_private().find(|d| tcx.def_path_str(*d) == MARKER);
+    let marker = find_trait(tcx, MARKER);
+    let at = alloc_traits(tcx);
+    // Without a marker trait, its impls would go unchecked and the fip functions would be checked
+    // without them: with vstd a dependency, not finding one is an error, not a reason to skip a
+    // check
+    if vstd_dependency(tcx) {
+        for name in [MARKER, FIP_ALLOCATOR, FIP_STRICT_ALLOCATOR] {
+            if find_trait(tcx, name).is_none() {
+                tcx.dcx().err(format!(
+                    "-V alloc-check: the trait `{}` was not found in the loaded vstd",
+                    name
+                ));
+            }
+        }
+    }
     if let Some(m) = marker {
         check_marker_impls(tcx, m, checked);
     }
-    let at = alloc_traits(tcx);
     let allocator_methods = match &at {
         Some(at) => check_fip_allocator_impls(tcx, at, checked),
         None => Vec::new(),

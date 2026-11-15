@@ -878,6 +878,126 @@ fn fip_strict_fake_verus_builtin_rejected() {
     );
 }
 
+// The marker traits are found by the path where vstd defines them, not by the path rustc prints:
+// a loaded crate that re-exports them made the printed path its own, so `NoDeallocDrop` impls and
+// user allocators went unchecked and `T: NoDeallocDrop` was not trusted (Y4, 2026-11-15)
+#[test]
+fn fip_markers_found_through_reexport() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("facade.rs"),
+        format!(
+            "{pre}pub use vstd::alloc_check::{{NoDeallocDrop, FipAllocator, FipStrictAllocator, FipAdd}};\nverus!{{ pub fn f() {{}} }}\n"
+        ),
+    )
+    .expect("write");
+    let facade = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "facade",
+            "--export",
+            "facade.vir",
+            "--compile",
+            "facade.rs",
+            "-o",
+            "libfacade.rlib",
+        ],
+        dir,
+    );
+    assert!(facade.status.success(), "facade failed:\n{}", String::from_utf8_lossy(&facade.stderr));
+    let with_facade = |name: &str, code: &str| {
+        // (`facade::f()` makes rustc load the crate)
+        std::fs::write(
+            dir.join(name),
+            format!("{pre}verus!{{ {code}\npub fn uses_facade() {{ facade::f() }} }}\n"),
+        )
+        .expect("write");
+        run_verus_raw(
+            &[
+                "--crate-type=lib",
+                name,
+                "-V",
+                "alloc-check",
+                "--import",
+                "facade=facade.vir",
+                "--extern",
+                "facade=libfacade.rlib",
+            ],
+            dir,
+        )
+    };
+    // a `NoDeallocDrop` impl for a type that owns a box is still rejected
+    let neg = with_facade(
+        "neg.rs",
+        "pub struct Holder { pub b: Box<u64> }
+        unsafe impl vstd::alloc_check::AllocFreeDrop for Holder {}
+        unsafe impl vstd::alloc_check::NoDeallocDrop for Holder {}",
+    );
+    let stderr = String::from_utf8_lossy(&neg.stderr);
+    assert!(!neg.status.success(), "neg should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("this `NoDeallocDrop` impl is not accepted"),
+        "unexpected:\n{}",
+        stderr
+    );
+    // a user allocator without `FipAllocator` is still rejected
+    let alloc = with_facade(
+        "user_alloc.rs",
+        "use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, NoDeallocDrop};
+        use vstd::std_specs::vec::spec_vec_capacity;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+        pub struct Fwd;
+        impl Clone for Fwd {
+            fn clone(&self) -> (r: Self) allocates 0 { Fwd }
+        }
+        unsafe impl Allocator for Fwd {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+                allocates 1
+            {
+                Global.allocate(layout)
+            }
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) allocates 0 {
+                #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
+            }
+        }
+        unsafe impl AllocFreeDrop for Fwd {}
+        unsafe impl NoDeallocDrop for Fwd {}
+        unsafe impl BoundedAllocator for Fwd { open spec fn max_cost() -> int { 1 } }
+        #[verifier::fip]
+        fn push_empty(v: &mut Vec<u8, Fwd>)
+            requires spec_vec_capacity(&*old(v)) == 0,
+            allocates 1
+        {
+            v.push(1);
+        }",
+    );
+    let stderr = String::from_utf8_lossy(&alloc.stderr);
+    assert!(!alloc.status.success(), "alloc should be rejected:\n{}", stderr);
+    assert!(
+        stderr.contains("only if it implements `vstd::alloc_check::FipAllocator`"),
+        "unexpected:\n{}",
+        stderr
+    );
+    // and the markers are still trusted at drops and generic operator calls
+    let pos = with_facade(
+        "pos.rs",
+        "use vstd::std_specs::ops::AddSpec;
+        #[verifier::fip]
+        fn consume<T: vstd::alloc_check::NoDeallocDrop>(x: T) {}
+        #[verifier::fip]
+        fn add_gen<T: vstd::alloc_check::FipAdd<Output = T> + vstd::alloc_check::NoDeallocDrop>(a: T, b: T) -> T
+            requires a.add_req(b),
+        {
+            a + b
+        }",
+    );
+    assert!(pos.status.success(), "pos should pass:\n{}", String::from_utf8_lossy(&pos.stderr));
+}
+
 test_verify_one_file_with_options! {
     // the real `verus_builtin` stays trusted: `Ghost(..)` in a strict function compiles to a call
     // of `Ghost::assume_new_fallback`
