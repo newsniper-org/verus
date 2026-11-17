@@ -1,28 +1,30 @@
 # 업스트림 Verus 대비 변경 사항 (fork)
 
-> **이 페이지는 Verus의 fork를 설명합니다.** 이 fork의 `fip-beta` 브랜치가 업스트림 Verus
+> **이 페이지는 Verus의 fork를 설명합니다.** 이 fork의 `fip` 브랜치가 업스트림 Verus
 > ([verus-lang/verus](https://github.com/verus-lang/verus))에서 무엇을 바꾸는지 정리하고, 각 변경을 설명하는
 > 페이지로 안내합니다. 영어판은 [여기](./fork-changes.md)에 있습니다.
 
 ## 기준점과 브랜치
 
 fork는 업스트림 커밋 `8bf68ee74`(2026-11-02, "Update no-cheating to disallow various command-line flags
-that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변경은 두 층으로 되어 있습니다.
+that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변경은 처음에 두 브랜치에서 두 층으로
+만들어졌습니다.
 
-| 브랜치 | 툴체인 | 더하는 것 |
+| 브랜치 | 당시 툴체인 | 더하는 것 |
 |---|---|---|
 | `fip` | Rust 1.99.1 (업스트림과 같음) | 할당 상한: `allocates` 절, `-V alloc-check`, `-V alloc-check-strict`, vstd의 std 명세에 붙은 상한 |
 | `fip-beta` | Rust 1.100.0-beta.10 (`beta-2026-11-05`) | `fip`의 전부, 그리고 Rust 1.100, 사용자 정의 할당기와 할당기 상태, 완전한 제자리 함수, `-V fip-lint`, `trusted_only`/`trusted_call` |
 
-이 페이지의 내용은 모두 `fip-beta`에 있습니다. 아래 표의 "도입" 열은 두 브랜치 중 어디서 들어왔는지를 나타냅니다.
+Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 `fip-beta`로 맞췄습니다. 그래서 이 페이지의
+내용은 두 브랜치에 모두 있습니다. 아래 표의 "도입" 열은 두 층 중 어디서 들어왔는지를 나타냅니다.
 
 새 검증 기능은 모두 실험적입니다.
 
-## 툴체인: Rust 1.100 beta
+## 툴체인: Rust 1.100
 
-`rust-toolchain.toml`과 CI workflow는 `beta-2026-11-05`, 즉 Rust 1.100.0-beta.10을 씁니다. 업스트림은 1.99.1을
-씁니다. Verus가 자기 소스 트리에 들고 있는 rustc 부분(`rustc_hir_analysis`, `rustc_hir_typeck`,
-`rustc_mir_build`)도 같은 버전으로 올렸습니다.
+`rust-toolchain.toml`과 CI workflow는 Rust 1.100.0을 씁니다. 업스트림은 1.99.1을 씁니다. Verus가 자기 소스
+트리에 들고 있는 rustc 부분(`rustc_hir_analysis`, `rustc_hir_typeck`, `rustc_mir_build`)도 같은 버전으로
+올렸습니다. (먼저 1.100.0-beta.10으로 올렸고, 그 beta와 1.100.0 사이에 이 부분의 파일은 바뀌지 않았습니다.)
 
 검증 코드에 생기는 차이는 다음과 같습니다.
 
@@ -92,7 +94,7 @@ that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변�
   최적화 수준에서 실행합니다. 그리고 실제 할당기 호출을 검증된 상한과 비교합니다.
 * **포매터와 편집기.** 이 fork가 더한 구문(`allocates` 절, bound 명세 `T: Tr with { .. }`, Verus 코드 안의
   `become`)은 [verusfmt](https://github.com/newsniper-org/verusfmt)와
-  [verus-analyzer](https://github.com/newsniper-org/verus-analyzer)의 fork의 `fip-beta` 브랜치가 파싱합니다.
+  [verus-analyzer](https://github.com/newsniper-org/verus-analyzer)의 fork의 `fip` 브랜치가 파싱합니다.
   두 도구의 배포판은 이 구문을 구문 오류로 보고합니다. (vstd는 그 verusfmt로 포맷합니다.)
 
 ## 바뀌지 않은 것

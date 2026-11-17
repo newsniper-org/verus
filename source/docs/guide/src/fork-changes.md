@@ -1,6 +1,6 @@
 # Changes from upstream Verus (fork)
 
-> **This page describes a fork of Verus.** It lists what the `fip-beta` branch of this fork changes
+> **This page describes a fork of Verus.** It lists what the `fip` branch of this fork changes
 > relative to upstream Verus ([verus-lang/verus](https://github.com/verus-lang/verus)), and links
 > to the pages that describe each change. A Korean version of this page is
 > [here](./fork-changes.ko.md).
@@ -8,25 +8,26 @@
 ## Base and branches
 
 The fork branches off upstream at commit `8bf68ee74` (2026-11-02, "Update no-cheating to disallow
-various command-line flags that violate the spirit of not cheating", #3392). Its changes come in
-two layers:
+various command-line flags that violate the spirit of not cheating", #3392). Its changes were made
+in two layers, first on two branches:
 
-| Branch | Toolchain | Adds |
+| Branch | Toolchain then | Adds |
 |---|---|---|
 | `fip` | Rust 1.99.1 (as upstream) | allocation bounds: the `allocates` clause, `-V alloc-check`, `-V alloc-check-strict`, bounds in vstd's std specifications |
 | `fip-beta` | Rust 1.100.0-beta.10 (`beta-2026-11-05`) | everything in `fip`, plus Rust 1.100, custom allocators and allocator state, fully in-place functions, `-V fip-lint`, `trusted_only`/`trusted_call` |
 
-Everything on this page is in `fip-beta`. The column "since" in the tables below says which of the
-two branches introduced it.
+When Rust 1.100.0 was released, `fip-beta` moved to it, and `fip` was set to `fip-beta`. So
+everything on this page is in both branches. The column "since" in the tables below says which of
+the two layers introduced it.
 
 All of the new verification features are experimental.
 
-## Toolchain: Rust 1.100 beta
+## Toolchain: Rust 1.100
 
-`rust-toolchain.toml` (and the CI workflows) select `beta-2026-11-05`, that is Rust
-1.100.0-beta.10, where upstream uses 1.99.1. The parts of rustc that Verus carries in its own
-source tree (`rustc_hir_analysis`, `rustc_hir_typeck`, `rustc_mir_build`) are updated to the
-same version.
+`rust-toolchain.toml` (and the CI workflows) select Rust 1.100.0, where upstream uses 1.99.1. The
+parts of rustc that Verus carries in its own source tree (`rustc_hir_analysis`, `rustc_hir_typeck`,
+`rustc_mir_build`) are updated to the same version. (They were updated to 1.100.0-beta.10 first.
+None of the files they carry changed between that beta and 1.100.0.)
 
 What this changes for verified code:
 
@@ -103,7 +104,7 @@ The new checks run only when their option is given (`-V alloc-check`, `-V alloc-
   `#[global_allocator]` at several optimization levels, and compares the allocator calls they make
   with their verified bounds.
 * **Formatter and editor.** The syntax this fork adds (the `allocates` clause, bound
-  specifications `T: Tr with { .. }`, and `become` in Verus code) is parsed by the `fip-beta`
+  specifications `T: Tr with { .. }`, and `become` in Verus code) is parsed by the `fip`
   branches of forks of [verusfmt](https://github.com/newsniper-org/verusfmt) and
   [verus-analyzer](https://github.com/newsniper-org/verus-analyzer). The released versions of
   both report it as a syntax error. (vstd is formatted with that verusfmt.)
