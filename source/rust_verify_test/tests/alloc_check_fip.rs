@@ -1899,6 +1899,185 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `T: std::cmp::Ord`, which are not known here")
 }
 
+// `Clone` has markers like the operator traits (`FbipClone`, `FipClone`, `FipStrictClone`; vstd
+// implements them for the primitive types, `f32` and `f64` included): a generic `clone` through
+// them is charged 0, may be made in a fip function, and in a strict one
+test_verify_one_file_with_options! {
+    #[test] fip_clone_markers_generic_calls ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl Clone for L {
+            #[verifier::fip(strict)]
+            fn clone(&self) -> L allocates 0 { L { x: self.x } }
+        }
+        unsafe impl AllocFreeDrop for L {}
+        unsafe impl NoDeallocDrop for L {}
+        unsafe impl FbipClone for L {}
+        unsafe impl FipClone for L {}
+        unsafe impl FipStrictClone for L {}
+
+        fn counted<T: FbipClone>(a: &T) -> T allocates 0 {
+            a.clone()
+        }
+
+        #[verifier::fip]
+        fn dup<T: FipClone>(a: &T) -> (T, T) {
+            (a.clone(), a.clone())
+        }
+
+        #[verifier::fip(strict)]
+        fn dup_strict<T: FipStrictClone>(a: &T) -> T {
+            a.clone()
+        }
+
+        #[verifier::fip(strict)]
+        fn uses(l: &L, f: f64) -> u64 {
+            let _a = dup_strict(&1u64);
+            let _f = dup_strict(&f);
+            let _b = dup_strict(&true);
+            let m = dup_strict(l);
+            m.x
+        }
+
+        #[verifier::fip]
+        fn uses_fip(l: &L) -> u64 {
+            let (a, _b) = dup(l);
+            a.x
+        }
+
+        fn uses_counted(l: &L) -> u64 allocates 0 {
+            let _c = counted(&7u8);
+            counted(l).x
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_clone_marker_missing_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn dup<T: Clone + vstd::alloc_check::NoDeallocDrop>(a: &T) -> T {
+            a.clone()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_clone_marker_impl_allocates_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl Clone for L {
+            fn clone(&self) -> L allocates 1 { L { x: self.x } }
+        }
+        unsafe impl AllocFreeDrop for L {}
+        unsafe impl FbipClone for L {}
+    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_clone_marker_impl_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct L { pub x: u64 }
+        impl Clone for L {
+            #[verifier::fip]
+            fn clone(&self) -> L allocates 0 { L { x: self.x } }
+        }
+        unsafe impl AllocFreeDrop for L {}
+        unsafe impl NoDeallocDrop for L {}
+        unsafe impl FbipClone for L {}
+        unsafe impl FipClone for L {}
+        unsafe impl FipStrictClone for L {}
+    } => Err(err) => assert_vir_error_msg(err, "must be `#[verifier::fip(strict)]`")
+}
+
+// `<[T]>::to_vec` and `Box<[T]>::from(&[T])` allocate once and clone each element: a strict
+// function may call them through `FipStrictClone` (Verigrad's `copy_on_shared`), and the result
+// equals the input when `T::clone` returns its argument (a precondition that the callers discharge
+// for `i32` and `f64` from vstd's specifications of their `clone`)
+test_verify_one_file_with_options! {
+    #[test] fip_strict_slice_to_vec ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        pub fn copy_gen<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+            requires
+                forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.to_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn copy_boxed<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+            requires
+                forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            Box::<[T]>::from(src).into_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn copy_to_vec(src: &[i32]) -> (r: Vec<i32>)
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.to_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn uses(a: &[i32], b: &[f64]) -> (r: (Vec<i32>, Vec<f64>))
+            ensures
+                r.0@ == a@,
+                r.1@ == b@,
+            allocates
+                2,
+        {
+            (copy_gen(a), copy_boxed(b))
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_slice_to_vec_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn copy<T: Clone + vstd::alloc_check::NoDeallocDrop>(s: &[T]) -> Vec<T> {
+            s.to_vec()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_slice_to_vec_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn copy<T: FipClone>(s: &[T]) -> Vec<T>
+            allocates if s@.len() == 0 { 0int } else { 1int },
+        {
+            s.to_vec()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `T: std::clone::Clone`, which are not known here")
+}
+
 // `as` casts to and from floats, pointer casts, array indexing, array fill and the array -> slice
 // coercions are instructions, not calls: vstd's internal functions for them (`float_cast`,
 // `cast_ptr_to_usize`, `array_index_get`, `array_fill_for_copy_types`, `array_as_slice`,

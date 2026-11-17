@@ -17,8 +17,9 @@ in two layers, first on two branches:
 | `fip-beta` | Rust 1.100.0-beta.10 (`beta-2026-11-05`) | everything in `fip`, plus Rust 1.100, custom allocators and allocator state, fully in-place functions, `-V fip-lint`, `trusted_only`/`trusted_call` |
 
 When Rust 1.100.0 was released, `fip-beta` moved to it, and `fip` was set to `fip-beta`. So
-everything on this page is in both branches. The column "since" in the tables below says which of
-the two layers introduced it.
+everything on this page is in both branches, except what the column "since" in the tables below
+marks as `fip` (1.100): that was added to `fip` afterwards. Otherwise the column says which of the
+two layers introduced it.
 
 All of the new verification features are experimental.
 
@@ -64,6 +65,7 @@ What this changes for verified code:
 | Fully in-place functions (no deallocation) | `#[verifier::fip]` | `fip-beta` | [FIP and FBIP](./fip-fbip.md), [reference](./reference-allocates.md#fully-in-place-functions-verifierfip) |
 | Constant stack space | `#[verifier::fip(strict)]` with `become` | `fip-beta` | [reference](./reference-allocates.md#constant-stack-space-verifierfipstrict) |
 | Generic operator calls in fip code | `T: FipAdd`, `T: FipOrd`, ... (`FbipOp`, `FipOp`, `FipStrictOp` for each operator trait of `core`) | `fip-beta` | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
+| Generic `clone` and slice copies in fip code | `T: FipClone`, ... (the same three levels for `Clone`); `<[T]>::to_vec`, `Box::<[T]>::from(&[T])` | `fip` (1.100) | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
 | Stack-growth linter | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP and FBIP: Tools](./fip-fbip.md#tools) |
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |
 

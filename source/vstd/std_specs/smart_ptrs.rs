@@ -10,11 +10,38 @@ use core::alloc::Allocator;
 verus! {
 
 // TODO
+// (std 1.100 `alloc/src/slice.rs`: `Vec::from_raw_parts_in` on the box's buffer and allocator:
+// it allocates, frees and drops nothing)
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ <[T]>::into_vec ](b: Box<[T], A>) -> (v: Vec<T, A>)
     ensures
         v@ == b@,
     allocates
-        0,
+        deallocates_when(0int, false),
+;
+
+// std 1.100 `alloc/src/boxed/convert.rs`: `Box::clone_from_ref`, which allocates once (nothing
+// for a zero-sized layout) and clones each element into place (`CloneToUninit` for `[T]`, bitwise
+// for `TrivialClone` types). On a normal return it drops no `T` (its guards act only on
+// unwinding), and it deallocates only if a `clone` does. (std's `fn from(slice: &[T])` takes a
+// slice of any lifetime, not only the impl's `'a`.)
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<'a, T: Clone>[ <Box<[T]> as core::convert::From<&'a [T]>>::from ](
+    slice: &[T],
+) -> (res: Box<[T]>)
+    ensures
+        res@.len() == slice@.len(),
+        forall|i| #![all_triggers] 0 <= i < slice@.len() ==> cloned::<T>(slice@[i], res@[i]),
+        slice@ =~= res@ ==> slice@ == res@,
+    allocates
+        deallocates_when(
+            (if slice@.len() == 0 {
+                0int
+            } else {
+                1int
+            }) + super::clone::seq_clone_allocates(slice@, slice@.len()),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
 ;
 
 pub assume_specification<T>[ Box::<T>::new ](t: T) -> (v: Box<T>)

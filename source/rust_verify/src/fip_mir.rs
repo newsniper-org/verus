@@ -560,7 +560,10 @@ impl OpMarkers {
                 continue;
             }
             let path = defined_path(tcx, *d);
-            if !(path.starts_with("core::ops::") || path.starts_with("core::cmp::")) {
+            if !(path.starts_with("core::ops::")
+                || path.starts_with("core::cmp::")
+                || path.starts_with("core::clone::"))
+            {
                 continue;
             }
             let name = tcx.item_name(*d);
@@ -1108,11 +1111,15 @@ fn strict_edges<'tcx>(
                     }
                 }
                 // a generic call of an operator trait's method, through its strict marker (not
-                // `Ord::{max, min, clamp}`, which drop a value whose destructor is not known)
+                // `Ord::{max, min, clamp}` or `Clone::clone_from`, which drop a value whose
+                // destructor is not known)
                 let marked_op = func.const_fn_def().and_then(|(callee, args)| {
                     let tr = tcx.trait_of_assoc(callee)?;
                     if !om.ops.contains_key(&tr)
-                        || matches!(tcx.item_name(callee).as_str(), "max" | "min" | "clamp")
+                        || matches!(
+                            tcx.item_name(callee).as_str(),
+                            "max" | "min" | "clamp" | "clone_from"
+                        )
                     {
                         return None;
                     }

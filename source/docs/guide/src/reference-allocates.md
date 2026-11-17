@@ -720,7 +720,7 @@ a type does. For each operator trait `Op` there are three, each a supertrait of 
 
 `Op` is one of the traits that vstd specifies: `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`,
 `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, their `*Assign` forms, `Index`, `IndexMut`, `Deref`,
-`DerefMut`, `PartialEq`, `PartialOrd` and `Ord`. A marker has the type parameters of its trait
+`DerefMut`, `PartialEq`, `PartialOrd`, `Ord` and `Clone`. A marker has the type parameters of its trait
 (`FipAdd<Rhs = Self>`, `FipIndex<Idx>`) and follows its supertraits: `FipOrd` implies
 `FipPartialOrd` and `FipPartialEq`, and `FipIndexMut` implies `FipIndex`.
 
@@ -742,7 +742,7 @@ A comparison of references (`a == b` with `a: &T`) runs std's impl for reference
 `T`'s method, so the marker of `T` covers it.
 
 vstd implements the markers for the primitive integer types, `bool` and `char` (for the traits
-they implement); these impls are trusted. Any other `unsafe impl FbipOp for X` (or `FipOp`,
+they implement), and the `Clone` markers also for `f32` and `f64`; these impls are trusted. Any other `unsafe impl FbipOp for X` (or `FipOp`,
 `FipStrictOp`) is accepted only if `X`'s `Op` impl, for the same type written the same way, is
 checked by Verus, and each method that impl defines is bounded by `allocates 0` (a literal `0`)
 and, for the higher levels, is `#[verifier::fip]` or `#[verifier::fip(strict)]`. A method that the
@@ -752,7 +752,10 @@ derived impl (`#[derive(PartialEq)]`) is not accepted. As for the other markers,
 
 `Ord`'s provided `max`, `min` and `clamp` drop a value of `Self`. So `FbipOrd` needs
 `AllocFreeDrop` and `FipOrd` needs `NoDeallocDrop`, and a strict function cannot call them
-through a marker (the destructor of a type parameter is not known there).
+through a marker (the destructor of a type parameter is not known there). The same holds for
+`Clone`'s provided `clone_from` (`*self = source.clone()`): `FbipClone` needs `AllocFreeDrop`,
+`FipClone` needs `NoDeallocDrop`, and a strict function cannot call `clone_from` through
+`FipStrictClone`.
 
 The std functions that compare their arguments deallocate only if a comparison does, and
 allocate only what their comparisons allocate. vstd states this with spec-level forms of the
@@ -787,6 +790,31 @@ unless the type is `FbipOrd`.) vstd also implements the comparison markers for
 `Option<T>` and for references, when `T` (the referent) has them. A type without a marker gets
 no `deallocates_when` that it can show false, even if its comparisons are fip: give it the
 marker.
+
+In the same way, `<[T]>::to_vec` and `Box::<[T]>::from(&[T])` allocate once (nothing for an empty
+slice) and clone each element. Their results have the input's length and a clone of each element
+(`cloned`), they allocate `1 + seq_clone_allocates(..)` (0 when the slice is empty), and they
+deallocate only if a `clone` does: `clone_is_fip::<T>()` (true for a `FipClone` type) in their
+`deallocates_when` conditions, with an axiom that `clone` of an `FbipClone` type allocates
+nothing. Neither drops a `T` on a normal return, so a strict function may call them through
+`FipStrictClone`:
+
+```rust
+#[verifier::fip(strict)]
+fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+    requires
+        forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+    ensures
+        r@ == src@,
+    allocates
+        if src@.len() == 0 { 0int } else { 1int },
+{
+    src.to_vec()
+}
+```
+
+(The `requires` gives `r@ == src@`: `cloned` allows a clone or the value itself. A caller with
+`T = i32` or `T = f64` shows it from vstd's specification of their `clone`.)
 
 ### Callbacks from other crates
 

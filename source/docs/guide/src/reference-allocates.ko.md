@@ -676,7 +676,7 @@ trait 메서드의 제네릭 호출은 impl을 알 수 없습니다. 그래서 `
 
 `Op`는 vstd가 명세하는 trait 가운데 하나입니다. `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`, `BitAnd`,
 `BitOr`, `BitXor`, `Shl`, `Shr`, 이들의 `*Assign` 꼴, `Index`, `IndexMut`, `Deref`, `DerefMut`, `PartialEq`,
-`PartialOrd`, `Ord`입니다. 표시 trait은 원래 trait의 타입 매개변수를 가지고(`FipAdd<Rhs = Self>`,
+`PartialOrd`, `Ord`, `Clone`입니다. 표시 trait은 원래 trait의 타입 매개변수를 가지고(`FipAdd<Rhs = Self>`,
 `FipIndex<Idx>`), 원래 trait의 상위 trait을 따릅니다. `FipOrd`는 `FipPartialOrd`와 `FipPartialEq`를,
 `FipIndexMut`는 `FipIndex`를 함축합니다.
 
@@ -697,8 +697,8 @@ fn eq_gen<T: FipStrictPartialEq>(a: &T, b: &T) -> bool {
 참조끼리의 비교(`a: &T`일 때 `a == b`)는 참조에 대한 std의 impl을 거쳐 `T`의 메서드를 부릅니다. 그래서
 `T`의 표시 trait이 이 비교도 다룹니다.
 
-vstd는 기본 정수 타입, `bool`, `char`에 대해 (그 타입이 구현하는 trait의) 표시 trait을 구현합니다. 이 impl은
-신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `FipStrictOp`)는 다음일 때만 받습니다. 같은
+vstd는 기본 정수 타입, `bool`, `char`에 대해 (그 타입이 구현하는 trait의) 표시 trait을 구현하고, `Clone`의
+표시 trait은 `f32`, `f64`에도 구현합니다. 이 impl은 신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `FipStrictOp`)는 다음일 때만 받습니다. 같은
 타입을 같은 꼴로 적은 `X`의 `Op` impl을 Verus가 검사하고, 그 impl이 정의하는 메서드마다 `allocates 0`
 (리터럴 `0`)로 제한되어 있고, 위 단계에서는 `#[verifier::fip]`이나 `#[verifier::fip(strict)]`이어야 합니다.
 impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행하고, 그 본문은 trait 자신의 메서드만
@@ -707,7 +707,9 @@ impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행
 
 `Ord`가 제공하는 `max`, `min`, `clamp`는 `Self`의 값을 drop합니다. 그래서 `FbipOrd`에는 `AllocFreeDrop`이,
 `FipOrd`에는 `NoDeallocDrop`이 필요합니다. 그리고 엄격한 함수는 이 셋을 표시 trait을 통해 부를 수
-없습니다(거기서는 타입 매개변수의 소멸자를 알 수 없기 때문입니다).
+없습니다(거기서는 타입 매개변수의 소멸자를 알 수 없기 때문입니다). `Clone`이 제공하는 `clone_from`
+(`*self = source.clone()`)도 마찬가지입니다. `FbipClone`에는 `AllocFreeDrop`이, `FipClone`에는
+`NoDeallocDrop`이 필요하고, 엄격한 함수는 `FipStrictClone`을 통해 `clone_from`을 부를 수 없습니다.
 
 인자를 비교하는 std 함수는 비교가 해제할 때만 해제하고, 비교가 할당하는 만큼만 할당합니다. vstd는 이것을
 표시 trait의 spec 수준 형태로 적습니다. `partial_eq_is_fip::<T, Rhs>()`, `partial_ord_is_fip::<T, Rhs>()`,
@@ -737,6 +739,30 @@ fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
 타입이 `FbipOrd`가 아니면 해석되지 않는 항입니다.) vstd는 `Option<T>`와 참조에 대해서도, `T`(참조 대상)가 비교 표시 trait을 가지면
 그 표시 trait을 구현합니다. 표시 trait이 없는 타입은, 비교가 fip이더라도 거짓임을 보일 수 있는
 `deallocates_when`을 얻지 못합니다. 그런 타입에는 표시 trait을 주세요.
+
+같은 방식으로, `<[T]>::to_vec`와 `Box::<[T]>::from(&[T])`는 한 번 할당하고(빈 slice이면 할당하지 않음)
+원소마다 clone합니다. 결과는 입력과 길이가 같고 원소마다 그 clone(`cloned`)이며, 할당량은
+`1 + seq_clone_allocates(..)`(빈 slice이면 0)이고, `clone`이 해제할 때만 해제합니다. 이 조건을
+`deallocates_when`에 `clone_is_fip::<T>()`(`FipClone` 타입에 대해 참)로 적고, `FbipClone` 타입의 `clone`은
+할당하지 않는다는 공리를 둡니다. 둘 다 정상적으로 돌아올 때 `T`를 drop하지 않으므로, 엄격한 함수도
+`FipStrictClone`을 통해 부를 수 있습니다.
+
+```rust
+#[verifier::fip(strict)]
+fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+    requires
+        forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+    ensures
+        r@ == src@,
+    allocates
+        if src@.len() == 0 { 0int } else { 1int },
+{
+    src.to_vec()
+}
+```
+
+(`r@ == src@`는 `requires`에서 나옵니다. `cloned`는 clone이거나 값 자신이기 때문입니다. `T = i32`나
+`T = f64`인 호출자는 vstd의 `clone` 명세로 이 `requires`를 보입니다.)
 
 ### 다른 crate에서 오는 콜백
 

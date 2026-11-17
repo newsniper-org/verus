@@ -671,6 +671,23 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Vec<T, A> as Clone>::
     allocates (if vec@.len() == 0 { 0int } else { allocator_max_cost::<A>() }) + seq_clone_allocates(vec@, vec@.len()) + allocator_clone_cost::<A>()
 ;
 
+// std 1.100 `alloc/src/slice.rs`, `ConvertVec::to_vec`: `with_capacity_in(len, Global)` and one
+// `T::clone` per element (bitwise copies instead for `TrivialClone` types, which `cloned` allows).
+// On a normal return it drops no `T` (its guard, which drops the clones made so far, acts only on
+// unwinding, and is forgotten after the loop), so it is `alloc_check_skip_drops`. It deallocates
+// only if a `clone` does.
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<T: Clone>[ <[T]>::to_vec ](slice: &[T]) -> (res: Vec<T>)
+    ensures
+        res@.len() == slice@.len(),
+        forall|i| #![all_triggers] 0 <= i < slice@.len() ==> cloned::<T>(slice@[i], res@[i]),
+        slice@ =~= res@ ==> slice@ == res@,
+    allocates deallocates_when(
+        (if slice@.len() == 0 { 0int } else { 1int }) + seq_clone_allocates(slice@, slice@.len()),
+        !super::super::alloc_check::clone_is_fip::<T>(),
+    )
+;
+
 pub broadcast proof fn vec_clone_deep_view_proof<T: DeepView, A: Allocator>(
     v1: Vec<T, A>,
     v2: Vec<T, A>,

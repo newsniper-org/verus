@@ -197,6 +197,7 @@ pub const OP_TRAITS: &[&str] = &[
     "PartialEq",
     "PartialOrd",
     "Ord",
+    "Clone",
 ];
 
 /// The levels of the operator markers: `FbipOp` (the impl's methods are bounded by `allocates
@@ -224,10 +225,14 @@ pub fn op_marker(path: &Path) -> Option<(&'static str, OpLevel)> {
     OP_TRAITS.iter().find(|t| **t == op).map(|t| (*t, level))
 }
 
-/// A `core` operator trait (`core::ops::arith::Add`, `core::cmp::Ord`): its last segment
+/// A `core` operator trait (`core::ops::arith::Add`, `core::cmp::Ord`, `core::clone::Clone`): its
+/// last segment
 pub(crate) fn op_trait(path: &Path) -> Option<&'static str> {
     let name = crate::ast_util::path_as_friendly_rust_name(path);
-    if !(name.starts_with("core::ops::") || name.starts_with("core::cmp::")) {
+    if !(name.starts_with("core::ops::")
+        || name.starts_with("core::cmp::")
+        || name.starts_with("core::clone::"))
+    {
         return None;
     }
     let last = name.rsplit("::").next()?;
@@ -446,7 +451,7 @@ fn is_copy_trait(path: &Path) -> bool {
 
 /// Type parameters whose drop is known not to allocate, from `T: AllocFreeDrop` or `T: Copy`
 /// (or `T: BoundedAllocator`, `FipAllocator`, `FipStrictAllocator`, `NoDeallocDrop` or one of
-/// the `Ord` markers, whose supertraits include `AllocFreeDrop`)
+/// the `Ord` or `Clone` markers, whose supertraits include `AllocFreeDrop`)
 fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
     let mut params = HashSet::new();
     for bound in bounds.iter() {
@@ -454,8 +459,8 @@ fn alloc_free_typ_params(bounds: &GenericBounds) -> HashSet<Ident> {
             if is_alloc_free_drop_trait(path)
                 || is_copy_trait(path)
                 || implies_bounded_allocator(path)
-                // (`FbipOrd`, `FipOrd` and `FipStrictOrd` have `AllocFreeDrop` as a supertrait)
-                || op_marker(path).is_some_and(|(op, _)| op == "Ord")
+                // (the `Ord` and `Clone` markers have `AllocFreeDrop` as a supertrait)
+                || op_marker(path).is_some_and(|(op, _)| op == "Ord" || op == "Clone")
                 || crate::ast_util::path_as_friendly_rust_name(path)
                     == "vstd::alloc_check::NoDeallocDrop"
             {

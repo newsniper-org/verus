@@ -85,6 +85,14 @@ unsafe impl AllocFreeDrop for isize {
 
 }
 
+unsafe impl AllocFreeDrop for f32 {
+
+}
+
+unsafe impl AllocFreeDrop for f64 {
+
+}
+
 unsafe impl<'a, T: ?Sized> AllocFreeDrop for &'a T {
 
 }
@@ -224,6 +232,14 @@ unsafe impl NoDeallocDrop for i128 {
 }
 
 unsafe impl NoDeallocDrop for isize {
+
+}
+
+unsafe impl NoDeallocDrop for f32 {
+
+}
+
+unsafe impl NoDeallocDrop for f64 {
 
 }
 
@@ -564,12 +580,13 @@ pub axiom fn reclaim(
 //   deallocation). A `#[verifier::fip]` function may call an `Op` method through `T: FipOp`.
 // - `FipStrictOp`: also, each of those methods is `#[verifier::fip(strict)]` (constant stack
 //   space). A `#[verifier::fip(strict)]` function may call an `Op` method through
-//   `T: FipStrictOp` (except `Ord::{max, min, clamp}`, which drop a `T`).
+//   `T: FipStrictOp` (except `Ord::{max, min, clamp}` and `Clone::clone_from`, which drop a `T`).
 //
 // The methods an impl does not define run `core`'s provided bodies, which call only the trait's
 // own methods (`ne` calls `eq`, `lt` calls `partial_cmp`). `Ord`'s provided `max`, `min` and
 // `clamp` also drop a value of `Self`: so `FbipOrd` needs `AllocFreeDrop` and `FipOrd` needs
-// `NoDeallocDrop`. The markers follow the supertraits of the operator traits (`FipOrd` implies
+// `NoDeallocDrop`. So does `Clone`'s provided `clone_from` (`*self = source.clone()`), and so
+// `FbipClone` and `FipClone` need them too. The markers follow the supertraits of the operator traits (`FipOrd` implies
 // `FipPartialOrd` and `FipPartialEq`, `FipIndexMut` implies `FipIndex`).
 //
 // The traits are `unsafe`, and every impl outside vstd is checked by `-V alloc-check` (an impl
@@ -617,6 +634,7 @@ def_op_markers! {
     core::cmp::PartialEq => FbipPartialEq, FipPartialEq, FipStrictPartialEq [Rhs: ?Sized = Self] [Rhs] [] [] [];
     core::cmp::PartialOrd => FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd [Rhs: ?Sized = Self] [Rhs] [+ FbipPartialEq<Rhs>] [+ FipPartialEq<Rhs>] [+ FipStrictPartialEq<Rhs>];
     core::cmp::Ord => FbipOrd, FipOrd, FipStrictOrd [] [] [+ FbipPartialOrd + AllocFreeDrop] [+ FipPartialOrd + NoDeallocDrop] [+ FipStrictPartialOrd];
+    core::clone::Clone => FbipClone, FipClone, FipStrictClone [] [] [+ AllocFreeDrop] [+ NoDeallocDrop] [];
 }
 
 // vstd's impls for the primitive types (trusted: std's arithmetic, bit operations and comparisons
@@ -670,6 +688,12 @@ op_marker_impls!([
     FbipOrd, FipOrd, FipStrictOrd
 ] [char]);
 
+// (std's `clone` of these types returns a copy of the value, and so does its `clone_from`; their
+// drops do nothing)
+op_marker_impls!([FbipClone, FipClone, FipStrictClone] [
+    u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize bool char f32 f64
+]);
+
 verus! {
 
 // The comparison markers at the level of specifications, for the `deallocates_when` conditions
@@ -691,6 +715,11 @@ pub uninterp spec fn partial_ord_is_fip<
 /// `T`'s `Ord` methods neither allocate nor deallocate, and neither does dropping a `T`
 /// (`T: FipOrd`)
 pub uninterp spec fn ord_is_fip<T: core::marker::PointeeSized>() -> bool;
+
+/// `T`'s `Clone` methods neither allocate nor deallocate, and neither does dropping a `T`
+/// (`T: FipClone`). For the `deallocates_when` conditions of std's functions that clone their
+/// elements (`<[T]>::to_vec`).
+pub uninterp spec fn clone_is_fip<T>() -> bool;
 
 /// `T`'s `Ord` methods (and those of its supertraits) allocate nothing, and neither does dropping
 /// a `T` (`T: FbipOrd`)
@@ -714,6 +743,11 @@ pub broadcast axiom fn axiom_ord_is_fip<T: FipOrd + ?Sized>()
 pub broadcast axiom fn axiom_ord_is_fbip<T: FbipOrd + ?Sized>()
     ensures
         #[trigger] ord_is_fbip::<T>(),
+;
+
+pub broadcast axiom fn axiom_clone_is_fip<T: FipClone>()
+    ensures
+        #[trigger] clone_is_fip::<T>(),
 ;
 
 // `FbipOp`: the methods of `T`'s impl allocate nothing (each method the impl defines is bounded
@@ -771,6 +805,11 @@ pub broadcast axiom fn axiom_fbip_max<T: FbipOrd>(a: T, b: T)
 pub broadcast axiom fn axiom_fbip_min<T: FbipOrd>(a: T, b: T)
     ensures
         #[trigger] call_allocates(<T as Ord>::min, (a, b)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_clone<T: FbipClone>(a: &T)
+    ensures
+        #[trigger] call_allocates(<T as Clone>::clone, (a,)) == 0,
 ;
 
 // vstd's impls for std's impls that compare through their type arguments (trusted: `Option`'s
@@ -857,6 +896,7 @@ pub broadcast group group_op_marker_axioms {
     axiom_partial_ord_is_fip,
     axiom_ord_is_fip,
     axiom_ord_is_fbip,
+    axiom_clone_is_fip,
     axiom_fbip_eq,
     axiom_fbip_ne,
     axiom_fbip_partial_cmp,
@@ -867,6 +907,7 @@ pub broadcast group group_op_marker_axioms {
     axiom_fbip_cmp,
     axiom_fbip_max,
     axiom_fbip_min,
+    axiom_fbip_clone,
 }
 
 } // verus!
