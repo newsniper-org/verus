@@ -387,7 +387,7 @@ pub assume_specification<T: PartialEq>[ <[T]>::starts_with ](
         } else {
             0
         },
-        !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+        !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
     )
 ;
 
@@ -425,7 +425,7 @@ pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
         } else {
             0
         },
-        !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+        !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
     )
 ;
 
@@ -561,7 +561,7 @@ pub assume_specification<T>[ <[T]>::contains ] (slice: &[T], value: &T) -> (resu
         T: PartialEq<T>,
         ensures
             <T as super::cmp::PartialEqSpec<T>>::obeys_eq_spec() ==> result == spec_slice_contains(slice, value),
-        allocates deallocates_when(seq_contains_allocates(slice@, value, slice@.len()), !crate::alloc_check::partial_eq_is_fip::<T, T>())
+        allocates deallocates_when(seq_contains_allocates(slice@, value, slice@.len()), !super::super::alloc_check::partial_eq_is_fip::<T, T>())
 ;
 
 // sort_unstable and binary_search (-V alloc-check: they compare their elements with `Ord`'s
@@ -575,7 +575,7 @@ pub uninterp spec fn slice_binary_search_allocates<T>(s: Seq<T>, x: &T) -> int;
 
 /// `s` is sorted by `T`'s `cmp_spec` (each element is not `Greater` than any later one)
 pub open spec fn spec_sorted_by_cmp<T: Ord>(s: Seq<T>) -> bool {
-    crate::relations::sorted_by(
+    super::super::relations::sorted_by(
         s,
         |a: T, b: T| <T as super::cmp::OrdSpec>::cmp_spec(&a, &b) != core::cmp::Ordering::Greater,
     )
@@ -589,15 +589,15 @@ pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](slice: &mut [T])
     ensures
         final(slice)@.len() == old(slice)@.len(),
         final(slice)@.to_multiset() == old(slice)@.to_multiset(),
-        crate::laws_cmp::obeys_cmp::<T>() ==> spec_sorted_by_cmp(final(slice)@),
+        super::super::laws_cmp::obeys_cmp::<T>() ==> spec_sorted_by_cmp(final(slice)@),
     allocates
         deallocates_when(
-            if crate::alloc_check::ord_is_fbip::<T>() {
+            if super::super::alloc_check::ord_is_fbip::<T>() {
                 0
             } else {
                 slice_sort_unstable_allocates(old(slice)@)
             },
-            !crate::alloc_check::ord_is_fip::<T>(),
+            !super::super::alloc_check::ord_is_fip::<T>(),
         ),
 ;
 
@@ -616,7 +616,7 @@ pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> 
                 == core::cmp::Ordering::Equal),
             Err(i) => i <= slice@.len(),
         },
-        crate::laws_cmp::obeys_cmp::<T>() && spec_sorted_by_cmp(slice@) ==> match r {
+        super::super::laws_cmp::obeys_cmp::<T>() && spec_sorted_by_cmp(slice@) ==> match r {
             Ok(i) => true,
             Err(i) => {
                 &&& forall|j: int|
@@ -631,12 +631,12 @@ pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> 
         },
     allocates
         deallocates_when(
-            if crate::alloc_check::ord_is_fbip::<T>() {
+            if super::super::alloc_check::ord_is_fbip::<T>() {
                 0
             } else {
                 slice_binary_search_allocates(slice@, x)
             },
-            !crate::alloc_check::ord_is_fip::<T>(),
+            !super::super::alloc_check::ord_is_fip::<T>(),
         ),
 ;
 

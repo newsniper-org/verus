@@ -151,8 +151,8 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
                 <U as PartialOrd<Idx>>::lt,
                 (i, &r.end),
             ),
-            !(crate::alloc_check::partial_ord_is_fip::<Idx, U>()
-                && crate::alloc_check::partial_ord_is_fip::<U, Idx>()),
+            !(super::super::alloc_check::partial_ord_is_fip::<Idx, U>()
+                && super::super::alloc_check::partial_ord_is_fip::<U, Idx>()),
         ),
 ;
 
@@ -176,8 +176,8 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
             } else {
                 call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
             },
-            !(crate::alloc_check::partial_ord_is_fip::<Idx, U>()
-                && crate::alloc_check::partial_ord_is_fip::<U, Idx>()),
+            !(super::super::alloc_check::partial_ord_is_fip::<Idx, U>()
+                && super::super::alloc_check::partial_ord_is_fip::<U, Idx>()),
         ),
 ;
 

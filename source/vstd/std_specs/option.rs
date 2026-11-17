@@ -376,7 +376,7 @@ pub assume_specification<T: PartialEq>[ <Option<T> as PartialEq>::eq ](
             } else {
                 0
             },
-            !crate::alloc_check::partial_eq_is_fip::<T, T>(),
+            !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
         ),
 ;
 
@@ -408,7 +408,7 @@ pub assume_specification<T: PartialOrd>[ <Option<T> as PartialOrd>::partial_cmp 
             } else {
                 0
             },
-            !crate::alloc_check::partial_ord_is_fip::<T, T>(),
+            !super::super::alloc_check::partial_ord_is_fip::<T, T>(),
         ),
 ;
 
@@ -439,7 +439,7 @@ pub assume_specification<T: Ord>[ <Option<T> as Ord>::cmp ](
             } else {
                 0
             },
-            !crate::alloc_check::ord_is_fip::<T>(),
+            !super::super::alloc_check::ord_is_fip::<T>(),
         ),
 ;
 

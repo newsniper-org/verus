@@ -157,7 +157,7 @@ pub open spec fn stateful_allocate_cost<A: StatefulAllocator + ?Sized>(
     a: &A,
     layout: core::alloc::Layout,
 ) -> int {
-    crate::std_specs::rust_1_100::clamp_cost(
+    super::std_specs::rust_1_100::clamp_cost(
         a.allocate_cost_at(heap_state::<A::State>(h, a.loc()), layout),
         A::max_cost(),
     )
@@ -181,7 +181,7 @@ pub open spec fn stateful_grow_cost<A: StatefulAllocator + ?Sized>(
     old_layout: core::alloc::Layout,
     new_layout: core::alloc::Layout,
 ) -> int {
-    crate::std_specs::rust_1_100::clamp_cost(
+    super::std_specs::rust_1_100::clamp_cost(
         a.grow_cost_at(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout),
         A::max_cost(),
     )
@@ -211,7 +211,7 @@ pub open spec fn stateful_shrink_cost<A: StatefulAllocator + ?Sized>(
     old_layout: core::alloc::Layout,
     new_layout: core::alloc::Layout,
 ) -> int {
-    crate::std_specs::rust_1_100::clamp_cost(
+    super::std_specs::rust_1_100::clamp_cost(
         a.shrink_cost_at(heap_state::<A::State>(h, a.loc()), ptr, old_layout, new_layout),
         A::max_cost(),
     )
@@ -350,7 +350,7 @@ impl<S: Preorder> AllocAuth<S> {
 /// `clamp_cost(a.allocate_cost_at(s, layout), max_cost())` where `s = allocator_state(a)`, and
 /// sets `allocator_state(a)` to `a.allocate_next(s, layout, r)` after it; the impl's `allocate` is
 /// verified against the same two facts. Unknown states cost at most `max_cost()`.
-pub unsafe trait StatefulAllocator: crate::alloc_check::BoundedAllocator {
+pub unsafe trait StatefulAllocator: super::alloc_check::BoundedAllocator {
     type State: Preorder;
 
     /// The location of the allocator's state
