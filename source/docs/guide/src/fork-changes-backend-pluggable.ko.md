@@ -1,8 +1,9 @@
 # 교체 가능한 SMT backend (fork)
 
-> **이 페이지는 Verus의 fork를 설명합니다.** `backend-pluggable-beta` 브랜치는 `fip-beta`([업스트림 Verus 대비
-> 변경 사항](./fork-changes.ko.md))에 이 페이지의 변경을 더한 것입니다. Verus가 실행할 수 있는 SMT solver 두
-> 개(adsmt, OxiZ)와 adsmt에 딸린 옵션들입니다. 영어판은 [여기](./fork-changes-backend-pluggable.md)에 있습니다.
+> **이 페이지는 Verus의 fork를 설명합니다.** `backend-pluggable` 브랜치(`backend-pluggable-beta`도 마찬가지)는
+> `fip`([업스트림 Verus 대비 변경 사항](./fork-changes.ko.md))에 이 페이지의 변경을 더한 것입니다. Verus가
+> 실행할 수 있는 SMT solver 두 개(adsmt, OxiZ)와 adsmt에 딸린 옵션들입니다. 영어판은
+> [여기](./fork-changes-backend-pluggable.md)에 있습니다.
 >
 > 모두 실험적입니다. 기본 solver는 여전히 Z3입니다. adsmt나 OxiZ의 결과가 Z3의 결과를 대신하지는 않습니다.
 
