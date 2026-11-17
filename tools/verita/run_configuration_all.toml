@@ -53,7 +53,7 @@ prepare_script = """
 set -euo pipefail
 pushd test_libc
 cargo clean
-cargo +beta-2026-11-05 build --release
+cargo +1.100.0 build --release
 popd
 # (since Rust 1.100 cargo keeps dependency artifacts under target/release/build/, not deps/;
 # after `cargo clean` there must be exactly one)
@@ -70,7 +70,7 @@ $ErrorActionPreference = 'Stop'
 Push-Location test_libc
 cargo clean
 if ($LASTEXITCODE -ne 0) { throw "cargo clean failed" }
-cargo +beta-2026-11-05 build --release
+cargo +1.100.0 build --release
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 Pop-Location
 $libcRlibs = @(Get-ChildItem -Path "./test_libc/target/release/" -Recurse -Filter "liblibc-*.rlib")
@@ -124,7 +124,7 @@ prepare_script = """
 git submodule init
 git submodule update
 cargo update
-rustup target add x86_64-unknown-none --toolchain beta-2026-11-05
+rustup target add x86_64-unknown-none --toolchain 1.100.0
 """
 
 [[project]]
