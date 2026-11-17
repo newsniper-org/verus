@@ -1,9 +1,10 @@
 # Pluggable SMT backends (fork)
 
-> **This page describes a fork of Verus.** The branch `backend-pluggable-beta` is `fip-beta` (see
-> [Changes from upstream Verus](./fork-changes.md)) plus the changes on this page: two more SMT
-> solvers that Verus can run, adsmt and OxiZ, and the options that go with adsmt. A Korean
-> version of this page is [here](./fork-changes-backend-pluggable.ko.md).
+> **This page describes a fork of Verus.** The branch `backend-pluggable` (and likewise
+> `backend-pluggable-beta`) is `fip` (see [Changes from upstream Verus](./fork-changes.md)) plus
+> the changes on this page: two more SMT solvers that Verus can run, adsmt and OxiZ, and the
+> options that go with adsmt. A Korean version of this page is
+> [here](./fork-changes-backend-pluggable.ko.md).
 >
 > All of this is experimental. Z3 stays the default solver. A result from adsmt or OxiZ is not a
 > substitute for a result from Z3.
