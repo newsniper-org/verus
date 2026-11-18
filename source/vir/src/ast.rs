@@ -1009,6 +1009,8 @@ pub enum BuiltinSpecFun {
     Allocated,
     /// `call_allocates(f, args)`: the `allocates` bound of a function value at the given args
     ClosureAlloc,
+    /// `call_deallocates(f, args)`: may a call of the function value deallocate (-V alloc-check)
+    ClosureDealloc,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]
@@ -1222,6 +1224,9 @@ pub enum ExprX {
         mask_spec: Option<MaskSpec>,
         /// `-V alloc-check`: upper bound on the closure's allocations per call, over the params
         allocates: Option<Expr>,
+        /// `-V alloc-check`: `#[verifier::fip]` on the closure: its body never deallocates
+        /// (`call_deallocates` of it is `false`)
+        fip: bool,
         ret: VarBinder<Typ>,
         /// The 'external spec' is an Option because it gets filled in during
         /// ast_simplify. It contains the assumptions that surrounding context

@@ -2172,6 +2172,16 @@ pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: 
     unimplemented!();
 }
 
+/// -V alloc-check: may a call of the function value `f` with `args` deallocate? (`false` for a
+/// `#[verifier::fip]` function; its condition for one with `deallocates_when`; for a trait method
+/// whose declaration has a condition, at most the declaration's. Inside `verus!`,
+/// `f.deallocates(args)` is this, and `f.allocates(args)` is `call_allocates(f, (args,))`.)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::call_deallocates"]
+pub fn call_deallocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_requires"]
 pub fn call_requires<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {

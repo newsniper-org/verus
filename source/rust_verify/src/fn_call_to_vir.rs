@@ -2419,7 +2419,8 @@ fn verus_item_to_vir<'tcx, 'a>(
             re @ (BuiltinFunctionItem::CallRequires
             | BuiltinFunctionItem::CallEnsures
             | BuiltinFunctionItem::CallOpensInvariants
-            | BuiltinFunctionItem::CallAllocates),
+            | BuiltinFunctionItem::CallAllocates
+            | BuiltinFunctionItem::CallDeallocates),
         ) => {
             record_spec_fn(bctx, expr);
 
@@ -2439,6 +2440,10 @@ fn verus_item_to_vir<'tcx, 'a>(
                 BuiltinFunctionItem::CallAllocates => {
                     assert!(args.len() == 2);
                     BuiltinSpecFun::ClosureAlloc
+                }
+                BuiltinFunctionItem::CallDeallocates => {
+                    assert!(args.len() == 2);
+                    BuiltinSpecFun::ClosureDealloc
                 }
                 BuiltinFunctionItem::ConstrainType => unreachable!(),
                 BuiltinFunctionItem::Allocated => unreachable!(),

@@ -1039,8 +1039,14 @@ fn strict_edges<'tcx>(
                     let trait_ref = ty::TraitRef::new_from_args(tcx, tr, tcx.mk_args(&args[..n]));
                     om.marked(tcx, typing_env, trait_ref, true).then_some(tr)
                 });
+                // (a generic call of an `Allocator` method is a call into the allocator runtime,
+                // a leaf: `allocator_runtime`)
+                let allocator_call = func.const_fn_def().is_some_and(|(c, _)| {
+                    allocator_trait(tcx).is_some_and(|a| tcx.trait_of_assoc(c) == Some(a))
+                });
                 match resolve_callee(tcx, typing_env, func) {
                     Some(callee) => add(callee, tail, span, &mut edges),
+                    None if allocator_call => {}
                     None if marked_op.is_some() => {
                         for m in om.strict_methods(tcx, marked_op.unwrap()) {
                             edges.push(StrictEdge { callee: m, tail: false, span });
@@ -1166,9 +1172,12 @@ pub(crate) fn check_fip_crate<'tcx>(
     let mut any = false;
     let mut strict: Vec<LocalDefId> = Vec::new();
     for def_id in tcx.hir_body_owners() {
+        // (a `#[verifier::fip]` closure too: its body is checked like a function's)
         if !matches!(
             tcx.def_kind(def_id),
-            rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+            rustc_hir::def::DefKind::Fn
+                | rustc_hir::def::DefKind::AssocFn
+                | rustc_hir::def::DefKind::Closure
         ) {
             continue;
         }

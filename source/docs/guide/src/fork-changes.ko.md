@@ -60,6 +60,9 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 사용자 정의 할당기 | 어떤 할당기든 `Vec<T, A>`, `Box<T, A>` 등. 할당기 호출마다 1이고, 할당기가 스스로 하는 일은 세지 않음 | `fip-beta`. 호출만 세는 것은 `fip` (1.100)부터 | [할당 상한](./reference-allocates.ko.md)의 "사용자 정의 할당기" 절 |
 | bound 명세 | 타입 매개변수, `where` 절, impl, struct의 `T: Tr with { .. }` | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "bound 명세" 절 |
 | 완전한 제자리 함수 (해제 없음) | `#[verifier::fip]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
+| trait 선언의 해제 조건 | 기본 본문이 없는 trait 메서드 선언에 `allocates deallocates_when(n, c)`(모든 구현의 계약) | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 `#[verifier::fip]` 절 |
+| 함수 값의 상한과 해제 조건 | `call_deallocates(f, args)`, `verus!` 안의 `f.allocates(args)`와 `f.deallocates(args)` | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 "콜백, 클로저, trait" 절 |
+| 완전한 제자리 클로저 | 클로저 식에 `#[verifier::fip]`, fip 코드에서 `!f.deallocates(x)`로 함수 값 호출 | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 `#[verifier::fip]` 절 |
 | 상수 스택 공간 | `become`과 함께 `#[verifier::fip(strict)]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
 | fip 코드의 제네릭 연산자 호출 | `T: FipAdd`, `T: FipOrd` 등 (`core`의 연산자 trait마다 `FbipOp`, `FipOp`, `FipStrictOp`) | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |
 | fip 코드의 제네릭 `clone`과 slice 복사 | `T: FipClone` 등 (`Clone`에 대한 같은 세 단계), `<[T]>::to_vec`, `Box::<[T]>::from(&[T])`, `Vec::<T>::from(&[T])`, 파생 `clone`은 필드에 따라 `allocates 0`과 fip/strict | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |

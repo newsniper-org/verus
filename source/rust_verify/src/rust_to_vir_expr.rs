@@ -4819,9 +4819,36 @@ pub(crate) fn closure_to_vir<'tcx>(
             vir::headers::read_header(&mut body, &vir::headers::HeaderAllows::Closure)?;
         add_param_decls(bctx, closure_expr.span, &mut header, &mut body, pattern_stmts)?;
         let vir::headers::Header {
-            require, ensure, ensure_id_typ, invariant_mask, allocates, ..
+            require,
+            ensure,
+            ensure_id_typ,
+            invariant_mask,
+            mut allocates,
+            ..
         } = header;
         assert!(ensure.1.len() == 0);
+        // -V alloc-check: `#[verifier::fip]` (or `fip(strict)`) on the closure: its body never
+        // deallocates (checked here and on the MIR, like a function's), and without a bound it
+        // allocates nothing either
+        let closure_fip =
+            bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(closure_expr.hir_id))?.fip;
+        if closure_fip.is_some() {
+            if !bctx.ctxt.cmd_line_args.alloc_check {
+                return err_span(closure_expr.span, "`#[verifier::fip]` needs -V alloc-check");
+            }
+            if is_spec_fn || proof_fn_modes.is_some() {
+                return err_span(
+                    closure_expr.span,
+                    "`#[verifier::fip]` can only be used on exec closures",
+                );
+            }
+            if allocates.is_none() {
+                allocates = Some(vir::ast_util::mk_int_lit_from_usize(
+                    &bctx.ctxt.spans.to_air_span(closure_expr.span),
+                    0,
+                ));
+            }
+        }
 
         let exprx = if is_spec_fn {
             bctx.push_body_erasure(
@@ -4883,6 +4910,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 ensures: ensure.0,
                 mask_spec: invariant_mask,
                 allocates,
+                fip: closure_fip.is_some(),
                 ret: ret,
                 external_spec: None, // filled in by ast_simplify
             }

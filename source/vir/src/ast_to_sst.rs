@@ -1896,29 +1896,24 @@ fn fip_call_check(
             return Ok(None);
         }
     }
-    // (a trait method call resolved to an impl is checked against that impl, except an allocator's
-    // method, which is the runtime's: its call counts as the `Allocator` declaration says)
+    // (a trait method call resolved to an impl is checked against that impl)
     let (callee, callee_typs) = match resolved {
         Some((r, ts)) => (get_function(ctx, span, r)?, ts.clone()),
         None => (target_fun.clone(), target_typs.clone()),
     };
-    let allocator_call = callee.x.attrs.allocator_runtime
-        && matches!(&callee.x.kind, crate::ast::FunctionKind::TraitMethodImpl { trait_path, .. }
-            if crate::alloc_check::is_allocator_trait(trait_path));
-    if allocator_call {
-        // `allocate` and `allocate_zeroed` only obtain memory: they never free a block of the
-        // program's (what the allocator does inside is the runtime's); `grow`, `grow_zeroed` and
-        // `shrink` may move the block, and `deallocate` frees it
-        let name = crate::ast_util::fun_as_friendly_rust_name(target);
-        if name == "core::alloc::Allocator::allocate"
-            || name == "core::alloc::Allocator::allocate_zeroed"
-        {
-            return Ok(None);
-        }
-    }
     if callee.x.attrs.fip {
         return Ok(None);
     }
+    // A trait method declaration's `deallocates_when` condition holds for every implementation
+    // (`well_formed`): a generic call, and a call of an implementation without a condition of its
+    // own (the allocator runtime's code, or a trusted one), have the declaration's
+    let decl_cond = matches!(target_fun.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
+        && target_fun.x.deallocates.is_some();
+    let (callee, callee_typs) = if decl_cond && callee.x.deallocates.is_none() {
+        (target_fun.clone(), target_typs.clone())
+    } else {
+        (callee, callee_typs)
+    };
     let not_fip = |why: &str| {
         error(
             span,
@@ -1929,7 +1924,9 @@ fn fip_call_check(
             ),
         )
     };
-    if matches!(callee.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. }) {
+    if callee.x.deallocates.is_none()
+        && matches!(callee.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
+    {
         return Err(not_fip(
             "is a trait method whose implementation is not known here (a generic call)",
         ));
@@ -2357,6 +2354,7 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,
                 BuiltinSpecFun::DefaultEns => InternalFun::DefaultEns,
                 BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,
+                BuiltinSpecFun::ClosureDealloc => InternalFun::ClosureDealloc,
             };
             Ok((
                 check_stms,
@@ -2748,6 +2746,7 @@ pub(crate) fn expr_to_stm_opt(
             ensures,
             mask_spec,
             allocates,
+            fip,
             ret,
             external_spec,
         } => {
@@ -2766,6 +2765,7 @@ pub(crate) fn expr_to_stm_opt(
                 ensures,
                 mask_spec,
                 allocates,
+                *fip,
                 proof_fn_modes.is_some(),
             )?;
             let block = Spanned::new(expr.span.clone(), StmX::Block(Arc::new(inner_stms)));
@@ -5362,6 +5362,7 @@ fn exec_closure_body_stms(
     ensures: &Exprs,
     mask_spec: &Option<MaskSpec>,
     allocates: &Option<Expr>,
+    fip: bool,
     is_proof: bool,
 ) -> Result<(Vec<Stm>, Arc<Vec<(UniqueIdent, Typ)>>), VirErr> {
     let mut typ_inv_vars = vec![];
@@ -5371,8 +5372,9 @@ fn exec_closure_body_stms(
     // with an `allocates` bound gets a counter of its own, checked against the bound at every
     // return; a closure without one is not checked.
     let outer_alloc_counter = state.alloc_counter.take();
-    // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function)
-    let outer_fip = std::mem::replace(&mut state.fip, false);
+    // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function: it is
+    // checked as fip only if the closure itself is `#[verifier::fip]`)
+    let outer_fip = std::mem::replace(&mut state.fip, fip && ctx.global.alloc_check);
     // (and a closure made in an `Allocator` method's body may run any number of times, or after
     // the method returns: it may not hand out or reclaim blocks for the method)
     let outer_handout = state.alloc_handout.take();

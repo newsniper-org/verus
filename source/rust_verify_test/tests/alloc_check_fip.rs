@@ -2808,3 +2808,284 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+// `deallocates_when` on a trait method declaration: a contract of every implementation (a
+// verified one must be fip), which a generic call checks
+test_verify_one_file_with_options! {
+    #[test] fip_trait_decl_deallocates_when ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Layout};
+        use std::ptr::NonNull;
+
+        pub trait Pool {
+            fn take(&mut self, n: u64) -> (r: u64)
+                allocates deallocates_when(0int, n > 10);
+        }
+
+        pub struct P;
+
+        impl Pool for P {
+            #[verifier::fip]
+            fn take(&mut self, n: u64) -> (r: u64) {
+                n
+            }
+        }
+
+        #[verifier::fip]
+        fn use_generic<T: Pool>(t: &mut T) -> (r: u64) {
+            t.take(3)
+        }
+
+        #[verifier::fip]
+        fn use_p(p: &mut P) -> (r: u64) {
+            p.take(20)
+        }
+
+        // an allocator's `allocate` never deallocates, also through a generic `A: Allocator`
+        #[verifier::fip(strict)]
+        fn alloc_generic<A: Allocator>(a: &A, l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            allocates 1
+        {
+            a.allocate(l)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_decl_deallocates_when_generic_call_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Pool {
+            fn take(&mut self, n: u64) -> (r: u64)
+                allocates deallocates_when(0int, n > 10);
+        }
+
+        #[verifier::fip]
+        fn use_generic<T: Pool>(t: &mut T) -> (r: u64) {
+            t.take(20)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the `deallocates_when` condition of")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_decl_deallocates_when_impl_not_fip ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Pool {
+            fn take(&mut self, n: u64) -> (r: u64)
+                allocates deallocates_when(0int, n > 10);
+        }
+
+        pub struct P;
+
+        impl Pool for P {
+            fn take(&mut self, n: u64) -> (r: u64)
+                allocates 0
+            {
+                n
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the implementation must be `#[verifier::fip]`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_trait_decl_deallocates_when_default_body_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Pool {
+            fn take(&mut self, n: u64) -> (r: u64)
+                allocates deallocates_when(0int, n > 10)
+            {
+                n
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "can state `deallocates_when`")
+}
+
+// `f.allocates(args)` / `f.deallocates(args)` (`call_allocates`, `call_deallocates`): a
+// specification that forwards to another function can pass on its bound and its deallocation
+// condition, also a conditional one
+test_verify_one_file_with_options! {
+    #[test] fip_call_deallocates_forwarding ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn inner(x: u64) -> (r: u64) {
+            x
+        }
+
+        #[verifier::external_body]
+        fn shrink_if_big(x: u64) -> (r: u64)
+            allocates deallocates_when(0int, x > 5)
+        {
+            x
+        }
+
+        #[verifier::external_body]
+        fn outer(x: u64) -> (r: u64)
+            allocates deallocates_when(inner.allocates(x), inner.deallocates(x))
+        {
+            inner(x)
+        }
+
+        #[verifier::external_body]
+        fn outer2(x: u64) -> (r: u64)
+            allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+        {
+            shrink_if_big(x)
+        }
+
+        #[verifier::fip]
+        fn use_outer(x: u64) -> (r: u64) {
+            outer(x)
+        }
+
+        #[verifier::fip]
+        fn use_outer2_small() -> (r: u64) {
+            outer2(3)
+        }
+
+        // the builtins themselves, as the sugar rewrites to
+        proof fn facts(x: u64) {
+            assert(call_deallocates(inner, (x,)) == false);
+            assert(call_allocates(inner, (x,)) == 0);
+            assert(shrink_if_big.deallocates(x) == (x > 5));
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_call_deallocates_forwarding_condition_holds ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::external_body]
+        fn shrink_if_big(x: u64) -> (r: u64)
+            allocates deallocates_when(0int, x > 5)
+        {
+            x
+        }
+
+        #[verifier::external_body]
+        fn outer2(x: u64) -> (r: u64)
+            allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+        {
+            shrink_if_big(x)
+        }
+
+        #[verifier::fip]
+        fn use_outer2_big() -> (r: u64) {
+            outer2(10)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the `deallocates_when` condition of")
+}
+
+test_verify_one_file_with_options! {
+    // a trait declaration's condition is an upper bound for every implementation
+    #[test] fip_call_deallocates_trait_decl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Pool {
+            fn peek(&self, n: u64) -> (r: u64)
+                allocates deallocates_when(0int, n > 10);
+        }
+
+        proof fn decl_bound<T: Pool>(t: &T, n: u64)
+            requires n <= 10,
+        {
+            assert(!call_deallocates(T::peek, (t, n)));
+            assert(!T::peek.deallocates(t, n));
+        }
+    } => Ok(())
+}
+
+// `#[verifier::fip]` closures: their bodies are checked as fip, `call_deallocates` of them is
+// `false`, and a fip function may call a function value whose `deallocates` it shows false
+test_verify_one_file_with_options! {
+    #[test] fip_closures ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !(*f).deallocates(x),
+            allocates
+                (*f).allocates(x),
+        {
+            f(x)
+        }
+
+        #[verifier::fip]
+        fn compose<F: Fn(u64) -> u64, G: Fn(u64) -> u64>(f: &F, g: &G, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                forall|y: u64| g.requires((y,)),
+                !(*f).deallocates(x),
+                forall|y: u64| !(*g).deallocates(y),
+                forall|y: u64| (*g).allocates(y) == 0,
+            allocates
+                (*f).allocates(x),
+        {
+            let y = f(x);
+            g(y)
+        }
+
+        #[verifier::fip]
+        fn use_them() -> (r: u64) {
+            let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+            let inc = #[verifier::fip] |y: u64| -> (r: u64) { y.wrapping_add(1) };
+            let a = apply(&half, 7);
+            let b = compose(&half, &inc, 8);
+            let c = half(4);
+            a.wrapping_add(b).wrapping_add(c)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_not_fip_call_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn use_it() -> (r: u64) {
+            let half = |y: u64| -> (r: u64) allocates 0 { y / 2 };
+            half(4)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the `deallocates_when` condition of")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_body_checked ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn make() -> (r: u64) {
+            let f = #[verifier::fip] |b: Box<u64>| -> (r: u64) { *b };
+            f(Box::new(3))
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+test_verify_one_file_with_options! {
+    // a strict function may call a strict closure it knows (a generic one's stack is not known)
+    #[test] fip_strict_closure_call ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip(strict)]
+        fn use_it() -> (r: u64) {
+            let half = #[verifier::fip(strict)] |y: u64| -> (r: u64) { y / 2 };
+            half(4)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_closure_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip(strict)]
+        fn use_it() -> (r: u64) {
+            let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+            half(4)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not `#[verifier::fip(strict)]`")
+}

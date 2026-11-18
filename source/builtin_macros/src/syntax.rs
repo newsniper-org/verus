@@ -2873,6 +2873,39 @@ impl Visitor {
         true
     }
 
+    /// `f.allocates(a, b)` is `call_allocates(f, (a, b))`, and `f.deallocates(a, b)` is
+    /// `call_deallocates(f, (a, b))` (-V alloc-check: the `allocates` bound and the deallocation
+    /// condition of the function value `f` at those arguments)
+    fn handle_call_bound_methods(&mut self, expr: &mut Expr) -> bool {
+        let Expr::MethodCall(m) = &*expr else { return false };
+        let name = m.method.to_string();
+        if !(name == "allocates" || name == "deallocates")
+            || m.turbofish.is_some()
+            || m.atomically.is_some()
+        {
+            return false;
+        }
+        visit_expr_mut(self, expr);
+        let Expr::MethodCall(m) = take_expr(expr) else { unreachable!() };
+        let span = m.span();
+        let receiver = m.receiver;
+        let args: Vec<Expr> = m.args.into_iter().collect();
+        let tuple = if args.len() == 1 {
+            let a = &args[0];
+            quote_spanned!(span => (#a,))
+        } else {
+            quote_spanned!(span => (#(#args),*))
+        };
+        let f = format_ident!(
+            "{}",
+            if name == "allocates" { "call_allocates" } else { "call_deallocates" }
+        );
+        *expr = Expr::Verbatim(
+            quote_spanned_builtin!(verus_builtin, span => #verus_builtin::#f(#receiver, #tuple)),
+        );
+        true
+    }
+
     fn handle_spec_operators(&mut self, expr: &mut Expr) -> bool {
         if !matches!(
             expr,
@@ -4653,6 +4686,7 @@ impl VisitMut for Visitor {
             || self.handle_unary_ops(expr)
             || self.handle_big_and_big_or(expr)
             || self.handle_spec_operators(expr)
+            || self.handle_call_bound_methods(expr)
         {
             return;
         }

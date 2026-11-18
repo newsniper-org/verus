@@ -221,7 +221,8 @@ pub broadcast group group_rust_1_100_core_axioms {
 /// `#[verifier::trusted_only]` (so are their implementations), and verified code calls them only
 /// in a `#[verifier::trusted_call]` block (`vstd::raw_ptr::deallocate` frees with a `Dealloc`
 /// permission instead). -V alloc-check counts a call to an allocator, not what the allocator does:
-/// `allocate` and `allocate_zeroed` are one allocation and do not deallocate; `grow`,
+/// `allocate` and `allocate_zeroed` are one allocation and do not deallocate (their
+/// `deallocates_when` condition, a contract of every implementation); `grow`,
 /// `grow_zeroed` and `shrink` are one allocation and may deallocate (they may move the block);
 /// `deallocate` allocates nothing and deallocates. The bodies of `Allocator` impls (and of an
 /// allocator type's `Clone` and `Drop` impls) are the runtime: their allocations, deallocations and
@@ -245,14 +246,14 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, layout),
         allocates
-            1int,
+            deallocates_when(1int, false),
     ;
 
     fn allocate_zeroed(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
         ensures
             allocator_block_fits(r, layout),
         allocates
-            1int,
+            deallocates_when(1int, false),
     ;
 
     #[verifier::trusted_only]

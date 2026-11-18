@@ -62,6 +62,8 @@ pub enum InternalFun {
     DeallocCond(Fun),
     /// `call_allocates(f, args)`: the `allocates` bound of a function value
     ClosureAlloc,
+    /// `call_deallocates(f, args)`
+    ClosureDealloc,
 }
 
 #[derive(Debug, Clone, Hash, ToDebugSNode)]

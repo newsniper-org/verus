@@ -2380,6 +2380,7 @@ fn check_expr(
             ensures,
             mask_spec,
             allocates,
+            fip: _,
             body,
             external_spec,
         } => {

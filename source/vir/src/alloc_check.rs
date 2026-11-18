@@ -1303,6 +1303,17 @@ pub(crate) fn allocator_dts(krate: &Krate) -> HashSet<Dt> {
 pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), VirErr> {
     let decl_has_bound: HashSet<&crate::ast::Fun> =
         krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
+    // (a declaration's `deallocates_when` condition: its implementations must be fip, which only
+    // a crate verified with -V alloc-check has checked)
+    let decl_has_dealloc: HashSet<&crate::ast::Fun> = krate
+        .functions
+        .iter()
+        .filter(|f| {
+            f.x.deallocates.is_some()
+                && matches!(f.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
+        })
+        .map(|f| &f.x.name)
+        .collect();
     for f in krate.functions.iter() {
         // (an imported function has no body any more, so look at how it was declared)
         if f.x.attrs.is_external_body
@@ -1320,6 +1331,17 @@ pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), Vi
             }
             _ => false,
         };
+        if let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
+            if decl_has_dealloc.contains(method) {
+                return Err(error(
+                    &f.span,
+                    format!(
+                        "`{}` implements a trait method with a `deallocates_when` condition, but its crate was not verified with -V alloc-check, so it was not checked to be fip",
+                        crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                    ),
+                ));
+            }
+        }
         if f.x.allocates.is_some() || impl_of_bounded_decl {
             return Err(error(
                 &f.span,
@@ -1345,6 +1367,27 @@ pub(crate) fn check_imported_bounds_were_checked(krate: &Krate) -> Result<(), Vi
 pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(), VirErr> {
     let decl_has_bound: HashSet<&crate::ast::Fun> =
         krate.functions.iter().filter(|f| f.x.allocates.is_some()).map(|f| &f.x.name).collect();
+    // Likewise a `deallocates_when` condition: a generic call checks the declaration's, so an
+    // impl without a verified body has the declaration's condition; one of its own (weaker, it
+    // could be) would not be what generic callers check. (vstd's may restate it.)
+    let decl_has_dealloc: HashSet<&crate::ast::Fun> =
+        krate.functions.iter().filter(|f| f.x.deallocates.is_some()).map(|f| &f.x.name).collect();
+    for f in krate.functions.iter() {
+        let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
+        if f.x.deallocates.is_some()
+            && decl_has_dealloc.contains(method)
+            && (f.x.attrs.is_external_body || f.x.proxy.is_some())
+            && !f.x.proxy.as_ref().is_some_and(|px| px.x.is_vstd_path())
+        {
+            return Err(error(
+                &f.span,
+                format!(
+                    "`{}` implements a trait method that has a `deallocates_when` condition, so without a verified body it cannot state its own (remove it to use the trait method's condition)",
+                    crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                ),
+            ));
+        }
+    }
     for f in krate.functions.iter() {
         let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
         let Some(own) = &f.x.allocates else { continue };
@@ -1367,6 +1410,46 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
                 format!(
                     "`{}` implements a trait method that has an `allocates` bound, so without a verified body it cannot state its own bound (remove it to use the trait method's bound)",
                     crate::ast_util::fun_as_friendly_rust_name(&f.x.name),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `deallocates_when(n, c)` on a trait method declaration is a contract of every implementation:
+/// it deallocates only when `c` holds, which a generic call relies on (`fip_call_check`). An
+/// implementation with a verified body must therefore never deallocate (`#[verifier::fip]`:
+/// whether it deallocates is checked as a whole, not under a condition), unless it is the
+/// allocator runtime's code, which is not checked (`FunctionAttrsX::allocator_runtime`). One
+/// without a verified body (`external_body`, an `assume_specification`) is trusted, like its
+/// other specifications, with the declaration's condition
+/// (`check_unverified_impls_of_bounded_decls`). (An imported implementation has no body here: its
+/// crate checked it, or `check_imported_bounds_were_checked` rejects it.)
+pub(crate) fn check_impls_of_dealloc_decls(krate: &Krate) -> Result<(), VirErr> {
+    let decl_has_dealloc: HashSet<&crate::ast::Fun> = krate
+        .functions
+        .iter()
+        .filter(|f| {
+            f.x.deallocates.is_some()
+                && matches!(f.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
+        })
+        .map(|f| &f.x.name)
+        .collect();
+    for f in krate.functions.iter() {
+        let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
+        if decl_has_dealloc.contains(method)
+            && f.x.body.is_some()
+            && !f.x.attrs.is_external_body
+            && f.x.proxy.is_none()
+            && !f.x.attrs.fip
+            && !f.x.attrs.allocator_runtime
+        {
+            return Err(error(
+                &f.span,
+                format!(
+                    "this implements `{}`, whose declaration has a `deallocates_when` condition: the implementation must be `#[verifier::fip]` (a generic call of the method relies on every implementation, and a verified body is checked to never deallocate, not to deallocate only under a condition)",
+                    crate::ast_util::fun_as_friendly_rust_name(method),
                 ),
             ));
         }

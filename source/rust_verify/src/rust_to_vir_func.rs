@@ -2547,10 +2547,16 @@ pub(crate) fn finish_function<'tcx>(
         header.allocates =
             Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
     }
-    if header.deallocates.is_some() && !(vattrs.external_body || vattrs.external_fn_specification) {
+    // (a trait method declaration without a default body may state one too: a contract of every
+    // implementation, see vir's `well_formed`)
+    if header.deallocates.is_some()
+        && !(vattrs.external_body
+            || vattrs.external_fn_specification
+            || (matches!(kind, FunctionKind::TraitMethodDecl { .. }) && header.no_method_body))
+    {
         return err_span(
             sig.span,
-            "only a specification without a verified body (`assume_specification`, `external_body`) can state `deallocates_when`; a verified function that never deallocates is `#[verifier::fip]`",
+            "only a specification without a verified body (`assume_specification`, `external_body`, a trait method declaration without a default body) can state `deallocates_when`; a verified function that never deallocates is `#[verifier::fip]`",
         );
     }
 

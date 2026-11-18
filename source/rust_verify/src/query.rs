@@ -743,8 +743,8 @@ pub fn get_global_query<'tcx>(_tcx: TyCtxt<'tcx>) -> Option<Rc<Query<'tcx>>> {
 /// does not import, or one in a dependency whose .vir is not imported) is unchecked, so it is
 /// rejected if it
 /// - implements `vstd::alloc_check::AllocFreeDrop` (the drop rule trusts it), or
-/// - defines a method whose trait declaration has an `allocates` bound (callers rely on the
-///   bound for every implementation).
+/// - defines a method whose trait declaration has an `allocates` bound or a `deallocates_when`
+///   condition (callers rely on them for every implementation).
 /// (No impl in the toolchain can implement these traits. The traits that vstd specifies are not
 /// among them: vstd's bounds on their declarations constrain only std's own implementations.)
 fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> {
@@ -753,7 +753,7 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
         .functions
         .iter()
         .filter(|f| {
-            f.x.allocates.is_some()
+            (f.x.allocates.is_some() || f.x.deallocates.is_some())
                 && matches!(f.x.kind, vir::ast::FunctionKind::TraitMethodDecl { .. })
         })
         .map(|f| &f.x.name.path)

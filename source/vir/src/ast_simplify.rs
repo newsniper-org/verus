@@ -661,6 +661,7 @@ fn simplify_one_expr(
             ensures,
             mask_spec,
             allocates,
+            fip,
             ret,
             external_spec,
         } => {
@@ -685,6 +686,7 @@ fn simplify_one_expr(
                 ensures,
                 mask_spec,
                 &checked_allocates,
+                ctx.alloc_check && *fip,
                 proof_fn_modes.is_some(),
             )?;
             let external_spec = Some((closure_var_ident, external_spec_expr));
@@ -700,6 +702,7 @@ fn simplify_one_expr(
                     ensures: ensures.clone(),
                     mask_spec: mask_spec.clone(),
                     allocates: allocates.clone(),
+                    fip: *fip,
                     ret: ret.clone(),
                     external_spec,
                 },
@@ -1241,6 +1244,46 @@ fn exec_closure_spec_allocates(
     Ok(conjoin(span, &vec![value_level, type_level]))
 }
 
+/// `-V alloc-check`, `#[verifier::fip]` on a closure: its body never deallocates (checked where
+/// it is), so `forall c: C, x :: !closure_dealloc(c, x)` for every value `c` of its type (all of
+/// them come from this closure expression)
+fn exec_closure_spec_fip(
+    state: &mut State,
+    span: &Span,
+    closure_var: &Expr,
+    params: &VarBinders<Typ>,
+) -> Expr {
+    let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, params);
+    let tuple_typ = tuple_var.typ.clone();
+    let bool_typ = Arc::new(TypX::Bool);
+    let (c_ident, c_var) = {
+        let ident = state.next_temp();
+        (ident.clone(), SpannedTyped::new(span, &closure_var.typ, ExprX::Var(ident)))
+    };
+    let dealloc_call = wrap_in_trigger(&SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExprX::Call {
+            target: CallTarget::BuiltinSpecFun(
+                BuiltinSpecFun::ClosureDealloc,
+                closure_trait_call_typ_args(state, &c_var, params),
+                Arc::new(vec![]),
+            ),
+            args: Arc::new(vec![c_var.clone(), tuple_var.clone()]),
+            post_args: None,
+            body: None,
+        },
+    ));
+    let body =
+        SpannedTyped::new(span, &bool_typ, ExprX::Unary(crate::ast::UnaryOp::Not, dealloc_call));
+    let forall = Quant { quant: air::ast::Quant::Forall };
+    let binders = Arc::new(vec![
+        Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ }),
+        Arc::new(VarBinderX { name: c_ident, a: closure_var.typ.clone() }),
+    ]);
+    SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, body))
+}
+
 fn exec_closure_spec(
     state: &mut State,
     span: &Span,
@@ -1251,6 +1294,7 @@ fn exec_closure_spec(
     ensures: &Exprs,
     mask_spec: &Option<crate::ast::MaskSpec>,
     allocates: &Option<Expr>,
+    fip: bool,
     is_proof: bool,
 ) -> Result<Expr, VirErr> {
     let req_forall = exec_closure_spec_requires(state, span, closure_var, params, requires)?;
@@ -1271,6 +1315,9 @@ fn exec_closure_spec(
     }
     if let Some(bound) = allocates {
         exprs.push(exec_closure_spec_allocates(state, span, closure_var, params, bound)?);
+    }
+    if fip {
+        exprs.push(exec_closure_spec_fip(state, span, closure_var, params));
     }
     Ok(conjoin(span, &exprs))
 }
@@ -1507,6 +1554,65 @@ fn add_fndef_axioms_to_function(
         let forall = Quant { quant: air::ast::Quant::Forall };
         let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
         let bool_typ = Arc::new(TypX::Bool);
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
+    }
+
+    // `call_deallocates(f, args)` (-V alloc-check): `false` for a `#[verifier::fip]` function, and
+    // its condition for one with `deallocates_when`. A trait method declaration's condition holds
+    // for every implementation (`alloc_check::check_impls_of_dealloc_decls`), so for the
+    // declaration it is an upper bound (an implication); an impl has its own equation.
+    if alloc_check && (function.x.attrs.fip || function.x.deallocates.is_some()) {
+        let span = &function.span;
+        let bool_typ = Arc::new(TypX::Bool);
+        let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
+        let tuple_typ = tuple_var.typ.clone();
+        let mut decls: Vec<Stmt> = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let typ = &p.a;
+            let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+            let tuple_field = tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+            let decl = StmtX::Decl {
+                pattern,
+                mode: None,
+                init: Some(PlaceX::spec_temporary(tuple_field)),
+                els: None,
+                assert_irrefutable: false,
+            };
+            decls.push(Spanned::new(span.clone(), decl));
+        }
+        let cond = match (&function.x.deallocates, function.x.attrs.fip) {
+            (Some(c), false) => SpannedTyped::new(
+                &c.span,
+                &bool_typ,
+                ExprX::Block(Arc::new(decls.clone()), Some(c.clone())),
+            ),
+            _ => {
+                SpannedTyped::new(span, &bool_typ, ExprX::Const(crate::ast::Constant::Bool(false)))
+            }
+        };
+        let dealloc_call = SpannedTyped::new(
+            span,
+            &bool_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::ClosureDealloc,
+                    closure_trait_call_typ_args(state, &fndef_singleton, &params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![fndef_singleton.clone(), tuple_var.clone()]),
+                post_args: None,
+                body: None,
+            },
+        );
+        let rel = if matches!(function.x.kind, FunctionKind::TraitMethodDecl { .. })
+            && !function.x.attrs.fip
+        {
+            crate::ast_util::mk_implies(span, &wrap_in_trigger(&dealloc_call), &cond)
+        } else {
+            crate::ast_util::mk_eq(span, &wrap_in_trigger(&dealloc_call), &cond)
+        };
+        let forall = Quant { quant: air::ast::Quant::Forall };
+        let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
         fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
     }
 

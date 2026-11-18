@@ -413,6 +413,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 ensures,
                 mask_spec,
                 allocates,
+                fip,
                 ret: r,
                 external_spec,
             } => {
@@ -454,6 +455,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         ensures: R::get_vec_a(ensures),
                         mask_spec: R::get_opt(mask_spec),
                         allocates: R::get_opt(allocates),
+                        fip: *fip,
                         ret: R::get(ret),
                         external_spec: R::get_opt(external_spec),
                     })

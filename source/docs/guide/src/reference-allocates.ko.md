@@ -268,6 +268,32 @@ fn use_apply() -> u64
 std 함수에 대한 vstd 명세도 같은 방식으로 그 호출을 청구합니다. 예를 들어 `Vec::clone`은 원소마다
 `T::clone`을 한 번씩 청구합니다. `HashMap::insert`는 `Hash`/`Eq` 콜백을 `hash_ops_cost(m, k)`로 청구합니다.
 
+`call_deallocates(f, args)`는 같은 방식으로 함수 값의 해제 조건입니다. `#[verifier::fip]` 함수에서는
+`false`이고, `deallocates_when`이 있는 함수에서는 그 조건이며, 선언에 조건이 있는 trait 메서드에서는 (모든
+구현에 대해) 많아야 그 조건입니다. `verus!` 안에서 `f.allocates(args)`는 `call_allocates(f, (args,))`이고
+`f.deallocates(args)`는 `call_deallocates(f, (args,))`입니다. 그래서 다른 함수에 넘기는 명세는 둘 다, 일부
+인자에서만 성립하는 조건도 그대로 넘길 수 있습니다.
+
+```rust
+#[verifier::external_body]
+fn shrink_if_big(x: u64) -> (r: u64)
+    allocates deallocates_when(0int, x > 5)
+{ x }
+
+#[verifier::external_body]
+fn outer(x: u64) -> (r: u64)
+    allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+{ shrink_if_big(x) }
+
+#[verifier::fip]
+fn small() -> (r: u64) {
+    outer(3) // 됨: `shrink_if_big.deallocates(3)`은 거짓
+}
+```
+
+std의 blanket `Into`(그리고 `TryInto`, `Into`를 거치는 `TryFrom`)에 대한 vstd 명세도 이렇게 자기가 부르는
+`From` impl에 넘깁니다.
+
 trait 메서드 선언에 붙은 상한은 모든 구현을 제한합니다.
 
 ```rust
@@ -357,15 +383,25 @@ fn push_spare(v: &mut Vec<u64>)
   적습니다. 그 함수는 최대 `n`번 할당하고, `c`가 참일 때만 해제할 수 있습니다(`c`는 진입 시점에
   평가). 예를 들어 `Vec::push`는 기존 버퍼를 키워야 할 때 해제할 수 있습니다. 키우는 것은
   재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 할당기의 `allocate`만 불러서
-  키웁니다. 전역 할당기와 시스템 할당기의 `allocate`는 해제하지 않습니다. 다른 할당기의 `allocate`는
-  사용자 코드입니다(아래 참고).
-  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)은 그 메서드의 선언이 `#[verifier::fip]`이거나, 연산자
-  trait의 메서드를 그 표시 trait을 통해 부를 때만 허용합니다(아래 "연산자 trait" 참고). 선언에 붙은 이 속성은
+  키웁니다. 어떤 할당기든 `allocate`는 해제하지 않습니다("사용자 정의 할당기" 참고). 기본 본문이 없는 trait
+  메서드 선언도 이 조건을 적을 수 있고, 그러면 모든 구현이 지켜야 하는 계약이 됩니다. 검증된 본문이 있는 구현은
+  `#[verifier::fip]`여야 합니다(Verus는 본문이 해제하지 않는지를 검사할 뿐, 조건이 참일 때만 해제하는지는
+  검사하지 않습니다). 본문이 없는 구현(`external_body`, `assume_specification`)은 선언의 조건을 따르며 자기
+  조건을 따로 적을 수 없습니다. 할당기 런타임의 코드는 예외입니다(`Allocator::allocate`는
+  `deallocates_when(1, false)`로 선언되어 있습니다). Verus가 검사하지 않는 구현이나 `-V alloc-check`로 검증하지
+  않은 crate의 구현은 거부합니다.
+  impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)은 그 메서드의 선언이 `#[verifier::fip]`이거나, 선언의
+  `deallocates_when` 조건이 거짓임을 호출하는 쪽이 보이거나, 연산자 trait의 메서드를 그 표시 trait을 통해 부를
+  때만 허용합니다(아래 "연산자 trait" 참고). 선언에 붙은 이 속성은
   계약입니다. 그 메서드의 모든 구현도 `#[verifier::fip]`여야 하고(strict 선언이면
   `#[verifier::fip(strict)]`) 그래야 구현의 호출과 drop이 검사됩니다. Verus가 검사하지 않는 구현은
-  거부합니다(`allocates` 상한이 있는 선언과 같습니다). 기본 본문은 선언된 곳에서 검사합니다. 클로저 호출은
-  거부합니다. (strict 함수는 연산자 trait의 strict 표시 trait을 통해서만 제네릭 호출을 할 수 있습니다. 그
-  밖에는 호출 대상의 스택 사용을 알 수 없기 때문입니다.) std, vstd, 다른 crate의 함수 호출은 그 함수가 이
+  거부합니다(`allocates` 상한이 있는 선언과 같습니다). 기본 본문은 선언된 곳에서 검사합니다. 함수 값의
+  호출(클로저, 또는 `F: Fn(..)`인 `f: F`에 대한 `f(x)`)에는 `f.deallocates(x)`(`call_deallocates`) 조건이
+  붙고, 호출하는 쪽이 그것이 거짓임을 보여야 합니다. 클로저 식에 `#[verifier::fip]`(또는
+  `#[verifier::fip(strict)]`)을 붙인 클로저가 그렇습니다. 그 본문은 fip 함수처럼 검사하며, 상한이 없으면
+  할당도 하지 않습니다. 제네릭 함수는 이것을 `requires !f.deallocates(x)`로 요구할 수 있습니다. (strict 함수는
+  연산자 trait의 strict 표시 trait을 통해서만 제네릭 호출을 할 수 있습니다. 그 밖에는 호출 대상의 스택 사용을
+  알 수 없기 때문입니다. 알고 있는 strict 클로저는 부를 수 있습니다.) std, vstd, 다른 crate의 함수 호출은 그 함수가 이
   crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른 crate에서 오는 콜백" 참고).
 * **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
   검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
