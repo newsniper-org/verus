@@ -688,6 +688,67 @@ pub assume_specification<T: Clone>[ <[T]>::to_vec ](slice: &[T]) -> (res: Vec<T>
     )
 ;
 
+// std 1.100 `alloc/src/vec/mod.rs`: `From<&[T]>` and `From<&mut [T]>` for `Vec<T>` are
+// `s.to_vec()`, and `From<&[T; N]>` is `Self::from(s.as_slice())`, so each has `to_vec`'s
+// specification. (std's `fn from` takes a reference of any lifetime, not only the impl's `'a`.)
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<'a, T: Clone>[ <Vec<T> as core::convert::From<&'a [T]>>::from ](
+    s: &[T],
+) -> (res: Vec<T>)
+    ensures
+        res@.len() == s@.len(),
+        forall|i| #![all_triggers] 0 <= i < s@.len() ==> cloned::<T>(s@[i], res@[i]),
+        s@ =~= res@ ==> s@ == res@,
+    allocates
+        deallocates_when(
+            (if s@.len() == 0 {
+                0int
+            } else {
+                1int
+            }) + seq_clone_allocates(s@, s@.len()),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
+;
+
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<'a, T: Clone>[ <Vec<T> as core::convert::From<&'a mut [T]>>::from ](
+    s: &mut [T],
+) -> (res: Vec<T>)
+    ensures
+        final(s)@ == old(s)@,
+        res@.len() == old(s)@.len(),
+        forall|i| #![all_triggers] 0 <= i < old(s)@.len() ==> cloned::<T>(old(s)@[i], res@[i]),
+        old(s)@ =~= res@ ==> old(s)@ == res@,
+    allocates
+        deallocates_when(
+            (if old(s)@.len() == 0 {
+                0int
+            } else {
+                1int
+            }) + seq_clone_allocates(old(s)@, old(s)@.len()),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
+;
+
+#[verifier::alloc_check_skip_drops]
+pub assume_specification<'a, T: Clone, const N: usize>[ <Vec<T> as core::convert::From<
+    &'a [T; N],
+>>::from ](s: &[T; N]) -> (res: Vec<T>)
+    ensures
+        res@.len() == s@.len(),
+        forall|i| #![all_triggers] 0 <= i < s@.len() ==> cloned::<T>(s@[i], res@[i]),
+        s@ =~= res@ ==> s@ == res@,
+    allocates
+        deallocates_when(
+            (if s@.len() == 0 {
+                0int
+            } else {
+                1int
+            }) + seq_clone_allocates(s@, s@.len()),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
+;
+
 pub broadcast proof fn vec_clone_deep_view_proof<T: DeepView, A: Allocator>(
     v1: Vec<T, A>,
     v2: Vec<T, A>,

@@ -96,14 +96,14 @@ pub assume_specification[ <f32 as Clone>::clone ](f: &f32) -> (res: f32)
     ensures
         res == f,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub assume_specification[ <f64 as Clone>::clone ](f: &f64) -> (res: f64)
     ensures
         res == f,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[verifier::external_trait_specification]

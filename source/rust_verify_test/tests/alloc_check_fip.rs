@@ -2584,3 +2584,331 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+// `Vec<T>: From<&[T]>` (and `&mut [T]`, `&[T; N]`) is `to_vec`, so `src.into()` and
+// `Vec::from(src)` have its specification; `into` reaches it through std's blanket `Into` impl.
+test_verify_one_file_with_options! {
+    #[test] fip_vec_from_slice ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub fn a_into(src: &[i32]) -> (r: Vec<i32>)
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.into()
+        }
+
+        pub fn vec_from(src: &[i32]) -> (r: Vec<i32>)
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            Vec::from(src)
+        }
+
+        #[verifier::fip(strict)]
+        pub fn into_gen<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+            requires
+                forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.into()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn from_mut(src: &mut [u64]) -> (r: Vec<u64>)
+            ensures
+                r@ == old(src)@,
+                final(src)@ == old(src)@,
+            allocates
+                if old(src)@.len() == 0 { 0int } else { 1int },
+        {
+            Vec::from(src)
+        }
+
+        #[verifier::fip(strict)]
+        pub fn from_array(src: &[u8; 4]) -> (r: Vec<u8>)
+            ensures
+                r@ == src@,
+            allocates
+                1int,
+        {
+            Vec::from(src)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_vec_from_slice_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        pub fn into_gen<T: Copy + AllocFreeDrop>(src: &[T]) -> (r: Vec<T>)
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.into()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+// A derived `clone` whose body is `*self` (`#[derive(Clone, Copy)]` on a type without type
+// parameters) is `#[verifier::fip(strict)]` with `allocates 0`.
+test_verify_one_file_with_options! {
+    #[test] fip_derived_copy_clone ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[derive(Clone, Copy)]
+        pub struct D { pub x: u32 }
+
+        unsafe impl AllocFreeDrop for D {}
+        unsafe impl NoDeallocDrop for D {}
+        unsafe impl FbipClone for D {}
+        unsafe impl FipClone for D {}
+        unsafe impl FipStrictClone for D {}
+
+        pub fn one(d: &D) -> (r: D)
+            ensures
+                r == *d,
+            allocates
+                0,
+        {
+            d.clone()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn one_strict(d: &D) -> (r: D)
+            ensures
+                r == *d,
+        {
+            d.clone()
+        }
+
+        pub fn slice_bound(s: &[D]) -> (r: Vec<D>)
+            ensures
+                r@ == s@,
+            allocates
+                if s@.len() == 0 { 0int } else { 1int },
+        {
+            s.to_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn copy_gen<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+            requires
+                forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.to_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn uses(s: &[D]) -> (r: Vec<D>)
+            ensures
+                r@ == s@,
+            allocates
+                if s@.len() == 0 { 0int } else { 1int },
+        {
+            copy_gen(s)
+        }
+    } => Ok(())
+}
+
+// A derived `clone` that clones field by field: `allocates 0` and the lowest level of the fields'
+// `Clone` markers (where the impl is: a type parameter needs the bound on the type itself, which
+// the derived impl copies). At most `#[verifier::fip]` if a field's type has a type parameter.
+test_verify_one_file_with_options! {
+    #[test] fip_derived_fieldwise_clone ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct E<T: Copy + FipStrictClone> { pub x: T }
+
+        impl<T: Copy + FipStrictClone> Copy for E<T> {}
+
+        unsafe impl<T: Copy + FipStrictClone> AllocFreeDrop for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> NoDeallocDrop for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> FbipClone for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> FipClone for E<T> {}
+
+        #[derive(Clone, Copy)]
+        pub struct C { pub x: u64 }
+
+        unsafe impl AllocFreeDrop for C {}
+        unsafe impl NoDeallocDrop for C {}
+        unsafe impl FbipClone for C {}
+        unsafe impl FipClone for C {}
+        unsafe impl FipStrictClone for C {}
+
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct P { pub a: u32, pub b: bool, pub c: C, pub f: f64 }
+
+        unsafe impl AllocFreeDrop for P {}
+        unsafe impl NoDeallocDrop for P {}
+        unsafe impl FbipClone for P {}
+        unsafe impl FipClone for P {}
+        unsafe impl FipStrictClone for P {}
+
+        #[verifier::fip]
+        pub fn one<T: Copy + FipStrictClone>(e: &E<T>) -> (r: E<T>) {
+            e.clone()
+        }
+
+        pub fn one_bounded(e: &E<u8>) -> (r: E<u8>)
+            allocates
+                0,
+        {
+            e.clone()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn two(p: &P) -> (r: P) {
+            p.clone()
+        }
+
+        pub fn slice_bound(s: &[P]) -> (r: Vec<P>)
+            allocates
+                if s@.len() == 0 { 0int } else { 1int },
+        {
+            s.to_vec()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_derived_fieldwise_generic_clone_not_strict ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct E<T: Copy + FipStrictClone> { pub x: T }
+
+        impl<T: Copy + FipStrictClone> Copy for E<T> {}
+
+        unsafe impl<T: Copy + FipStrictClone> AllocFreeDrop for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> NoDeallocDrop for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> FbipClone for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> FipClone for E<T> {}
+        unsafe impl<T: Copy + FipStrictClone> FipStrictClone for E<T> {}
+    } => Err(err) => assert_vir_error_msg(err, "must be `#[verifier::fip(strict)]`")
+}
+
+// A field of type `F`, whose `clone` is `#[verifier::fip]` but not strict: the derived `clone` is
+// `#[verifier::fip]` too, and not strict.
+test_verify_one_file_with_options! {
+    #[test] fip_derived_fieldwise_clone_level_is_lowest ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct F { pub x: u32 }
+
+        impl Clone for F {
+            #[verifier::fip]
+            fn clone(&self) -> (r: F) {
+                F { x: self.x }
+            }
+        }
+
+        unsafe impl AllocFreeDrop for F {}
+        unsafe impl NoDeallocDrop for F {}
+        unsafe impl FbipClone for F {}
+        unsafe impl FipClone for F {}
+
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct Q { pub a: u32, pub f: F }
+
+        unsafe impl AllocFreeDrop for Q {}
+        unsafe impl NoDeallocDrop for Q {}
+        unsafe impl FbipClone for Q {}
+        unsafe impl FipClone for Q {}
+
+        #[verifier::fip]
+        pub fn one(q: &Q) -> (r: Q) {
+            q.clone()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn one_strict(q: &Q) -> (r: Q) {
+            q.clone()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "fip(strict)")
+}
+
+// A field whose type has no `Clone` marker: the derived `clone` has no bound, as before.
+test_verify_one_file_with_options! {
+    #[test] fip_derived_fieldwise_clone_unbounded ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct H { pub x: u32 }
+
+        impl Clone for H {
+            fn clone(&self) -> (r: H)
+                allocates
+                    1,
+            {
+                let b = Box::new(1u8);
+                H { x: self.x }
+            }
+        }
+
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct D { pub x: u32, pub h: H }
+
+        pub fn one(d: &D) -> (r: D)
+            allocates
+                0,
+        {
+            d.clone()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "has no `allocates` specification")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_derived_fieldwise_clone_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        // (a type parameter without a `Clone` marker in the type's own bounds)
+        #[verifier::allow(autoderive_clone_without_spec)]
+        #[derive(Clone)]
+        pub struct E<T> { pub x: T }
+
+        unsafe impl<T: AllocFreeDrop> AllocFreeDrop for E<T> {}
+        unsafe impl<T: FbipClone> FbipClone for E<T> {}
+    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+}
+
+// Without -V alloc-check, a derived `clone` is as before.
+test_verify_one_file_with_options! {
+    #[test] derived_copy_clone_without_alloc_check ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[derive(Clone, Copy)]
+        pub struct D { pub x: u32 }
+
+        pub fn one(d: &D) -> (r: D)
+            ensures
+                r == *d,
+        {
+            d.clone()
+        }
+    } => Ok(())
+}

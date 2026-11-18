@@ -748,7 +748,19 @@ reflexive `From<T> for T` (which returns its argument); these impls are trusted.
 checked by Verus, and each method that impl defines is bounded by `allocates 0` (a literal `0`)
 and, for the higher levels, is `#[verifier::fip]` or `#[verifier::fip(strict)]`. A method that the
 impl does not define runs `core`'s provided body, which calls only the trait's own methods. A
-derived impl (`#[derive(PartialEq)]`) is not accepted. As for the other markers, an impl outside
+derived impl (`#[derive(PartialEq)]`) is not accepted, except a derived `clone`, which Verus
+checks with `allocates 0` and the attributes of a level, so the markers up to that level accept it:
+
+* If its body is `*self` (`#[derive(Clone, Copy)]` on a type without type parameters), it is
+  `#[verifier::fip(strict)]` (and keeps `ensures r == *self`).
+* If it is a struct's and clones field by field, its level is the lowest of the `Clone` markers
+  of the fields' types, where the impl is (a type parameter needs the marker as a bound on the
+  type itself, which `#[derive(Clone)]` copies onto the impl). It is at most `#[verifier::fip]` if
+  a field's type has a type parameter: the strict stack check takes such a call (through a marker)
+  to reach any strict `clone` of the crate, this one included. If a field's type has no marker,
+  the `clone` has no bound, as before.
+
+As for the other markers, an impl outside
 `verus!`, or in a crate that was not verified with `-V alloc-check`, is rejected.
 
 `Ord`'s provided `max`, `min` and `clamp` drop a value of `Self`. So `FbipOrd` needs
@@ -792,7 +804,8 @@ unless the type is `FbipOrd`.) vstd also implements the comparison markers for
 no `deallocates_when` that it can show false, even if its comparisons are fip: give it the
 marker.
 
-In the same way, `<[T]>::to_vec` and `Box::<[T]>::from(&[T])` allocate once (nothing for an empty
+In the same way, `<[T]>::to_vec`, `Box::<[T]>::from(&[T])` and `Vec::<T>::from(&[T])` (also from
+`&mut [T]` and `&[T; N]`, which std writes as `to_vec`) allocate once (nothing for an empty
 slice) and clone each element. Their results have the input's length and a clone of each element
 (`cloned`), they allocate `1 + seq_clone_allocates(..)` (0 when the slice is empty), and they
 deallocate only if a `clone` does: `clone_is_fip::<T>()` (true for a `FipClone` type) in their
@@ -822,8 +835,8 @@ fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
 
 * A call `x.into()` that goes through it is checked as the call `<U as From<T>>::from(x)` when
   that `From` impl is known to Verus (has a specification, or is verified): its `allocates`,
-  `deallocates_when`, "drops nothing" and `ensures` apply. (`src.into()` for a `Box<[T]>` is then
-  `Box::<[T]>::from(src)`.) When the impl is not known, the blanket impl's specification applies,
+  `deallocates_when`, "drops nothing" and `ensures` apply. (`src.into()` for a `Box<[T]>` or a `Vec<T>` is then
+  `Box::<[T]>::from(src)` or `Vec::<T>::from(src)`.) When the impl is not known, the blanket impl's specification applies,
   which refers to `U::from`.
 * `U: FipFrom<T>` gives `T: FipInto<U>` (vstd implements it, and a bound `U: FbipFrom<T>`
   covers the call `x.into()` too). An `Into` impl that a crate writes itself, without `From`,

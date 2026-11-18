@@ -65,7 +65,7 @@ What this changes for verified code:
 | Fully in-place functions (no deallocation) | `#[verifier::fip]` | `fip-beta` | [FIP and FBIP](./fip-fbip.md), [reference](./reference-allocates.md#fully-in-place-functions-verifierfip) |
 | Constant stack space | `#[verifier::fip(strict)]` with `become` | `fip-beta` | [reference](./reference-allocates.md#constant-stack-space-verifierfipstrict) |
 | Generic operator calls in fip code | `T: FipAdd`, `T: FipOrd`, ... (`FbipOp`, `FipOp`, `FipStrictOp` for each operator trait of `core`) | `fip-beta` | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
-| Generic `clone` and slice copies in fip code | `T: FipClone`, ... (the same three levels for `Clone`); `<[T]>::to_vec`, `Box::<[T]>::from(&[T])` | `fip` (1.100) | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
+| Generic `clone` and slice copies in fip code | `T: FipClone`, ... (the same three levels for `Clone`); `<[T]>::to_vec`, `Box::<[T]>::from(&[T])`, `Vec::<T>::from(&[T])`; derived `clone`s are `allocates 0` and fip/strict as their fields allow | `fip` (1.100) | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
 | Conversions in fip code | `U: FipFrom<T>`, `T: FipInto<U>`, ...; `x.into()` is checked as `U::from(x)` | `fip` (1.100) | [Operator traits](./reference-allocates.md#operator-traits-fipadd-fipord-) |
 | Stack-growth linter | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP and FBIP: Tools](./fip-fbip.md#tools) |
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |

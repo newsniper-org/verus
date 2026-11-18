@@ -50,14 +50,14 @@ pub assume_specification[ <bool as Clone>::clone ](b: &bool) -> (res: bool)
     returns
         b,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub assume_specification[ <char as Clone>::clone ](c: &char) -> (res: char)
     returns
         c,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 #[allow(suspicious_double_ref_op)]
@@ -67,7 +67,7 @@ pub assume_specification<'b, T: core::marker::PointeeSized, 'a>[ <&'b T as Clone
     ensures
         res == b,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub assume_specification<T: Clone, const N: usize>[ <[T; N] as Clone>::clone ](a: &[T; N]) -> (res:

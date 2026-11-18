@@ -60,6 +60,129 @@ pub fn is_automatically_derived(attrs: &[rustc_hir::Attribute]) -> bool {
     false
 }
 
+/// -V alloc-check: how far a derived `clone` is in place
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum DerivedCloneLevel {
+    /// `allocates 0`
+    Fbip,
+    /// `allocates 0`, `#[verifier::fip]`
+    Fip,
+    /// `allocates 0`, `#[verifier::fip(strict)]`
+    Strict,
+}
+
+/// -V alloc-check: if `def_id` is the `clone` of a derived `Clone` impl, how far it is in place.
+/// * Its body is `*self` (`#[derive(Clone)]` writes that when the same `#[derive(..)]` has `Copy`
+///   and the type has no type parameters, and for unions; it then also implements `TrivialClone`,
+///   so std copies slices of the type bitwise): strict.
+/// * A struct, whose body clones field by field: the lowest level over the fields' types of the
+///   `Clone` markers (`FipStrictClone`, `FipClone`, `FbipClone`) that hold where the impl is
+///   (none if a field's type has none), and at most `Fip` if a field's type has a type parameter.
+///
+/// VIR gives the function `allocates 0` and the attributes of its level, and the MIR check
+/// (`fip_mir`) checks it as a function with those attributes: both still check its body, so this
+/// is not trusted (a wrong level here makes a check fail, not pass).
+pub(crate) fn derived_clone_level(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    def_id: rustc_span::def_id::LocalDefId,
+) -> Option<DerivedCloneLevel> {
+    use rustc_hir::{ExprKind, QPath, UnOp, def::Res};
+    if !matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::AssocFn)
+        || tcx.item_name(def_id.to_def_id()).as_str() != "clone"
+    {
+        return None;
+    }
+    let imp = tcx.impl_of_assoc(def_id.to_def_id()).and_then(|d| d.as_local())?;
+    let trait_ref = tcx.impl_opt_trait_ref(imp)?;
+    if Some(trait_ref.skip_binder().def_id) != tcx.lang_items().clone_trait() {
+        return None;
+    }
+    if !is_automatically_derived(tcx.hir_attrs(tcx.local_def_id_to_hir_id(imp))) {
+        return None;
+    }
+    let body = tcx.hir_body_owned_by(def_id);
+    let copy_form = (|| {
+        let [param] = body.params else { return false };
+        let ExprKind::Block(block, None) = &body.value.kind else { return false };
+        let Some(tail) = block.expr else { return false };
+        let ExprKind::Unary(UnOp::Deref, inner) = &tail.kind else { return false };
+        let ExprKind::Path(QPath::Resolved(None, path)) = &inner.kind else { return false };
+        matches!(path.res, Res::Local(id) if id == param.pat.hir_id)
+    })();
+    if copy_form {
+        return Some(DerivedCloneLevel::Strict);
+    }
+    let rustc_middle::ty::TyKind::Adt(adt, args) =
+        tcx.type_of(imp).instantiate_identity().skip_normalization().kind()
+    else {
+        return None;
+    };
+    if !adt.is_struct() {
+        return None;
+    }
+    let find = |name: &str| {
+        let path = format!("vstd::alloc_check::{}", name);
+        tcx.all_traits_including_private().find(|d| {
+            format!("{}{}", tcx.crate_name(d.krate), tcx.def_path(*d).to_string_no_crate_verbose())
+                == path
+        })
+    };
+    let markers = [
+        (DerivedCloneLevel::Strict, find("FipStrictClone")?),
+        (DerivedCloneLevel::Fip, find("FipClone")?),
+        (DerivedCloneLevel::Fbip, find("FbipClone")?),
+    ];
+    let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, def_id.to_def_id());
+    let (infcx, param_env) = {
+        use rustc_infer::infer::TyCtxtInferExt;
+        tcx.infer_ctxt().build_with_typing_env(typing_env)
+    };
+    let mut level = DerivedCloneLevel::Strict;
+    for field in adt.non_enum_variant().fields.iter() {
+        let ty = tcx.erase_and_anonymize_regions(field.ty(tcx, args).skip_normalization());
+        // (the clone of a field whose type has a type parameter is a call through a marker,
+        // which the strict stack check takes to reach any strict `clone` of the crate, this one
+        // included: not strict)
+        {
+            use rustc_middle::ty::TypeVisitableExt;
+            if ty.has_param() {
+                level = level.min(DerivedCloneLevel::Fip);
+            }
+        }
+        let field_level = markers.iter().find_map(|(l, m)| {
+            use rustc_trait_selection::infer::InferCtxtExt;
+            infcx
+                .type_implements_trait(*m, [ty], param_env)
+                .must_apply_modulo_regions()
+                .then_some(*l)
+        })?;
+        level = level.min(field_level);
+    }
+    Some(level)
+}
+
+/// -V alloc-check: give a derived `clone` `allocates 0` and the attributes of its level (see
+/// `derived_clone_level`)
+fn add_derived_clone_level<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    fn_id: rustc_span::def_id::DefId,
+    span: Span,
+    functionx: &mut FunctionX,
+) {
+    if !bctx.ctxt.cmd_line_args.alloc_check || functionx.allocates.is_some() {
+        return;
+    }
+    let Some(level) = fn_id.as_local().and_then(|l| derived_clone_level(bctx.ctxt.tcx, l)) else {
+        return;
+    };
+    functionx.allocates =
+        Some(vir::ast_util::mk_int_lit_from_usize(&bctx.ctxt.spans.to_air_span(span), 0));
+    let mut attrs = (*functionx.attrs).clone();
+    attrs.fip = level >= DerivedCloneLevel::Fip;
+    attrs.fip_strict = level >= DerivedCloneLevel::Strict;
+    functionx.attrs = Arc::new(attrs);
+}
+
 pub fn modify_derived_item<'tcx>(
     bctx: &BodyCtxt<'tcx>,
     id: rustc_span::def_id::DefId,
@@ -88,6 +211,7 @@ fn clone_add_post_condition<'tcx>(
     span: Span,
     functionx: &mut FunctionX,
 ) -> Result<(), VirErr> {
+    let fn_id = id;
     if inputs.len() >= 1 {
         use rustc_middle::ty::{AdtDef, TyKind};
         if let TyKind::Ref(_, t, _) = inputs[0].kind() {
@@ -156,6 +280,9 @@ fn clone_add_post_condition<'tcx>(
         warn_unexpected();
         return Ok(());
     }
+
+    // -V alloc-check: `*self`, or field-by-field clones that allocate nothing
+    add_derived_clone_level(bctx, fn_id, span, functionx);
 
     if uses_copy {
         // Add `ensures ret == self`

@@ -235,10 +235,21 @@ fn check_allocator_use<'tcx>(
 /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
 fn fip_kind_local(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<bool> {
     let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(def_id));
-    parse_attrs_opt(attrs, None).iter().find_map(|a| match a {
-        Attr::Fip(strict) => Some(*strict),
-        _ => None,
-    })
+    parse_attrs_opt(attrs, None)
+        .iter()
+        .find_map(|a| match a {
+            Attr::Fip(strict) => Some(*strict),
+            _ => None,
+        })
+        // (a derived `clone` has the attributes that VIR gives it: `automatic_derive`)
+        .or_else(|| {
+            use crate::automatic_derive::DerivedCloneLevel;
+            match crate::automatic_derive::derived_clone_level(tcx, def_id)? {
+                DerivedCloneLevel::Fbip => None,
+                DerivedCloneLevel::Fip => Some(false),
+                DerivedCloneLevel::Strict => Some(true),
+            }
+        })
 }
 
 fn is_fip_local(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {

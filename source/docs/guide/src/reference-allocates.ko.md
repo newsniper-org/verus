@@ -703,7 +703,18 @@ impl은 신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `
 타입을 같은 꼴로 적은 `X`의 `Op` impl을 Verus가 검사하고, 그 impl이 정의하는 메서드마다 `allocates 0`
 (리터럴 `0`)로 제한되어 있고, 위 단계에서는 `#[verifier::fip]`이나 `#[verifier::fip(strict)]`이어야 합니다.
 impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행하고, 그 본문은 trait 자신의 메서드만
-부릅니다. 파생 impl(`#[derive(PartialEq)]`)은 받지 않습니다. 다른 표시 trait처럼, `verus!` 밖의 impl이나
+부릅니다. 파생 impl(`#[derive(PartialEq)]`)은 받지 않습니다. 다만 파생 `clone`은 Verus가 `allocates 0`과
+어떤 단계의 속성을 붙여 검사하므로, 그 단계까지의 표시 trait을 받습니다.
+
+* 본문이 `*self`이면(타입 매개변수가 없는 타입에 `#[derive(Clone, Copy)]`) `#[verifier::fip(strict)]`입니다
+  (`ensures r == *self`도 그대로).
+* struct의 것이고 필드마다 clone하면, 그 단계는 impl이 있는 곳에서 필드 타입들이 가진 `Clone` 표시 trait 중
+  가장 낮은 것입니다(타입 매개변수에는 타입 자신의 bound로 표시 trait을 주어야 합니다. `#[derive(Clone)]`이
+  그 bound를 impl에 옮깁니다). 필드 타입에 타입 매개변수가 있으면 많아야 `#[verifier::fip]`입니다. 엄격한 스택
+  검사는 그런 호출(표시 trait을 거치는 호출)이 이 `clone`을 포함해 crate의 어느 엄격한 `clone`에든 닿을 수 있다고
+  보기 때문입니다. 표시 trait이 없는 필드 타입이 있으면 전처럼 할당 상한이 없습니다.
+
+다른 표시 trait처럼, `verus!` 밖의 impl이나
 `-V alloc-check`로 검증하지 않은 crate의 impl은 거부합니다.
 
 `Ord`가 제공하는 `max`, `min`, `clamp`는 `Self`의 값을 drop합니다. 그래서 `FbipOrd`에는 `AllocFreeDrop`이,
@@ -741,7 +752,8 @@ fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
 그 표시 trait을 구현합니다. 표시 trait이 없는 타입은, 비교가 fip이더라도 거짓임을 보일 수 있는
 `deallocates_when`을 얻지 못합니다. 그런 타입에는 표시 trait을 주세요.
 
-같은 방식으로, `<[T]>::to_vec`와 `Box::<[T]>::from(&[T])`는 한 번 할당하고(빈 slice이면 할당하지 않음)
+같은 방식으로, `<[T]>::to_vec`, `Box::<[T]>::from(&[T])`, `Vec::<T>::from(&[T])`(std가 `to_vec`로 쓰는
+`&mut [T]`, `&[T; N]`에서의 변환도)는 한 번 할당하고(빈 slice이면 할당하지 않음)
 원소마다 clone합니다. 결과는 입력과 길이가 같고 원소마다 그 clone(`cloned`)이며, 할당량은
 `1 + seq_clone_allocates(..)`(빈 slice이면 0)이고, `clone`이 해제할 때만 해제합니다. 이 조건을
 `deallocates_when`에 `clone_is_fip::<T>()`(`FipClone` 타입에 대해 참)로 적고, `FbipClone` 타입의 `clone`은
@@ -769,7 +781,7 @@ fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
 
 * 이 impl을 거치는 `x.into()` 호출은, 그 `From` impl을 Verus가 알면(명세가 있거나 검증된 것이면)
   `<U as From<T>>::from(x)` 호출로 검사합니다. 그 impl의 `allocates`, `deallocates_when`, "drop하지 않음",
-  `ensures`가 적용됩니다. (`Box<[T]>`로의 `src.into()`는 `Box::<[T]>::from(src)`가 됩니다.) 그 impl을 모르면
+  `ensures`가 적용됩니다. (`Box<[T]>`나 `Vec<T>`로의 `src.into()`는 `Box::<[T]>::from(src)`나 `Vec::<T>::from(src)`가 됩니다.) 그 impl을 모르면
   `U::from`을 가리키는 blanket impl의 명세가 적용됩니다.
 * `U: FipFrom<T>`이면 `T: FipInto<U>`입니다(vstd가 구현하고, `U: FbipFrom<T>` 같은 bound는 `x.into()` 호출도
   다룹니다). `From` 없이 crate가 직접 쓴 `Into` impl에도 `Into`의 표시 trait을 줄 수 있고, 다른 표시 trait처럼
