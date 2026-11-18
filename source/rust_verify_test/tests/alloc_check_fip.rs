@@ -2053,6 +2053,280 @@ test_verify_one_file_with_options! {
     } => Ok(())
 }
 
+// `x.into()` through std's blanket `impl<T, U: From<T>> Into<U> for T` is `U::from(x)`, so it
+// gets the specification of the `From` impl (when that is known): its `deallocates_when` for a fip
+// function, and its "drops nothing" for a strict one
+test_verify_one_file_with_options! {
+    #[test] fip_into_forwards_to_from ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        pub fn copy_into<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
+            requires
+                forall|a: T, b: T| call_ensures(T::clone, (&a,), b) ==> a == b,
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            let b: Box<[T]> = src.into();
+            b.into_vec()
+        }
+
+        #[verifier::fip(strict)]
+        pub fn boxed(src: &[i32]) -> (r: Box<[i32]>)
+            ensures
+                r@ == src@,
+            allocates
+                if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.into()
+        }
+
+        pub struct A { pub x: u8 }
+        pub struct B { pub x: u8 }
+        impl From<A> for B {
+            #[verifier::fip]
+            fn from(a: A) -> B allocates 0 { B { x: a.x } }
+        }
+        impl vstd::std_specs::convert::FromSpecImpl<A> for B {
+            open spec fn obeys_from_spec() -> bool { true }
+            open spec fn from_spec(a: A) -> B { B { x: a.x } }
+        }
+
+        #[verifier::fip]
+        fn to_b(a: A) -> (r: B) ensures r.x == a.x allocates 0 {
+            a.into()
+        }
+
+        #[verifier::fip]
+        fn same(a: u64) -> u64 allocates 0 {
+            a.into()
+        }
+    } => Ok(())
+}
+
+// `From` and `Into` have markers too; `U: FipFrom<T>` gives `T: FipInto<U>` (std's blanket `Into`
+// impl is `U::from(x)`), and vstd marks the reflexive `From<T> for T`
+test_verify_one_file_with_options! {
+    #[test] fip_from_into_markers ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct A { pub x: u8 }
+        pub struct B { pub x: u8 }
+        impl From<A> for B {
+            #[verifier::fip(strict)]
+            fn from(a: A) -> B allocates 0 { B { x: a.x } }
+        }
+        impl vstd::std_specs::convert::FromSpecImpl<A> for B {
+            open spec fn obeys_from_spec() -> bool { true }
+            open spec fn from_spec(a: A) -> B { B { x: a.x } }
+        }
+        unsafe impl FbipFrom<A> for B {}
+        unsafe impl FipFrom<A> for B {}
+        unsafe impl FipStrictFrom<A> for B {}
+        unsafe impl AllocFreeDrop for A {}
+        unsafe impl NoDeallocDrop for A {}
+        unsafe impl AllocFreeDrop for B {}
+        unsafe impl NoDeallocDrop for B {}
+
+        fn counted<T: AllocFreeDrop, U: FbipFrom<T> + AllocFreeDrop>(t: T) -> U allocates 0 {
+            t.into()
+        }
+
+        #[verifier::fip]
+        fn by_into<T: NoDeallocDrop, U: FipFrom<T> + NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+
+        #[verifier::fip]
+        fn by_from<T: NoDeallocDrop, U: FipFrom<T> + NoDeallocDrop>(t: T) -> U {
+            U::from(t)
+        }
+
+        #[verifier::fip]
+        fn by_into_bound<T: FipInto<U> + NoDeallocDrop, U: NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+
+        #[verifier::fip(strict)]
+        fn by_into_strict<T: NoDeallocDrop, U: FipStrictFrom<T> + NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+
+        #[verifier::fip(strict)]
+        fn by_into_bound_strict<T: FipStrictInto<U> + NoDeallocDrop, U: NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+
+        #[verifier::fip(strict)]
+        fn uses(a: A, a2: A, a3: A, n: u64) -> u8 {
+            let b: B = by_into_strict(a);
+            let c: B = by_into_bound_strict(a2);
+            let d: u64 = by_into_strict(n);
+            let _e: u64 = by_into_bound_strict(d);
+            let f: B = by_into_strict(a3);
+            b.x ^ c.x ^ f.x
+        }
+
+        #[verifier::fip]
+        fn uses_fip(a: A, a2: A, a3: A) -> u8 {
+            let b: B = by_into(a);
+            let c: B = by_from(a2);
+            let d: B = by_into_bound(a3);
+            b.x ^ c.x ^ d.x
+        }
+
+        fn uses_counted(a: A) -> u8 allocates 0 {
+            let b: B = counted(a);
+            b.x
+        }
+    } => Ok(())
+}
+
+// An `Into` impl that a crate writes itself (without `From`) can have the `Into` markers, checked
+// like the others (they do not conflict with vstd's impls through `From`)
+test_verify_one_file_with_options! {
+    #[test] fip_into_markers_on_direct_into_impl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct A { pub x: u8 }
+        pub struct C { pub x: u8 }
+        impl Into<C> for A {
+            #[verifier::fip(strict)]
+            fn into(self) -> C allocates 0 { C { x: self.x } }
+        }
+        impl vstd::std_specs::convert::IntoSpecImpl<C> for A {
+            open spec fn obeys_into_spec() -> bool { true }
+            open spec fn into_spec(self) -> C { C { x: self.x } }
+        }
+        unsafe impl FbipInto<C> for A {}
+        unsafe impl FipInto<C> for A {}
+        unsafe impl FipStrictInto<C> for A {}
+        unsafe impl AllocFreeDrop for A {}
+        unsafe impl NoDeallocDrop for A {}
+        unsafe impl AllocFreeDrop for C {}
+        unsafe impl NoDeallocDrop for C {}
+
+        #[verifier::fip(strict)]
+        fn by_into_bound_strict<T: FipStrictInto<U> + NoDeallocDrop, U: NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+
+        #[verifier::fip(strict)]
+        fn uses(a: A, a2: A) -> (r: u8)
+            ensures r == a.x,
+        {
+            let c: C = by_into_bound_strict(a2);
+            let d: C = a.into();
+            let _ = c;
+            d.x
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_into_marker_impl_not_fip_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct A { pub x: u8 }
+        pub struct C { pub x: u8 }
+        impl Into<C> for A {
+            fn into(self) -> C allocates 0 { C { x: self.x } }
+        }
+        unsafe impl FbipInto<C> for A {}
+        unsafe impl FipInto<C> for A {}
+    } => Err(err) => assert_vir_error_msg(err, "this `vstd::alloc_check::FipInto` impl is not accepted")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_into_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        fn by_into<T: Into<U> + vstd::alloc_check::NoDeallocDrop, U: vstd::alloc_check::NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_from_marker_impl_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub struct A { pub x: u8 }
+        pub struct B { pub x: u8 }
+        impl From<A> for B {
+            #[verifier::fip]
+            fn from(a: A) -> B allocates 0 { B { x: a.x } }
+        }
+        unsafe impl FbipFrom<A> for B {}
+        unsafe impl FipFrom<A> for B {}
+        unsafe impl FipStrictFrom<A> for B {}
+    } => Err(err) => assert_vir_error_msg(err, "must be `#[verifier::fip(strict)]`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_into_marker_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn by_into<T: NoDeallocDrop, U: FipFrom<T> + NoDeallocDrop>(t: T) -> U {
+            t.into()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `U: std::convert::From`, which are not known here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_into_forward_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip]
+        fn boxed<T: Clone + NoDeallocDrop>(src: &[T]) -> Box<[T]> {
+            src.into()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "this call may deallocate memory")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_into_forward_not_strict_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        #[verifier::fip(strict)]
+        fn boxed<T: FipClone>(src: &[T]) -> Box<[T]>
+            allocates if src@.len() == 0 { 0int } else { 1int },
+        {
+            src.into()
+        }
+    } => Err(err) => assert_any_vir_error_msg(err, "which may call the methods of `T: std::clone::Clone`, which are not known here")
+}
+
+// A `From` impl that Verus does not know: `into` keeps the blanket impl's specification (as before)
+test_verify_one_file_with_options! {
+    #[test] into_of_unknown_from_impl_still_accepted ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct A { pub x: u8 }
+        pub struct B { pub x: u8 }
+        #[verifier::external]
+        impl From<A> for B {
+            fn from(a: A) -> B { B { x: a.x } }
+        }
+
+        fn to_b(a: A) -> B {
+            a.into()
+        }
+    } => Ok(())
+}
+
 test_verify_one_file_with_options! {
     #[test] fip_slice_to_vec_without_marker_rejected ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;

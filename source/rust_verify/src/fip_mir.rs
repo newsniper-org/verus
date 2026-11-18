@@ -562,7 +562,8 @@ impl OpMarkers {
             let path = defined_path(tcx, *d);
             if !(path.starts_with("core::ops::")
                 || path.starts_with("core::cmp::")
-                || path.starts_with("core::clone::"))
+                || path.starts_with("core::clone::")
+                || path.starts_with("core::convert::"))
             {
                 continue;
             }
@@ -601,6 +602,12 @@ impl OpMarkers {
         for c in rustc_infer::traits::util::supertrait_def_ids(tcx, op) {
             if self.ops.contains_key(&c) && !traits.contains(&c) {
                 traits.push(c);
+            }
+        }
+        // (`into` through std's blanket `Into` impl calls a `From` impl's `from`)
+        if Some(op) == tcx.get_diagnostic_item(rustc_span::sym::Into) {
+            if let Some(from) = tcx.get_diagnostic_item(rustc_span::sym::From) {
+                traits.push(from);
             }
         }
         let mut out = Vec::new();
@@ -831,6 +838,37 @@ fn resolve_callee<'tcx>(
     }
 }
 
+/// If `resolved` is the `into` of std's blanket `impl<T, U: From<T>> Into<U> for T` (whose body is
+/// `U::from(x)`), called with the arguments `(T, U)`: `Some` of the function of the `From` impl
+/// that it calls (`None` if that impl is not known here)
+fn into_forwarded_from<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    resolved: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+) -> Option<Option<DefId>> {
+    let into_trait = tcx.get_diagnostic_item(rustc_span::sym::Into)?;
+    let from_trait = tcx.get_diagnostic_item(rustc_span::sym::From)?;
+    let impl_def_id = tcx.impl_of_assoc(resolved)?;
+    if tcx.crate_name(impl_def_id.krate).as_str() != "core" || args.len() != 2 {
+        return None;
+    }
+    let trait_ref = tcx.impl_opt_trait_ref(impl_def_id)?.skip_binder();
+    if trait_ref.def_id != into_trait || !matches!(trait_ref.self_ty().kind(), ty::Param(_)) {
+        return None;
+    }
+    let from_fn = tcx
+        .associated_items(from_trait)
+        .in_definition_order()
+        .find(|i| i.is_fn() && i.name().as_str() == "from")?
+        .def_id;
+    let from_args = tcx.mk_args(&[args[1], args[0]]);
+    match ty::Instance::try_resolve(tcx, typing_env, from_fn, from_args) {
+        Ok(Some(instance)) if instance.def_id() != from_fn => Some(Some(instance.def_id())),
+        _ => Some(None),
+    }
+}
+
 /// The destructors that dropping a value of type `ty` runs (`out`), and the types in it whose drop
 /// glue is not known here (`unknown`: type parameters, associated and opaque types, `dyn`). A
 /// std type is assumed to drop exactly its type arguments (its fields may hide them behind raw
@@ -1017,9 +1055,19 @@ fn strict_edges<'tcx>(
                 {
                     // (a trait method's specification is that of the impl's method, so the
                     // resolved callee is looked up too)
+                    // (`x.into()` through std's blanket `Into` impl is `U::from(x)`: it drops
+                    // nothing itself, so what counts is the `From` impl's function: one of this
+                    // crate's (checked itself, and reached as a callback), a std or vstd one
+                    // (looked up), or one not known here (reached through the bound `U: From<T>`,
+                    // which a callback check covers)
+                    let forwarded = resolve_callee(tcx, typing_env, func)
+                        .and_then(|c| into_forwarded_from(tcx, typing_env, c, args));
                     let drops_nothing = ext.drops_nothing(tcx, callee)
                         || resolve_callee(tcx, typing_env, func)
-                            .is_some_and(|c| ext.drops_nothing(tcx, c));
+                            .is_some_and(|c| ext.drops_nothing(tcx, c))
+                        || forwarded.is_some_and(|f| {
+                            f.is_none_or(|c| c.is_local() || ext.drops_nothing(tcx, c))
+                        });
                     if is_trusted_leaf_crate(tcx, callee) && !drops_nothing {
                         let (mut dtors, mut unknown) = (Vec::new(), Vec::new());
                         let mut seen = std::collections::HashSet::new();

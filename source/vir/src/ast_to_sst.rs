@@ -4535,6 +4535,7 @@ pub(crate) fn expr_to_stm_opt(
                 const_var: false,
                 assume_external_allowed: false,
                 trusted_call: false,
+                into_forward: None,
             };
             let call_expr = SpannedTyped::new(
                 &expr.span,

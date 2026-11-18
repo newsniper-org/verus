@@ -720,7 +720,7 @@ a type does. For each operator trait `Op` there are three, each a supertrait of 
 
 `Op` is one of the traits that vstd specifies: `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`,
 `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, their `*Assign` forms, `Index`, `IndexMut`, `Deref`,
-`DerefMut`, `PartialEq`, `PartialOrd`, `Ord` and `Clone`. A marker has the type parameters of its trait
+`DerefMut`, `PartialEq`, `PartialOrd`, `Ord`, `Clone`, `From` and `Into`. A marker has the type parameters of its trait
 (`FipAdd<Rhs = Self>`, `FipIndex<Idx>`) and follows its supertraits: `FipOrd` implies
 `FipPartialOrd` and `FipPartialEq`, and `FipIndexMut` implies `FipIndex`.
 
@@ -742,7 +742,8 @@ A comparison of references (`a == b` with `a: &T`) runs std's impl for reference
 `T`'s method, so the marker of `T` covers it.
 
 vstd implements the markers for the primitive integer types, `bool` and `char` (for the traits
-they implement), and the `Clone` markers also for `f32` and `f64`; these impls are trusted. Any other `unsafe impl FbipOp for X` (or `FipOp`,
+they implement), the `Clone` markers also for `f32` and `f64`, and the `From` markers for the
+reflexive `From<T> for T` (which returns its argument); these impls are trusted. Any other `unsafe impl FbipOp for X` (or `FipOp`,
 `FipStrictOp`) is accepted only if `X`'s `Op` impl, for the same type written the same way, is
 checked by Verus, and each method that impl defines is bounded by `allocates 0` (a literal `0`)
 and, for the higher levels, is `#[verifier::fip]` or `#[verifier::fip(strict)]`. A method that the
@@ -815,6 +816,25 @@ fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
 
 (The `requires` gives `r@ == src@`: `cloned` allows a clone or the value itself. A caller with
 `T = i32` or `T = f64` shows it from vstd's specification of their `clone`.)
+
+`From` and `Into` go both ways. std's blanket `impl<T, U: From<T>> Into<U> for T` is
+`U::from(x)`, so:
+
+* A call `x.into()` that goes through it is checked as the call `<U as From<T>>::from(x)` when
+  that `From` impl is known to Verus (has a specification, or is verified): its `allocates`,
+  `deallocates_when`, "drops nothing" and `ensures` apply. (`src.into()` for a `Box<[T]>` is then
+  `Box::<[T]>::from(src)`.) When the impl is not known, the blanket impl's specification applies,
+  which refers to `U::from`.
+* `U: FipFrom<T>` gives `T: FipInto<U>` (vstd implements it, and a bound `U: FbipFrom<T>`
+  covers the call `x.into()` too). An `Into` impl that a crate writes itself, without `From`,
+  can have the `Into` markers, checked like the others.
+
+```rust
+#[verifier::fip(strict)]
+fn conv<T: NoDeallocDrop, U: FipStrictFrom<T> + NoDeallocDrop>(t: T) -> U {
+    t.into()
+}
+```
 
 ### Callbacks from other crates
 

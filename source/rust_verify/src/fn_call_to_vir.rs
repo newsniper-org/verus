@@ -202,6 +202,7 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
     };
 
     let mut record_name = name.clone();
+    let mut resolved_impl_fn: Option<DefId> = None;
     let target_kind = if tcx.trait_of_assoc(f).is_none() {
         vir::ast::CallTargetKind::Static
     } else {
@@ -233,6 +234,7 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
 
                 let f = Arc::new(FunX { path: bctx.ctxt.def_id_to_vir_path(did) });
                 record_name = f.clone();
+                resolved_impl_fn = Some(did);
 
                 vir::ast::CallTargetKind::DynamicResolved {
                     resolved: f,
@@ -356,12 +358,17 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
 
     let typ_args = mk_typ_args(bctx, node_substs, f, expr.span)?;
     let impl_paths = get_impl_paths(bctx, f, node_substs, None, const_var, expr.span)?;
+    let into_forward = match resolved_impl_fn {
+        Some(did) if !bctx.in_ghost => into_forward(bctx, expr.span, f, did, node_substs)?,
+        _ => None,
+    };
     let call_target_attrs =
         vir::ast::CallTargetAttrs {
             autospec: autospec_usage,
             assume_external_allowed,
             const_var,
             trusted_call: bctx.in_trusted_call,
+            into_forward,
         };
     let target = CallTarget::Fun(target_kind, name, typ_args, impl_paths, call_target_attrs);
     Ok(bctx.spanned_typed_new(
@@ -369,6 +376,66 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
         &expr_typ()?,
         ExprX::Call { target, args: Arc::new(vir_args), post_args: None, body: call_body },
     ))
+}
+
+/// `x.into()` that resolves to std's blanket `impl<T, U: From<T>> Into<U> for T`, whose body is
+/// `U::from(x)`: that call of `<U as From<T>>::from`, if it resolves to an impl (see
+/// `vir::ast::CallTargetAttrs::into_forward`)
+fn into_forward<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    span: Span,
+    f: DefId,
+    resolved: DefId,
+    node_substs: &'tcx rustc_middle::ty::List<rustc_middle::ty::GenericArg<'tcx>>,
+) -> Result<Option<Arc<vir::ast::IntoForward>>, VirErr> {
+    let tcx = bctx.ctxt.tcx;
+    let (Some(into_trait), Some(from_trait)) = (
+        tcx.get_diagnostic_item(rustc_span::sym::Into),
+        tcx.get_diagnostic_item(rustc_span::sym::From),
+    ) else {
+        return Ok(None);
+    };
+    if tcx.trait_of_assoc(f) != Some(into_trait) || node_substs.len() != 2 {
+        return Ok(None);
+    }
+    // (the blanket impl: in `core`, for a type parameter)
+    let Some(impl_def_id) = tcx.impl_of_assoc(resolved) else { return Ok(None) };
+    let Some(trait_ref) = tcx.impl_opt_trait_ref(impl_def_id) else { return Ok(None) };
+    let trait_ref = trait_ref.skip_binder();
+    if tcx.crate_name(impl_def_id.krate).as_str() != "core"
+        || trait_ref.def_id != into_trait
+        || !matches!(trait_ref.self_ty().kind(), TyKind::Param(_))
+    {
+        return Ok(None);
+    }
+    let Some(from_fn) = tcx
+        .associated_items(from_trait)
+        .in_definition_order()
+        .find(|i| i.is_fn() && i.name().as_str() == "from")
+        .map(|i| i.def_id)
+    else {
+        return Ok(None);
+    };
+    // `Into<U> for T` has the arguments (T, U); `From<T> for U` has (U, T)
+    let from_substs = tcx.mk_args(&[node_substs[1], node_substs[0]]);
+    let typing_env = TypingEnv::non_body_analysis(tcx, bctx.fun_id);
+    let ResolutionResult::Resolved { resolved_item: ResolvedItem::FromImpl(did, res_args), .. } =
+        resolve_trait_item(span, tcx, typing_env, from_fn, from_substs)?
+    else {
+        return Ok(None);
+    };
+    let kind = vir::ast::CallTargetKind::DynamicResolved {
+        resolved: Arc::new(FunX { path: bctx.ctxt.def_id_to_vir_path(did) }),
+        typs: mk_typ_args(bctx, res_args, did, span)?,
+        impl_paths: get_impl_paths(bctx, did, res_args, None, false, span)?,
+        is_trait_default: false,
+    };
+    Ok(Some(Arc::new(vir::ast::IntoForward {
+        fun: Arc::new(FunX { path: bctx.ctxt.def_id_to_vir_path(from_fn) }),
+        kind,
+        typs: mk_typ_args(bctx, from_substs, from_fn, span)?,
+        impl_paths: get_impl_paths(bctx, from_fn, from_substs, None, false, span)?,
+    })))
 }
 
 pub(crate) fn const_var_to_vir<'tcx>(
@@ -508,6 +575,7 @@ pub(crate) fn call_overloaded_method<'tcx>(
         autospec: autospec_usage,
         assume_external_allowed: false,
         trusted_call: bctx.in_trusted_call,
+        into_forward: None,
         const_var: false,
     };
     let call_target =

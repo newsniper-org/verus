@@ -676,7 +676,7 @@ trait 메서드의 제네릭 호출은 impl을 알 수 없습니다. 그래서 `
 
 `Op`는 vstd가 명세하는 trait 가운데 하나입니다. `Neg`, `Not`, `Add`, `Sub`, `Mul`, `Div`, `Rem`, `BitAnd`,
 `BitOr`, `BitXor`, `Shl`, `Shr`, 이들의 `*Assign` 꼴, `Index`, `IndexMut`, `Deref`, `DerefMut`, `PartialEq`,
-`PartialOrd`, `Ord`, `Clone`입니다. 표시 trait은 원래 trait의 타입 매개변수를 가지고(`FipAdd<Rhs = Self>`,
+`PartialOrd`, `Ord`, `Clone`, `From`, `Into`입니다. 표시 trait은 원래 trait의 타입 매개변수를 가지고(`FipAdd<Rhs = Self>`,
 `FipIndex<Idx>`), 원래 trait의 상위 trait을 따릅니다. `FipOrd`는 `FipPartialOrd`와 `FipPartialEq`를,
 `FipIndexMut`는 `FipIndex`를 함축합니다.
 
@@ -698,7 +698,8 @@ fn eq_gen<T: FipStrictPartialEq>(a: &T, b: &T) -> bool {
 `T`의 표시 trait이 이 비교도 다룹니다.
 
 vstd는 기본 정수 타입, `bool`, `char`에 대해 (그 타입이 구현하는 trait의) 표시 trait을 구현하고, `Clone`의
-표시 trait은 `f32`, `f64`에도 구현합니다. 이 impl은 신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `FipStrictOp`)는 다음일 때만 받습니다. 같은
+표시 trait은 `f32`, `f64`에도, `From`의 표시 trait은 인자를 그대로 돌려주는 `From<T> for T`에도 구현합니다. 이
+impl은 신뢰합니다. 그 밖의 `unsafe impl FbipOp for X`(또는 `FipOp`, `FipStrictOp`)는 다음일 때만 받습니다. 같은
 타입을 같은 꼴로 적은 `X`의 `Op` impl을 Verus가 검사하고, 그 impl이 정의하는 메서드마다 `allocates 0`
 (리터럴 `0`)로 제한되어 있고, 위 단계에서는 `#[verifier::fip]`이나 `#[verifier::fip(strict)]`이어야 합니다.
 impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행하고, 그 본문은 trait 자신의 메서드만
@@ -763,6 +764,23 @@ fn copy<T: Copy + AllocFreeDrop + FipStrictClone>(src: &[T]) -> (r: Vec<T>)
 
 (`r@ == src@`는 `requires`에서 나옵니다. `cloned`는 clone이거나 값 자신이기 때문입니다. `T = i32`나
 `T = f64`인 호출자는 vstd의 `clone` 명세로 이 `requires`를 보입니다.)
+
+`From`과 `Into`는 양방향으로 통합니다. std의 blanket `impl<T, U: From<T>> Into<U> for T`는 `U::from(x)`이므로,
+
+* 이 impl을 거치는 `x.into()` 호출은, 그 `From` impl을 Verus가 알면(명세가 있거나 검증된 것이면)
+  `<U as From<T>>::from(x)` 호출로 검사합니다. 그 impl의 `allocates`, `deallocates_when`, "drop하지 않음",
+  `ensures`가 적용됩니다. (`Box<[T]>`로의 `src.into()`는 `Box::<[T]>::from(src)`가 됩니다.) 그 impl을 모르면
+  `U::from`을 가리키는 blanket impl의 명세가 적용됩니다.
+* `U: FipFrom<T>`이면 `T: FipInto<U>`입니다(vstd가 구현하고, `U: FbipFrom<T>` 같은 bound는 `x.into()` 호출도
+  다룹니다). `From` 없이 crate가 직접 쓴 `Into` impl에도 `Into`의 표시 trait을 줄 수 있고, 다른 표시 trait처럼
+  검사합니다.
+
+```rust
+#[verifier::fip(strict)]
+fn conv<T: NoDeallocDrop, U: FipStrictFrom<T> + NoDeallocDrop>(t: T) -> U {
+    t.into()
+}
+```
 
 ### 다른 crate에서 오는 콜백
 

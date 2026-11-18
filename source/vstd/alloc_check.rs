@@ -635,6 +635,8 @@ def_op_markers! {
     core::cmp::PartialOrd => FbipPartialOrd, FipPartialOrd, FipStrictPartialOrd [Rhs: ?Sized = Self] [Rhs] [+ FbipPartialEq<Rhs>] [+ FipPartialEq<Rhs>] [+ FipStrictPartialEq<Rhs>];
     core::cmp::Ord => FbipOrd, FipOrd, FipStrictOrd [] [] [+ FbipPartialOrd + AllocFreeDrop] [+ FipPartialOrd + NoDeallocDrop] [+ FipStrictPartialOrd];
     core::clone::Clone => FbipClone, FipClone, FipStrictClone [] [] [+ AllocFreeDrop] [+ NoDeallocDrop] [];
+    core::convert::From => FbipFrom, FipFrom, FipStrictFrom [T] [T] [] [] [];
+    core::convert::Into => FbipInto, FipInto, FipStrictInto [T] [T] [] [] [];
 }
 
 // vstd's impls for the primitive types (trusted: std's arithmetic, bit operations and comparisons
@@ -688,6 +690,37 @@ op_marker_impls!([
     FbipOrd, FipOrd, FipStrictOrd
 ] [char]);
 
+// `From` and `Into`: std's blanket `impl<T, U: From<T>> Into<U> for T` is `U::from(x)`, so a
+// `From` marker gives the `Into` marker of the other direction (the markers of an `Into` impl
+// that a crate writes itself are checked like the others). The reflexive `impl<T> From<T> for T`
+// returns its argument.
+verus! {
+
+unsafe impl<T, U: FbipFrom<T>> FbipInto<U> for T {
+
+}
+
+unsafe impl<T, U: FipFrom<T>> FipInto<U> for T {
+
+}
+
+unsafe impl<T, U: FipStrictFrom<T>> FipStrictInto<U> for T {
+
+}
+
+unsafe impl<T> FbipFrom<T> for T {
+
+}
+
+unsafe impl<T> FipFrom<T> for T {
+
+}
+
+unsafe impl<T> FipStrictFrom<T> for T {
+
+}
+
+} // verus!
 // (std's `clone` of these types returns a copy of the value, and so does its `clone_from`; their
 // drops do nothing)
 op_marker_impls!([FbipClone, FipClone, FipStrictClone] [
@@ -812,6 +845,16 @@ pub broadcast axiom fn axiom_fbip_clone<T: FbipClone>(a: &T)
         #[trigger] call_allocates(<T as Clone>::clone, (a,)) == 0,
 ;
 
+pub broadcast axiom fn axiom_fbip_from<T, U: FbipFrom<T>>(v: T)
+    ensures
+        #[trigger] call_allocates(<U as From<T>>::from, (v,)) == 0,
+;
+
+pub broadcast axiom fn axiom_fbip_into<T: FbipInto<U>, U>(v: T)
+    ensures
+        #[trigger] call_allocates(<T as Into<U>>::into, (v,)) == 0,
+;
+
 // vstd's impls for std's impls that compare through their type arguments (trusted: `Option`'s
 // comparisons compare the contents by reference, and the impls for references forward to the
 // referent's methods; `Option`'s drop is covered by its `AllocFreeDrop`/`NoDeallocDrop` impls)
@@ -908,6 +951,8 @@ pub broadcast group group_op_marker_axioms {
     axiom_fbip_max,
     axiom_fbip_min,
     axiom_fbip_clone,
+    axiom_fbip_from,
+    axiom_fbip_into,
 }
 
 } // verus!

@@ -8,6 +8,35 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 fn simplify_one_expr(functions: &HashMap<Fun, FunctionStub>, expr: &Expr) -> Result<Expr, VirErr> {
+    // `x.into()` through std's blanket `Into` impl is `U::from(x)`: call that `From` impl's
+    // function instead, when it is known (otherwise the blanket impl's specification stays)
+    let forwarded;
+    let expr = match &expr.x {
+        ExprX::Call { target: CallTarget::Fun(_, _, _, _, attrs), args, post_args, body }
+            if attrs.into_forward.as_ref().is_some_and(|fw| {
+                functions.contains_key(&fw.fun)
+                    && matches!(&fw.kind, crate::ast::CallTargetKind::DynamicResolved { resolved, .. }
+                        if functions.contains_key(resolved))
+            }) =>
+        {
+            let fw = attrs.into_forward.as_ref().unwrap();
+            let attrs = crate::ast::CallTargetAttrs { into_forward: None, ..attrs.clone() };
+            forwarded = expr.new_x(ExprX::Call {
+                target: CallTarget::Fun(
+                    fw.kind.clone(),
+                    fw.fun.clone(),
+                    fw.typs.clone(),
+                    fw.impl_paths.clone(),
+                    attrs,
+                ),
+                args: args.clone(),
+                post_args: post_args.clone(),
+                body: body.clone(),
+            });
+            &forwarded
+        }
+        _ => expr,
+    };
     // AssumeExternal
     let expr = match &expr.x {
         // TODO: ConstVar
@@ -113,6 +142,7 @@ fn simplify_one_expr(functions: &HashMap<Fun, FunctionStub>, expr: &Expr) -> Res
                 const_var: attrs.const_var,
                 assume_external_allowed: false,
                 trusted_call: false,
+                into_forward: None,
             };
             let call = ExprX::Call {
                 target: CallTarget::Fun(kind, tgt, typs, impl_paths, attrs),

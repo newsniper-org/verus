@@ -1042,6 +1042,20 @@ pub struct CallTargetAttrs {
     /// The call is inside a `#[verifier::trusted_call]` block (it may call a
     /// `#[verifier::trusted_only]` function)
     pub trusted_call: bool,
+    /// A call `x.into()` of std's blanket `impl<T, U: From<T>> Into<U> for T`, whose body is
+    /// `U::from(x)`: the same call of `<U as From<T>>::from`, resolved to its impl. Autospec
+    /// resolution makes the call that one when the impl's function is known (has a
+    /// specification), so that its own specification (`deallocates_when`, ...) applies.
+    pub into_forward: Option<Arc<IntoForward>>,
+}
+
+/// See `CallTargetAttrs::into_forward`
+#[derive(Clone, Debug, Serialize, Deserialize, ToDebugSNode)]
+pub struct IntoForward {
+    pub fun: Fun,
+    pub kind: CallTargetKind,
+    pub typs: Typs,
+    pub impl_paths: ImplPaths,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToDebugSNode)]

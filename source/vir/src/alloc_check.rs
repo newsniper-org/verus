@@ -198,6 +198,8 @@ pub const OP_TRAITS: &[&str] = &[
     "PartialOrd",
     "Ord",
     "Clone",
+    "From",
+    "Into",
 ];
 
 /// The levels of the operator markers: `FbipOp` (the impl's methods are bounded by `allocates
@@ -225,13 +227,14 @@ pub fn op_marker(path: &Path) -> Option<(&'static str, OpLevel)> {
     OP_TRAITS.iter().find(|t| **t == op).map(|t| (*t, level))
 }
 
-/// A `core` operator trait (`core::ops::arith::Add`, `core::cmp::Ord`, `core::clone::Clone`): its
-/// last segment
+/// A `core` operator trait (`core::ops::arith::Add`, `core::cmp::Ord`, `core::clone::Clone`,
+/// `core::convert::From`): its last segment
 pub(crate) fn op_trait(path: &Path) -> Option<&'static str> {
     let name = crate::ast_util::path_as_friendly_rust_name(path);
     if !(name.starts_with("core::ops::")
         || name.starts_with("core::cmp::")
-        || name.starts_with("core::clone::"))
+        || name.starts_with("core::clone::")
+        || name.starts_with("core::convert::"))
     {
         return None;
     }
@@ -267,6 +270,10 @@ pub(crate) fn op_marker_bounds(bounds: &GenericBounds) -> Vec<(Typs, &'static st
                         args.clone()
                     };
                     out.push((sup_args, sup, level));
+                }
+                // (`U: FipFrom<T>` gives `T: FipInto<U>`, through std's blanket `Into` impl)
+                if op == "From" && args.len() == 2 {
+                    out.push((Arc::new(vec![args[1].clone(), args[0].clone()]), "Into", level));
                 }
             }
         }

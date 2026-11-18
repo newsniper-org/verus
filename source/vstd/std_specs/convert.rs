@@ -56,12 +56,13 @@ impl<T, U: From<T>> IntoSpecImpl<U> for T {
 }
 
 // The reflexive `impl<T> From<T> for T` returns its argument (used by every `?` on a `Result`
-// whose error type is unchanged).
+// whose error type is unchanged): it allocates, frees and drops nothing.
+#[verifier::alloc_check_skip_drops]
 pub assume_specification<T>[ <T as From<T>>::from ](t: T) -> (ret: T)
     ensures
         ret == t,
     allocates
-        0,
+        deallocates_when(0int, false),
 ;
 
 pub assume_specification<T, U: From<T>>[ <T as Into<U>>::into ](a: T) -> (ret: U)

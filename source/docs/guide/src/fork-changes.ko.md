@@ -61,6 +61,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 상수 스택 공간 | `become`과 함께 `#[verifier::fip(strict)]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
 | fip 코드의 제네릭 연산자 호출 | `T: FipAdd`, `T: FipOrd` 등 (`core`의 연산자 trait마다 `FbipOp`, `FipOp`, `FipStrictOp`) | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |
 | fip 코드의 제네릭 `clone`과 slice 복사 | `T: FipClone` 등 (`Clone`에 대한 같은 세 단계), `<[T]>::to_vec`, `Box::<[T]>::from(&[T])` | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |
+| fip 코드의 변환 | `U: FipFrom<T>`, `T: FipInto<U>` 등, `x.into()`를 `U::from(x)`로 검사 | `fip` (1.100) | [할당 상한](./reference-allocates.ko.md)의 "연산자 trait" 절 |
 | 스택 증가 린터 | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md)의 "도구" 절 |
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 

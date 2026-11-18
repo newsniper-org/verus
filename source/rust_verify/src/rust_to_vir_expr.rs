@@ -2371,6 +2371,7 @@ pub(crate) fn expr_to_vir_with_adjustments<'tcx>(
                     const_var: false,
                     assume_external_allowed: false,
                     trusted_call: bctx.in_trusted_call,
+                    into_forward: None,
                 };
                 let call_target = CallTarget::Fun(
                     vir::ast::CallTargetKind::Static,
@@ -2784,6 +2785,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                             const_var: false,
                             assume_external_allowed: false,
                             trusted_call: bctx.in_trusted_call,
+                            into_forward: None,
                         };
                         (
                             CallTarget::Fun(
@@ -2858,6 +2860,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                     const_var: false,
                     assume_external_allowed: false,
                     trusted_call: bctx.in_trusted_call,
+                    into_forward: None,
                 };
                 let call_target = CallTarget::Fun(
                     vir::ast::CallTargetKind::Static,
@@ -2971,6 +2974,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         const_var: false,
                         assume_external_allowed: false,
                         trusted_call: bctx.in_trusted_call,
+                        into_forward: None,
                     };
                     let call_target = CallTarget::Fun(
                         vir::ast::CallTargetKind::Static,
@@ -3922,6 +3926,7 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         const_var: false,
                         assume_external_allowed: false,
                         trusted_call: bctx.in_trusted_call,
+                        into_forward: None,
                     };
                     // special fast path
                     let call_target = CallTarget::Fun(
@@ -5007,6 +5012,7 @@ pub(crate) fn maybe_do_ptr_cast<'tcx>(
                 const_var: false,
                 assume_external_allowed: false,
                 trusted_call: bctx.in_trusted_call,
+                into_forward: None,
             };
             let call_target = CallTarget::Fun(
                 vir::ast::CallTargetKind::Static,
