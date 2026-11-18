@@ -2120,10 +2120,10 @@ fn alloc_check_unchecked_impl_reached_through_impl_bounds() {
 }
 
 test_verify_one_file_with_options! {
-    // `Rc<T, Rc<Global, MyA>>` is not the global allocator just because its outer layer is an
-    // `Rc` over `Global`: its allocator argument is a user allocator (here not a
-    // `BoundedAllocator`)
-    #[test] alloc_check_rc_allocator_arg_not_global ["vstd", "-V alloc-check"] => verus_code! {
+    // `Rc<T, Rc<Global, MyA>>`: its allocator is an `Rc` whose allocator is a user allocator.
+    // Cloning it clones the allocator, and dropping it may drop the allocator, which allocate
+    // here: an allocator's own code is the runtime, so neither is counted
+    #[test] alloc_check_rc_allocator_arg_is_runtime ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         use std::rc::Rc;
         use std::alloc::{Allocator, AllocatorClone, AllocError, Global, Layout};
@@ -2145,7 +2145,7 @@ test_verify_one_file_with_options! {
         {
             o.clone()
         }
-    } => Err(err) => assert_any_vir_error_msg(err, "its allocator `test_crate::MyA` must implement `vstd::alloc_check::BoundedAllocator`")
+    } => Ok(())
 }
 
 // VIR drops `Send` bounds, so an impl of `Copy` with an auto-trait bound does not show that a
@@ -2725,67 +2725,25 @@ test_verify_one_file_with_options! {
 
         use std::alloc::{Allocator, AllocError, Global, Layout};
         use std::ptr::NonNull;
-        use vstd::alloc_check::BoundedAllocator;
+        use vstd::std_specs::vec::spec_vec_capacity;
 
-        pub struct Fwd;
+        // (an allocator's own code is the runtime: what it allocates is not counted, only the
+        // program's calls to it)
+        pub struct Twice;
 
-        unsafe impl Allocator for Fwd {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
-                allocates 1
-            {
-                Global.allocate(layout)
-            }
-
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
-                allocates 0
-            {
-                #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
-            }
-        }
-
-        unsafe impl AllocFreeDrop for Fwd {}
-
-        unsafe impl BoundedAllocator for Fwd {
-            open spec fn max_cost() -> int { 1 }
-        }
-
-        fn push_one_fwd(v: &mut Vec<u64, Fwd>, x: u64)
-            allocates 1
-        {
-            v.push(x);
-        }
-
-        use vstd::std_specs::rust_1_100::spec_layout_size;
-        use vstd::std_specs::vec::{spec_vec_allocator, spec_vec_capacity};
-
-        pub struct Chunked { pub limit: usize }
-
-        unsafe impl Allocator for Chunked {
+        unsafe impl Allocator for Twice {
             fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                if layout.size() <= self.limit { Err(AllocError) } else { Global.allocate(layout) }
+                let _ = Global.allocate(layout);
+                Global.allocate(layout)
             }
 
             unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
         }
 
-        unsafe impl AllocFreeDrop for Chunked {}
-
-        unsafe impl BoundedAllocator for Chunked {
-            open spec fn max_cost() -> int { 1 }
-
-            open spec fn allocate_cost(&self, layout: Layout) -> int {
-                if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
-            }
-        }
-
-        fn push_fits(v: &mut Vec<u64, Chunked>)
-            requires
-                spec_vec_allocator(&*old(v)).limit == 256,
-                old(v)@.len() == 8,
-                spec_vec_capacity(&*old(v)) == 8,
-            allocates 0
+        fn push_one_twice(v: &mut Vec<u64, Twice>, x: u64)
+            allocates if old(v)@.len() == spec_vec_capacity(&*old(v)) { 1int } else { 0int }
         {
-            v.push(1); // grows to 16 elements, 128 bytes
+            v.push(x);
         }
 
         pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
@@ -2875,8 +2833,8 @@ fn alloc_check_imported_drop() {
 
 test_verify_one_file! {
     // In exec code, `Rc::clone` is an identity in the encoding only with the global allocator;
-    // with another allocator it is a call of vstd's `Clone` specification (which charges
-    // `allocator_clone_cost::<A>()` and still gives `res == *r`). In ghost code it is an
+    // with another allocator it is a call of vstd's `Clone` specification (which gives
+    // `res == *r`; cloning the allocator is the runtime's). In ghost code it is an
     // identity for every allocator.
     #[test] rc_clone_custom_allocator_goes_through_spec code! {
         use vstd::prelude::*;

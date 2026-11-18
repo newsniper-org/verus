@@ -1660,6 +1660,11 @@ pub struct FunctionAttrsX {
     /// `#[verifier::fip(strict)]` (implies `fip`): checked on the compiled program to use constant
     /// stack space, with every function it can reach (so another crate may call it as a leaf)
     pub fip_strict: bool,
+    /// `-V alloc-check`: the function is the allocator runtime's code (a method of an
+    /// `core::alloc::Allocator` impl, or of a `Clone` or `Drop` impl for an allocator type;
+    /// rust_verify's `fip_mir::allocator_runtime`). Only the program's calls to an allocator are
+    /// counted, so its body is not checked against `allocates`, fip or the drop rule.
+    pub allocator_runtime: bool,
     /// `#[verifier::trusted_only]`: std's (or the author's) conditions for calling the function
     /// safely cannot be written as a precondition, so verified code may call it (or an
     /// implementation of it, if it is a trait method) only inside a `#[verifier::trusted_call]`

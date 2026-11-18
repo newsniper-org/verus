@@ -252,9 +252,9 @@ fn fill(hole: &mut List, v: List)
   bound를 따라가서, 그 함수가 되부를 수 있는 사용자 코드를 찾고, 그 코드가 fip(또는 strict)인지 검사합니다. 이 검사는
   제네릭 코드가 타입 인자에 bound를 통해서만 닿는다는 점에 기댑니다. 스택 규칙은 `become`에 대한 rustc의 보장과,
   std와 vstd 함수가 유한한 스택을 쓴다는 가정을 신뢰합니다.
-* **할당기.** 전역 할당기나 시스템 할당기가 아닌 할당기를 쓰는 컨테이너는, 그 할당기가 `FipAllocator`(strict
-  함수에서는 `FipStrictAllocator`)를 구현할 때만 fip 함수에서 쓸 수 있습니다.
-  [사용자 정의 할당기](./reference-allocates.ko.md)를 보세요.
+* **할당기.** 할당기는 런타임입니다. fip(또는 strict) 함수는 어떤 할당기를 쓰는 컨테이너든 쓸 수 있고, 할당기가
+  스스로 하는 일(할당, 해제, 스택 사용)은 검사하지 않습니다. [사용자 정의 할당기](./reference-allocates.ko.md)를
+  보세요.
 
 전체 규칙은 레퍼런스의 `#[verifier::fip]`과 `#[verifier::fip(strict)]` 절([할당 상한](./reference-allocates.ko.md))을
 보세요.

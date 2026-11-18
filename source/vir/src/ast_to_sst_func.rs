@@ -1106,7 +1106,10 @@ pub fn func_def_to_sst(
     // and its own bound (if any) must be within the trait's: the FnDef axioms state
     // `call_allocates == impl bound` per impl and `call_allocates <= trait bound` for the trait.
     let mut copy_obligations: Vec<crate::alloc_check::CopyObligation> = Vec::new();
-    if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety {
+    // (the allocator runtime's code is not checked: only the program's calls to an allocator are
+    // counted, see `FunctionAttrsX::allocator_runtime`)
+    let runtime = function.x.attrs.allocator_runtime;
+    if ctx.global.alloc_check && function.x.mode == Mode::Exec && !check_api_safety && !runtime {
         copy_obligations.extend(crate::alloc_check::check_closures_with_bounds(ctx, function)?);
         crate::alloc_check::check_allocated_not_in_closure_specs(function)?;
     }
@@ -1120,6 +1123,7 @@ pub fn func_def_to_sst(
     if ctx.global.alloc_check
         && function.x.mode == Mode::Exec
         && !check_api_safety
+        && !runtime
         && (own_bound.is_some() || inherited_bound.is_some())
     {
         if !function.x.attrs.alloc_check_skip_drops {
@@ -1425,8 +1429,8 @@ pub fn func_def_to_sst(
     if let Some(check) = alloc_entry_check {
         stm = stms_to_one_stm(&body.span, vec![check, stm]);
     }
-    // Opaque types whose `Copy`-ness depends on trait bounds of their arguments, and containers
-    // whose allocator must be a `BoundedAllocator` (drop rule): show those bounds on entry
+    // Opaque types whose `Copy`-ness depends on trait bounds of their arguments (drop rule): show
+    // those bounds on entry
     if !copy_obligations.is_empty() {
         let mut checks: Vec<crate::sst::Stm> = Vec::new();
         for (span, typ, bounds, why) in copy_obligations.iter() {

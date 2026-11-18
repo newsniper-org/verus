@@ -326,9 +326,7 @@ pub(crate) fn check_impls_follow_decls(krate: &Krate) -> Result<(), VirErr> {
 /// their own code, e.g. when a `BTreeMap` is dropped), so their bodies must not change the heap
 /// (a lower bound in it would then be stale)
 pub(crate) fn check_hidden_calls_preserve(info: &HeapInfo, krate: &Krate) -> Result<(), VirErr> {
-    let dts = crate::alloc_check::bounded_allocator_dts(krate);
-    let clones: HashSet<&Fun> =
-        crate::alloc_check::clone_impls_of(krate, &dts).map(|f| &f.x.name).collect();
+    let clones: HashSet<&Fun> = HashSet::new();
     for f in krate.functions.iter() {
         let what = if clones.contains(&f.x.name) {
             "Clone::clone of a BoundedAllocator"

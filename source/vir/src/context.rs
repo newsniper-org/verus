@@ -86,6 +86,8 @@ pub struct GlobalCtx {
     pub(crate) drop_impl_alloc_zero: Arc<HashMap<Dt, (Span, bool)>>,
     pub(crate) copy_datatypes: Arc<std::collections::HashSet<Dt>>,
     pub(crate) copy_impls: Arc<crate::alloc_check::CopyImpls>,
+    /// -V alloc-check: the allocator datatypes (`alloc_check::allocator_dts`)
+    pub(crate) allocator_dts: Arc<std::collections::HashSet<Dt>>,
     /// The ghost allocator heap (vstd::alloc_heap), if vstd provides it
     pub(crate) alloc_heap: Option<Arc<crate::alloc_heap::HeapInfo>>,
     /// -V alloc-check: datatypes of the whole crate (not pruned per module, so a type's
@@ -377,6 +379,7 @@ impl GlobalCtx {
         crate::alloc_check::check_fmt_impl_bounds(krate)?;
         let copy_datatypes = crate::alloc_check::copy_datatypes(krate);
         let copy_impls = crate::alloc_check::copy_impls(krate);
+        let allocator_dts = crate::alloc_check::allocator_dts(krate);
         let alloc_heap = crate::alloc_heap::heap_info(krate).map(Arc::new);
         if let Some(info) = &alloc_heap {
             crate::alloc_heap::check_hidden_calls_preserve(info, krate)?;
@@ -592,12 +595,6 @@ impl GlobalCtx {
                 f,
             )?;
         }
-        // -V alloc-check: the bounds of the `Allocator` declaration are costs
-        // (`allocator_allocate_cost::<Self>(self, layout)`, ...) whose values for an allocator `X`
-        // come from `X: vstd::alloc_check::BoundedAllocator` (vstd's
-        // `axiom_bounded_allocator_*` axioms); so the methods of `X`'s `Allocator` impl depend
-        // on that impl, which must come first (else its axioms are not available to them)
-        crate::alloc_check::add_bounded_allocator_edges(krate, &mut func_call_graph);
 
         for group in &krate.reveal_groups {
             let group_node = Node::Fun(group.x.name.clone());
@@ -829,6 +826,7 @@ impl GlobalCtx {
             drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
             copy_datatypes: Arc::new(copy_datatypes),
             copy_impls: Arc::new(copy_impls),
+            allocator_dts: Arc::new(allocator_dts),
             alloc_heap,
             alloc_datatypes: Arc::new(alloc_datatypes),
             alloc_exec_typs: Arc::new(HashMap::new()),
@@ -869,6 +867,7 @@ impl GlobalCtx {
             drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
             copy_datatypes: self.copy_datatypes.clone(),
             copy_impls: self.copy_impls.clone(),
+            allocator_dts: self.allocator_dts.clone(),
             alloc_heap: self.alloc_heap.clone(),
             alloc_datatypes: self.alloc_datatypes.clone(),
             alloc_exec_typs: self.alloc_exec_typs.clone(),

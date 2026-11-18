@@ -3,67 +3,54 @@
 mod common;
 use common::*;
 
-// -V alloc-check with custom allocators (`core::alloc::Allocator`, stable since Rust 1.100):
-// `vstd::alloc_check::BoundedAllocator` gives the cost of one allocation (counted at the leaves),
-// and the allocator's `Allocator` impl is verified against it
+// -V alloc-check with custom allocators (`core::alloc::Allocator`, stable since Rust 1.100). An
+// allocator is the runtime (FP²'s memory manager): only the program's calls to an allocator are
+// counted, one each (`allocate`, `allocate_zeroed`, `grow`, `grow_zeroed`, `shrink`), whatever
+// the allocator. Its own code (its `Allocator`, `Clone` and `Drop` impls) is not checked for
+// allocations, deallocations or stack.
 
 /// An allocator that forwards to the global one (it defines only `allocate` and `deallocate`, so
 /// `grow` and the others run std's default bodies), and an arena that hands out no new memory
 const ALLOCATORS: &str = verus_code_str! {
     use vstd::prelude::*;
-    use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
-    use vstd::std_specs::rust_1_100::allocator_max_cost;
     use std::alloc::{Allocator, AllocError, Global, Layout};
     use std::ptr::NonNull;
 
     pub struct Fwd;
 
     unsafe impl Allocator for Fwd {
-        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
-            allocates 1
-        {
+        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
             Global.allocate(layout)
         }
 
-        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
-            allocates 0
-        {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
             #[verifier::trusted_call] { unsafe { Global.deallocate(ptr, layout) } }
         }
-    }
-
-    unsafe impl AllocFreeDrop for Fwd {}
-
-    unsafe impl BoundedAllocator for Fwd {
-        open spec fn max_cost() -> int { 1 }
     }
 
     pub struct Arena;
 
     unsafe impl Allocator for Arena {
-        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
-            allocates 0
-        {
+        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
             Err(AllocError)
         }
 
-        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
-            allocates 0
-        {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         }
-    }
-
-    unsafe impl AllocFreeDrop for Arena {}
-
-    unsafe impl BoundedAllocator for Arena {
-        open spec fn max_cost() -> int { 0 }
     }
 };
 
 test_verify_one_file_with_options! {
-    #[test] forwarding_allocator ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+    // every call to an allocator is one, whatever the allocator
+    #[test] allocator_calls_count_one ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
         // `push` that grows calls `grow` (std's default body: one `allocate`)
         fn push_one(v: &mut Vec<u8, Fwd>)
+            allocates 1
+        {
+            v.push(3);
+        }
+
+        fn push_arena(v: &mut Vec<u8, Arena>)
             allocates 1
         {
             v.push(3);
@@ -78,44 +65,33 @@ test_verify_one_file_with_options! {
             v.len()
         }
 
-        fn drop_it(v: Vec<u8, Fwd>, b: Box<u64, &Fwd>)
-            allocates 0
-        {
-        }
-
-        fn push_generic<A: Allocator + BoundedAllocator>(v: &mut Vec<u8, A>)
-            allocates allocator_max_cost::<A>()
-        {
-            v.push(1);
-        }
-
-        fn push_via_generic()
+        // (an empty vector and a zero-sized box do not call the allocator)
+        fn sizes() -> (n: usize)
             allocates 1
         {
-            let mut v: Vec<u8, Fwd> = Vec::new_in(Fwd);
-            push_generic(&mut v);
+            let e: Vec<u64, Arena> = Vec::with_capacity_in(0, Arena);
+            let z = Box::new_in((), Arena);
+            let v: Vec<u64, Arena> = Vec::with_capacity_in(16, Arena);
+            v.capacity()
         }
 
-        fn push_too_many(v: &mut Vec<u8, Fwd>)
+        fn generic<A: std::alloc::Allocator>(v: &mut Vec<u8, A>)
+            allocates 1
+        {
+            v.push(3);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // an arena that hands out no new memory is still called: the call is the program's
+    #[test] arena_calls_still_count ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        fn push_arena(v: &mut Vec<u8, Arena>)
             allocates 0 // FAILS
         {
             v.push(3);
         }
     } => Err(err) => assert_one_fails(err)
-}
-
-test_verify_one_file_with_options! {
-    #[test] arena_allocator_allocates_nothing ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
-        fn use_arena(a: &Arena)
-            allocates 0
-        {
-            let mut v: Vec<u8, &Arena> = Vec::new_in(a);
-            v.push(1);
-            v.push(2);
-            let w = v.clone();
-            let b = Box::new_in(5u64, a);
-        }
-    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
@@ -131,207 +107,132 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] allocator_without_marker_cannot_be_dropped ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct NoMark;
-        unsafe impl Allocator for NoMark {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                Err(AllocError)
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for NoMark {}
-        fn drop_it(v: Vec<u8, NoMark>)
+    // dropping a container calls its allocator's `deallocate` and drops the allocator: neither
+    // allocates anything of the program's
+    #[test] container_with_user_allocator_dropped ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+        fn drop_it(v: Vec<u8, Fwd>, b: Box<u64, Arena>)
             allocates 0
         {
         }
-    } => Err(err) => assert_vir_error_msg(err, "must implement `vstd::alloc_check::BoundedAllocator`")
-}
 
-test_verify_one_file_with_options! {
-    #[test] generic_allocator_needs_marker ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::Allocator;
-        fn drop_it<A: Allocator + vstd::alloc_check::AllocFreeDrop>(v: Vec<u8, A>)
+        fn drop_generic<A: std::alloc::Allocator>(v: Vec<u8, A>, b: Box<u64, A>)
             allocates 0
         {
         }
-    } => Err(err) => assert_vir_error_msg(err, "must implement `vstd::alloc_check::BoundedAllocator`")
-}
 
-test_verify_one_file_with_options! {
-    #[test] marker_impl_outside_verus_rejected ["vstd", "-V alloc-check"] => code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        unsafe impl vstd::alloc_check::BoundedAllocator for Evil {}
-        verus! {
-        pub struct Evil;
-        unsafe impl vstd::alloc_check::AllocFreeDrop for Evil {}
-        unsafe impl Allocator for Evil {
-            fn allocate(&self, l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) { Err(AllocError) }
-            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { }
-        }
-        fn drop_it(v: Vec<u8, Evil>) allocates 0 { }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "this `BoundedAllocator` impl is not checked by Verus")
-}
-
-test_verify_one_file_with_options! {
-    #[test] marker_needs_checked_allocator_impl ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct Evil;
-        #[verifier::external]
-        unsafe impl Allocator for Evil {
-            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
-            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { let _b = Box::new(1u8); }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for Evil {}
-        unsafe impl vstd::alloc_check::BoundedAllocator for Evil {
-            open spec fn max_cost() -> int { 0 }
-        }
-        fn drop_it(v: Vec<u8, Evil>) allocates 0 { }
-    } => Err(err) => assert_vir_error_msg(err, "needs its `core::alloc::Allocator` impl to be checked by Verus")
-}
-
-test_verify_one_file_with_options! {
-    // the impl's bound must be within the cost that the marker gives
-    #[test] allocator_impl_within_marker_cost ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct Two;
-        unsafe impl Allocator for Two {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                let a = Global.allocate(layout);
-                Global.allocate(layout) // fails: 2 > 1
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for Two {}
-        unsafe impl vstd::alloc_check::BoundedAllocator for Two {
-            open spec fn max_cost() -> int { 1 }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
-}
-
-test_verify_one_file_with_options! {
-    #[test] allocator_deallocate_allocates_nothing ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct Leaky;
-        unsafe impl Allocator for Leaky {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                Err(AllocError)
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-                let b = Box::new(1u8); // fails: the declaration says 0
-            }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
-}
-
-test_verify_one_file_with_options! {
-    // a negative cost is clamped at 0 (it does not contradict the costs being nonnegative)
-    #[test] negative_marker_cost_is_clamped ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use vstd::std_specs::rust_1_100::allocator_max_cost;
-        use std::alloc::{Allocator, AllocError, Layout};
-        use std::ptr::NonNull;
-        pub struct Neg;
-        unsafe impl Allocator for Neg {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                Err(AllocError)
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for Neg {}
-        unsafe impl vstd::alloc_check::BoundedAllocator for Neg {
-            open spec fn max_cost() -> int { -1 }
-        }
-        proof fn p() {
-            assert(allocator_max_cost::<Neg>() == 0);
-            assert(false); // FAILS
-        }
-    } => Err(err) => assert_one_fails(err)
-}
-
-test_verify_one_file_with_options! {
-    // cloning a container clones its allocator, which costs nothing for a `BoundedAllocator`
-    // (whose `clone` must be bounded by `allocates 0`)
-    #[test] container_clone_bounded_allocator_clone_free ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
-        impl Clone for Fwd {
-            fn clone(&self) -> (r: Self)
-                allocates 0
-            {
-                Fwd
-            }
-        }
-        fn clone_it(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
-            allocates 1
-        {
-            v.clone()
-        }
-        fn clone_empty(v: &Vec<u8, Fwd>) -> (r: Vec<u8, Fwd>)
-            requires v@.len() == 0,
+        fn drop_allocator(a: Fwd)
             allocates 0
         {
-            v.clone()
         }
     } => Ok(())
 }
 
 test_verify_one_file_with_options! {
-    // std's containers clone their allocator where Verus does not see it (dropping a `BTreeMap`
-    // clones it for every node it frees), so a `BoundedAllocator`'s `clone` must allocate nothing
-    #[test] bounded_allocator_clone_must_allocate_nothing ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
-        impl Clone for Fwd {
-            fn clone(&self) -> (r: Self)
+    // an allocator's own code is not checked: it may allocate (here twice) and free, and its
+    // `Clone` may allocate; a call of it counts as the `Allocator` declaration says
+    #[test] allocator_code_is_runtime ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        pub struct Twice;
+
+        impl Clone for Twice {
+            fn clone(&self) -> (r: Self) {
+                let b = Box::new(1u8);
+                Twice
+            }
+        }
+
+        unsafe impl Allocator for Twice {
+            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
                 allocates 1
             {
-                let _b = Box::new(7u8);
-                Fwd
+                let _ = Global.allocate(layout);
+                Global.allocate(layout)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+                let b = Box::new(1u8);
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+
+        fn push_one(v: &mut Vec<u8, Twice>)
+            allocates 1
+        {
+            v.push(3);
+        }
+
+        fn copy(v: &Vec<u8, Twice>) -> (r: Vec<u8, Twice>)
+            allocates 1
+        {
+            v.clone()
+        }
+
+        fn copy_empty(v: &Vec<u8, Twice>) -> (r: Vec<u8, Twice>)
+            requires v@.len() == 0,
+            allocates 0
+        {
+            v.clone()
+        }
+
+        fn copy_allocator(a: &Twice) -> (r: Twice)
+            allocates 0
+        {
+            a.clone()
+        }
+
+        fn direct(a: &Twice, l: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
+            allocates 1
+        {
+            a.allocate(l)
+        }
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
-    #[test] bounded_allocator_clone_unbounded ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
-        impl Clone for Fwd {
-            fn clone(&self) -> (r: Self) {
-                Fwd
+    // an allocator need not be verified at all
+    #[test] allocator_outside_verus ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        use std::alloc::{Allocator, AllocError, Global, Layout};
+        use std::ptr::NonNull;
+
+        unsafe impl Allocator for Ext {
+            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                let _ = Global.allocate(l);
+                Global.allocate(l)
             }
+            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
         }
-    } => Err(err) => assert_vir_error_msg(err, "must be checked by Verus and bounded by `allocates 0`")
+
+        impl Clone for Ext {
+            fn clone(&self) -> Self { let _b = Box::new(1u8); Ext }
+        }
+
+        verus! {
+        pub struct Ext;
+
+        fn push_one(v: &mut Vec<u8, Ext>)
+            allocates 1
+        {
+            v.push(3);
+        }
+
+        fn drop_it(v: Vec<u8, Ext>)
+            allocates 0
+        {
+        }
+        }
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
-    // (a `Clone` impl that Verus does not see could do anything)
-    #[test] bounded_allocator_clone_outside_verus ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
-        #[verifier::external]
-        impl Clone for Fwd {
-            fn clone(&self) -> Self {
-                let _b = Box::new(7u8);
-                Fwd
-            }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "this `Clone` impl is for a `BoundedAllocator`")
-}
-
-test_verify_one_file_with_options! {
-    // dropping a `BTreeMap` with a `BoundedAllocator` (whose `clone` is free) allocates nothing
-    #[test] btree_drop_bounded_allocator ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
+    // dropping a `BTreeMap` clones its allocator for every node it frees: the runtime's
+    #[test] btree_drop_user_allocator ["vstd", "-V alloc-check"] => ALLOCATORS.to_string() + verus_code_str! {
         use std::collections::BTreeMap;
         impl Clone for Fwd {
-            fn clone(&self) -> (r: Self)
-                allocates 0
-            {
+            fn clone(&self) -> (r: Self) {
+                let b = Box::new(1u8);
                 Fwd
             }
         }
@@ -343,172 +244,6 @@ test_verify_one_file_with_options! {
         {
         }
     } => Ok(())
-}
-
-test_verify_one_file_with_options! {
-    // a btree iterator owns the map's allocator too (std 1.100 `IntoIter::drop` clones and calls it)
-    #[test] btree_into_iter_drop_needs_bounded_allocator ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::collections::btree_map;
-        use std::ptr::NonNull;
-
-        pub struct MyA;
-        #[verifier::external]
-        impl Clone for MyA {
-            fn clone(&self) -> Self { MyA }
-        }
-        #[verifier::external]
-        unsafe impl Allocator for MyA {
-            fn allocate(&self, l: Layout) -> Result<NonNull<[u8]>, AllocError> { Global.allocate(l) }
-            unsafe fn deallocate(&self, p: NonNull<u8>, l: Layout) { unsafe { Global.deallocate(p, l) } }
-        }
-        #[verifier::external]
-        unsafe impl core::alloc::AllocatorClone for MyA {}
-
-        #[verifier::external_type_specification]
-        #[verifier::external_body]
-        #[verifier::reject_recursive_types(K)]
-        #[verifier::reject_recursive_types(V)]
-        #[verifier::reject_recursive_types(A)]
-        pub struct ExBIntoIter<K, V, A: core::alloc::AllocatorClone>(btree_map::IntoIter<K, V, A>);
-
-        fn f(it: btree_map::IntoIter<u8, u8, MyA>)
-            allocates 0
-        {
-        }
-    } => Err(err) => assert_vir_error_msg(err, "must implement `vstd::alloc_check::BoundedAllocator`")
-}
-
-/// An allocator whose cost depends on its value (`limit`) and on the requested layout: requests
-/// of at most `limit` bytes are refused without calling the global allocator (standing in for a
-/// preallocated chunk), larger ones go to the global allocator
-const CHUNKED: &str = verus_code_str! {
-    use vstd::prelude::*;
-    use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator};
-    use vstd::std_specs::rust_1_100::spec_layout_size;
-    use vstd::std_specs::vec::{spec_vec_allocator, spec_vec_capacity};
-    use std::alloc::{Allocator, AllocError, Global, Layout};
-    use std::ptr::NonNull;
-
-    pub struct Chunked { pub limit: usize }
-
-    unsafe impl Allocator for Chunked {
-        fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-            if layout.size() <= self.limit { Err(AllocError) } else { Global.allocate(layout) }
-        }
-
-        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-    }
-
-    unsafe impl AllocFreeDrop for Chunked {}
-
-    unsafe impl BoundedAllocator for Chunked {
-        open spec fn max_cost() -> int { 1 }
-
-        open spec fn allocate_cost(&self, layout: Layout) -> int {
-            if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
-        }
-    }
-};
-
-test_verify_one_file_with_options! {
-    // a full vector of 8 `u64`s grows to 16 (`grow`, std's default: `allocate` of 128 bytes)
-    #[test] cost_depends_on_allocator_and_layout ["vstd", "-V alloc-check"] => CHUNKED.to_string() + verus_code_str! {
-        fn push_fits(v: &mut Vec<u64, Chunked>)
-            requires
-                spec_vec_allocator(&*old(v)).limit == 256,
-                old(v)@.len() == 8,
-                spec_vec_capacity(&*old(v)) == 8,
-            allocates 0
-        {
-            v.push(1);
-        }
-
-        fn push_twice(v: &mut Vec<u64, Chunked>)
-            requires
-                spec_vec_allocator(&*old(v)).limit == 256,
-                old(v)@.len() == 8,
-                spec_vec_capacity(&*old(v)) == 8,
-            allocates 0
-        {
-            v.push(1);
-            // capacity 16 now (std's policy), and the allocator is the same
-            v.push(2);
-        }
-
-        fn push_too_big(v: &mut Vec<u64, Chunked>)
-            requires
-                spec_vec_allocator(&*old(v)).limit == 64,
-                old(v)@.len() == 8,
-                spec_vec_capacity(&*old(v)) == 8,
-            allocates 0 // FAILS
-        {
-            v.push(1);
-        }
-    } => Err(err) => assert_one_fails(err)
-}
-
-test_verify_one_file_with_options! {
-    #[test] new_in_with_capacity_in_cost ["vstd", "-V alloc-check"] => CHUNKED.to_string() + verus_code_str! {
-        fn small() -> (n: usize)
-            allocates 0
-        {
-            let v: Vec<u64, Chunked> = Vec::with_capacity_in(16, Chunked { limit: 128 });
-            let b = Box::new_in(7u64, Chunked { limit: 8 });
-            v.capacity()
-        }
-
-        fn large() -> (n: usize)
-            allocates 0 // FAILS
-        {
-            let v: Vec<u64, Chunked> = Vec::with_capacity_in(17, Chunked { limit: 128 });
-            v.capacity()
-        }
-    } => Err(err) => assert_one_fails(err)
-}
-
-test_verify_one_file_with_options! {
-    // std's default `grow` is not verified, so its cost is the default one
-    #[test] marker_grow_cost_needs_grow ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct G;
-        unsafe impl Allocator for G {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                Global.allocate(layout)
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for G {}
-        unsafe impl vstd::alloc_check::BoundedAllocator for G {
-            open spec fn max_cost() -> int { 1 }
-            open spec fn grow_cost(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> int { 0 }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "defines `grow_cost`, but its `Allocator` impl does not define `grow`")
-}
-
-test_verify_one_file_with_options! {
-    // a cost above `max_cost` is cut down to it, so the impl must stay within `max_cost`
-    #[test] per_call_cost_cut_down_to_max ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-        use std::alloc::{Allocator, AllocError, Global, Layout};
-        use std::ptr::NonNull;
-        pub struct Two;
-        unsafe impl Allocator for Two {
-            fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
-                let a = Global.allocate(layout);
-                Global.allocate(layout)
-            }
-            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
-        }
-        unsafe impl vstd::alloc_check::AllocFreeDrop for Two {}
-        unsafe impl vstd::alloc_check::BoundedAllocator for Two {
-            open spec fn max_cost() -> int { 1 }
-            open spec fn allocate_cost(&self, layout: Layout) -> int { 2 }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
 }
 
 test_verify_one_file_with_options! {
@@ -525,7 +260,7 @@ test_verify_one_file_with_options! {
         use vstd::cell::CellId;
         use vstd::invariant::{LocalInvariant, InvariantPredicate};
         use vstd::open_local_invariant;
-        use vstd::alloc_check::{AllocFreeDrop, BoundedAllocator, Handout, hand_out, reclaim};
+        use vstd::alloc_check::{AllocFreeDrop, Handout, hand_out, reclaim};
         use std::alloc::{Allocator, AllocError, Layout};
         use std::ptr::NonNull;
 
@@ -635,9 +370,6 @@ test_verify_one_file_with_options! {
         }
 
         unsafe impl AllocFreeDrop for OneSlot {}
-        unsafe impl BoundedAllocator for OneSlot {
-            open spec fn max_cost() -> int { 1 }
-        }
 
         fn use_it(a: &OneSlot) -> (r: u64)
             ensures r == 5

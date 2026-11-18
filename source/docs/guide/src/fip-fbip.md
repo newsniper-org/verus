@@ -261,9 +261,9 @@ The reference describes when the rewrite applies.
   of yours it may call back, which must be fip (or strict); this relies on generic code reaching
   its type arguments only through its bounds. The stack rule trusts rustc's guarantee for
   `become`, and the claim that std and vstd functions use bounded stack space.
-* **Allocators.** A fip function may use a container with an allocator other than the global or
-  the system allocator only if the allocator implements `FipAllocator` (or `FipStrictAllocator`
-  for a strict function). See [Custom allocators](./reference-allocates.md#custom-allocators).
+* **Allocators.** An allocator is the runtime: a fip (or strict) function may use a container
+  with any allocator, and what the allocator does itself (allocate, free, use the stack) is not
+  checked. See [Custom allocators](./reference-allocates.md#custom-allocators).
 
 For the full rules, see [`#[verifier::fip]`](./reference-allocates.md#fully-in-place-functions-verifierfip)
 and [`#[verifier::fip(strict)]`](./reference-allocates.md#constant-stack-space-verifierfipstrict)

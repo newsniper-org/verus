@@ -146,46 +146,58 @@ drop. For each of these types:
 
 ### Custom allocators
 
-A container with an allocator other than the global one (`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>`,
-...) charges each allocation the cost of the allocator call it makes. Allocations are counted at
-the leaves: a call to the global or the system allocator is 1. A custom allocator gets its costs
-from the unsafe marker trait `vstd::alloc_check::BoundedAllocator`:
+An allocator (`core::alloc::Allocator`) is the runtime, as the memory manager is in FP²:
+`-V alloc-check` counts the program's calls to an allocator, not what the allocator does.
+Whatever the allocator:
+
+* `allocate` and `allocate_zeroed` are one allocation each, and free nothing;
+* `grow`, `grow_zeroed` and `shrink` are one allocation each and may free (they may move the
+  block);
+* `deallocate` allocates nothing and frees.
+
+So a `Vec::push` that grows is 1 for any allocator (a vector without a buffer calls `allocate`,
+one with a buffer `grow`), `Box::new_in` is 1 (0 for a zero-sized type, which calls nothing), and
+an arena that hands out memory it already holds is still 1 per call: the call is the program's.
+
+The allocator's own code (its `Allocator`, `Clone` and `Drop` impls) is not checked against
+`allocates`, `#[verifier::fip]` or the drop rule: what it allocates (from the global allocator or
+another one), frees, or uses of the stack is not counted. So:
+
+* An allocator need not be inside `verus!`, nor its crate be verified with `-V alloc-check`. (If
+  it is inside `verus!`, Verus still verifies the rest of it: its `ensures`, below.)
+* Dropping a container calls its allocator's `deallocate` and drops the allocator, so a bounded
+  function may drop a container with any allocator. (A fip function still may not: freeing its
+  buffer is the program's deallocation.)
+* Cloning a container (and `split_off`) clones its allocator, which is not counted; neither are
+  the clones that std's containers make where Verus does not see them (dropping a `BTreeMap`
+  clones its allocator for every node it frees). A call `a.clone()` of an allocator is 0.
+* A fip or strict function may use any allocator, also a generic `A: Allocator`.
 
 ```rust
 use std::alloc::{Allocator, AllocError, Global, Layout};
 use std::ptr::NonNull;
-use vstd::alloc_check::BoundedAllocator;
 
-pub struct Fwd;
+pub struct Twice;
 
-unsafe impl Allocator for Fwd {
-    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
-        allocates 1
-    {
+unsafe impl Allocator for Twice {
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+        let _ = Global.allocate(layout); // the allocator's own: not counted
         Global.allocate(layout)
     }
 
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
-        allocates 0
-    {
-        #[verifier::trusted_call] {
-            unsafe { Global.deallocate(ptr, layout) }
-        }
-    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
 }
 
-unsafe impl AllocFreeDrop for Fwd {}
-
-unsafe impl BoundedAllocator for Fwd {
-    open spec fn max_cost() -> int { 1 }
-}
-
-fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
-    allocates 1
+fn push_one(v: &mut Vec<u64, Twice>, x: u64)
+    allocates if old(v)@.len() == spec_vec_capacity(&*old(v)) { 1int } else { 0int }
 {
     v.push(x);
 }
 ```
+
+A bound on a function that uses a custom allocator therefore says nothing about how often that
+allocator calls the global allocator: it counts calls into allocators (see "Trust and
+limitations").
 
 `deallocate`, `grow`, `grow_zeroed` and `shrink` are `#[verifier::trusted_only]`. std requires
 that the pointer is a live block of this allocator with a fitting layout, and a precondition cannot
@@ -241,180 +253,6 @@ So an allocator that frees:
 
 The test `one_slot_allocator_frees_no_cheating` (`rust_verify_test/tests/alloc_check_custom_allocator.rs`)
 is such an allocator, for one block at a time.
-
-The `Allocator` declaration bounds `deallocate` by `allocates 0`, and `allocate`,
-`allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` by costs that the marker defines.
-`max_cost()` is an upper bound for every call. The per-call costs `allocate_cost(&self, layout)`
-(also for `allocate_zeroed`), `grow_cost(&self, ptr, old_layout, new_layout)`,
-`grow_zeroed_cost` and `shrink_cost` may depend on the allocator's value and on the arguments.
-By default `allocate_cost` is `max_cost()`, and the others are `allocate_cost` of the new layout.
-A per-call cost above `max_cost()` is cut down to it. Verus verifies the impl against these
-bounds. The methods that the impl does not define run std's default bodies, and each of those
-calls `allocate` or `allocate_zeroed` once with the new layout. So the marker may define
-`grow_cost`, `grow_zeroed_cost` or `shrink_cost` only if the impl defines `grow`, `grow_zeroed` or
-`shrink`.
-
-`Vec<T, A>` and `Box<T, A>` charge the cost of the very call they make. A vector without a buffer
-(capacity 0) that grows calls `allocate` instead, and is charged `allocate_cost` of the new
-layout; a zero-sized `T` (and `Box::new_in` of one) calls nothing. A `Vec::push` that grows an
-existing buffer is charged `grow_cost` with the vector's allocator (`spec_vec_allocator`), its buffer pointer, the
-layout of its old capacity, and the layout of the capacity that std's growth policy picks
-(`vec_amortized_cap`, the policy of std 1.100). After the growth the vector has exactly that
-capacity, and its allocator does not change. An allocator whose cost depends on its
-configuration or on the request size can therefore give exact bounds:
-
-```rust
-pub struct Chunked { pub limit: usize }
-
-unsafe impl BoundedAllocator for Chunked {
-    open spec fn max_cost() -> int { 1 }
-
-    open spec fn allocate_cost(&self, layout: Layout) -> int {
-        if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
-    }
-}
-
-fn push_fits(v: &mut Vec<u64, Chunked>)
-    requires
-        spec_vec_allocator(&*old(v)).limit == 256,
-        old(v)@.len() == 8,
-        spec_vec_capacity(&*old(v)) == 8,
-    allocates 0
-{
-    v.push(1); // grows to 16 elements, 128 bytes
-}
-```
-
-`VecDeque<T, A>`, `HashMap<K, V, S, A>`, `Rc::map` and `Arc::map` charge `allocator_max_cost::<A>()`
-instead, because vstd does not name the arguments of their allocator calls. An arena that hands
-out memory it already holds can have cost 0, and then using a container with it allocates
-nothing.
-
-* The marker impl is accepted only if the allocator's `Allocator` impl is one that Verus checks
-  (inside `verus!`). Every marker impl must also be one that Verus checks.
-* Dropping a container calls its allocator's `deallocate`. So a container may be dropped only if
-  its allocator is the global or the system allocator, or a `BoundedAllocator`. A reference to
-  one counts too. A generic allocator needs the bound `A: Allocator + BoundedAllocator`.
-  `AllocFreeDrop` is a supertrait of `BoundedAllocator`, so dropping the allocator itself must
-  not allocate.
-* Cloning a container (and `split_off`) also clones its allocator, at the cost
-  `allocator_clone_cost::<A>()`. std's containers also clone their allocator where Verus does
-  not see it: dropping a `BTreeMap` (or its `IntoIter`) clones it once for every node it frees.
-  So the `Clone` impls of a `BoundedAllocator` must be ones that Verus checks, bounded by
-  `allocates 0`, and must not change the allocator heap (next section). (So `#[derive(Clone)]` on
-  an allocator is rejected: the derived impl is not checked by Verus; write the impl in `verus!`.)
-  `Allocator`'s contract
-  already requires a clone to behave like the same allocator. The cost is therefore 0 for a
-  `BoundedAllocator`, as for the global allocator and for references. For other allocators it is
-  uninterpreted.
-* With `BoundedAllocator` alone, a cost depends only on the allocator's value and the arguments,
-  not on its mutable state (behind `&self`, which the methods take). The next section lifts this.
-
-### Allocators with a state
-
-A pool that first hands out blocks it already holds, or an arena that runs out, costs
-different amounts depending on its state. `vstd::alloc_heap::StatefulAllocator` (on top of
-`BoundedAllocator`) gives the state's type, a preorder on it ("at least as good as"), the cost
-of `allocate` in a state (`allocate_cost_at`) and the state after it (`allocate_next`):
-
-```rust
-pub struct Free(pub nat);          // blocks left; more is better
-
-impl Preorder for Free {
-    open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
-    proof fn le_refl(a: Self) {}
-    proof fn le_trans(a: Self, b: Self, c: Self) {}
-}
-
-unsafe impl StatefulAllocator for Pool {
-    type State = Free;
-    open spec fn loc(&self) -> Loc { self.reg@.loc() }
-    proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) { self.reg.borrow() }
-    open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
-        if s.0 > 0 { 0 } else { 1 }
-    }
-    open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
-        if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
-    }
-}
-
-fn two(p: &Pool, l: Layout)
-    requires allocator_state(p).0 >= 2,
-    ensures allocator_state(p).0 == old_allocator_state(p).0 - 2,
-    allocates 0
-{
-    let _ = p.allocate(l);
-    let _ = p.allocate(l);
-}
-```
-
-Verus keeps, per thread, a ghost heap of lower bounds of these states. Specifications read it
-with `allocator_state(a)` (in `ensures`, after the call; in `requires` and in a body, the
-current state) and `old_allocator_state(a)` (when the function was called, which is the only
-form an `allocates` bound may use). A call `a.allocate(layout)` is charged
-`allocate_cost_at(allocator_state(a), layout)` (cut down to `max_cost()`) and moves the state to
-`allocate_next`. The impl's `allocate` is verified against the same two facts.
-
-* The implementation keeps the actual state in an `AllocAuth<S>` (in its own invariant), made by
-  `AllocAuth::register(s)`, which also returns the `Registered<S>` witness the allocator must keep
-  (`witness`). `AllocAuth::step` moves the actual state and the heap's lower bound together
-  (allocation); `AllocAuth::raise` moves the actual state up alone (deallocation).
-* The heap holds lower bounds, not the states: `deallocate` runs where Verus does not see it
-  (when a container is dropped), so it may only raise the state. A `deallocate` or `Drop::drop`
-  that may change the heap is rejected.
-* `Registered` is neither `Send` nor `Sync`, so neither is an allocator that keeps it: the state
-  and its lower bound stay in one thread. This rests on the allocator not implementing `Send` or
-  `Sync` itself: an `unsafe impl Send`/`Sync` written outside `verus!` is not checked by Verus (as
-  with any `unsafe impl` of an auto trait), and would let the state move to another thread.
-* A function whose specification mentions the heap passes it on to its callers. After a call to
-  any other function that may change the heap (it allocates from an allocator with a state, or
-  calls code that Verus cannot see the effect of: a closure, a function of a crate verified
-  without Verus's heap analysis), the states are unknown, and then cost `max_cost()`. The
-  analysis is per instantiation: a generic function that may reach an allocator only through its
-  type parameter `A` (`v.push(1)` on a `Vec<u8, A>`) keeps the states when called with
-  `A = Global`. A proof
-  function that changes the heap must say how in its `ensures`.
-* An `external_body` function or an `assume_specification` is trusted, like its `allocates`
-  bound: it may change the heap only through its type arguments (a type parameter, a closure,
-  a type of the user's crate). So a std call instantiated with a user type (`Vec<MyStruct>::push`)
-  also makes the states unknown.
-* `grow` (and `grow_zeroed`) and `shrink` move the state too, by `grow_cost_at`/`grow_next` and
-  `shrink_cost_at`/`shrink_next`. By default these are what std's default bodies do (one
-  `allocate` with the new layout); an allocator may change them only for methods its `Allocator`
-  impl defines. A call through `&A` is a call of `A`'s method.
-* The containers' specifications say what they do to the heap:
-  * `Vec`: every operation that allocates (`with_capacity_in`, `reserve`, `try_reserve`,
-    `try_reserve_exact`, `push`, `insert`, `append`, `extend_from_slice`, `resize`) costs the
-    allocator call's cost at its state, and moves the state as the allocator says (not at all for
-    the global allocator, or when the vector has room); the other operations keep the heap.
-    `Box::new_in` likewise.
-  * `VecDeque` (with `new_in` and `with_capacity_in`), `HashMap` and `HashSet`: their allocating
-    operations make at most one allocator call (`allocator_some_call_heap_in`), with the
-    stateless cost; the others keep the heap. `BTreeMap`/`BTreeSet` reads and removals keep it.
-  * The heap is unknown after: operations that clone the allocator (`clone`, `split_off`) or call
-    a closure (`Box`/`Rc`/`Arc::map`), the trait methods (`Deref`, `Index`, `IntoIterator`), and
-    `BTreeMap`/`BTreeSet` inserts (which have no `allocates` bound).
-  * A container instantiated with an element type through which user code may reach an
-    allocator with a state (`Vec<Vec<u8, &Pool>>`: `T::clone`, drops) does not describe the heap:
-    it is unknown after the call.
-* A closure's own specification may mention the heap: in its `requires` and body,
-  `allocator_state(a)` is the heap at that point of the call, in its `ensures` the heap when it
-  returns, and `old_allocator_state(a)` the heap when it was called. Calling the closure value
-  (`f(x)`) uses its specification at the caller's heap. Its `allocates` bound, like a function's,
-  is evaluated when it is called, so it may use only the `old_` forms:
-
-  ```rust
-  let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
-      allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
-  {
-      p.allocate(l)
-  };
-  ```
-
-  Such a closure (one whose `requires`, `ensures` or `allocates` mentions the heap) cannot be
-  passed where only `call_requires(f, args)` is known (generic code): that means "at every
-  heap". The same holds for a function whose `allocates` bound mentions the heap, used as a
-  value (`let g = take; g(p, l)` works, passing `take` to generic code does not).
 
 ## Callbacks, closures and traits
 
@@ -561,15 +399,10 @@ impls of this crate are checked when it is compiled; an impl of another crate is
 that crate was verified and compiled with `-V alloc-check` and imported with its library file
 (so its compilation checked it), and rejected otherwise.
 
-A container calls its allocator's methods inside std's code, so a fip function may use std or
-vstd code with an allocator other than the global or the system allocator (`Vec<u8, A>::push`,
-`Vec::with_capacity_in(n, a)`) only if the allocator implements the unsafe marker trait
-`vstd::alloc_check::FipAllocator`. A generic allocator needs the bound `A: FipAllocator`. An
-`unsafe impl FipAllocator for X` is accepted only if `X`'s `allocate`, its `allocate_zeroed` (if
-its `Allocator` impl defines one) and its `Clone::clone` (if any) are `#[verifier::fip]`
-functions of the same crate. `Allocator`, `BoundedAllocator` and `NoDeallocDrop` are supertraits.
-A `#[verifier::fip(strict)]` function needs `FipStrictAllocator` instead, whose methods must be
-`#[verifier::fip(strict)]`.
+A container calls its allocator's methods inside std's code. Those are the runtime's (see "Custom
+allocators"), so a fip or strict function may use std or vstd code with any allocator
+(`Vec<u8, A>::push`, `Vec::with_capacity_in(n, a)`): the allocator's own code is a leaf, neither
+checked for deallocation nor followed by the stack check.
 
 Paths that unwind are not covered, as for `allocates`. The drop check runs in the compilation
 step of Verus, so `--no-lifetime` and `--no-erasure-check` reject `#[verifier::fip]` functions.
@@ -913,6 +746,9 @@ What `-V alloc-check` trusts:
 * std's `Allocator` contract, for `vstd::alloc_check::reclaim`: the block that `deallocate` (or
   `grow`, `shrink`) receives is a live block that this allocator handed out (see "Custom
   allocators");
+* that an allocator's own code is the runtime: a bound counts the program's calls to allocators
+  (one each), not what the allocators do (their `Allocator`, `Clone` and `Drop` impls are not
+  checked for allocations, deallocations or stack; see "Custom allocators");
 * calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
   `deallocate`). `--no-cheating` applies only to the crate being verified: the blocks (and the
   `external_body` functions) of a dependency verified without it are trusted all the same, and a
@@ -937,11 +773,6 @@ What `-V alloc-check` trusts:
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not
 unsound):
-* cloning a container whose allocator is neither the global allocator, a reference nor a
-  `BoundedAllocator`, and allocators that forward to an allocator they hold (`Box`, `Rc`, `Arc`
-  and `Pin` used as allocators): their cost is an uninterpreted term
-  (`allocator_clone_cost::<A>()`, `allocator_max_cost::<A>()`), so only a bound that names it
-  verifies;
 * `dyn` values and opaque `impl Trait` values being dropped;
 * projected types in drop glue (for example `Cow`);
 * a closure that captures one field of a struct is checked as if it captured the whole struct;

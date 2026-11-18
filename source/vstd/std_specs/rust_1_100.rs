@@ -28,17 +28,10 @@
 //! in spec mode"), which it accepted with 1.99.1.
 //!
 //! Every function has an `allocates` bound (for `-V alloc-check`): an upper bound on the calls to
-//! the allocator that obtain memory, see `vir/src/alloc_check.rs`. A call of an allocator's
-//! `allocate`, `grow`, ... costs `allocator_allocate_cost(a, layout)`, `allocator_grow_cost(a, ptr,
-//! old_layout, new_layout)`, ..., which may depend on the allocator's value and on the arguments,
-//! and is at most `allocator_max_cost::<A>()`: 1 for the global and the system allocator, what a
-//! custom allocator's `vstd::alloc_check::BoundedAllocator` impl says for it (counted at the
-//! leaves). `Vec<T, A>` and `Box<T, A>` charge the cost of the very call they make (`Vec` with its
-//! allocator, its buffer pointer, and the layouts of its old capacity and of the capacity that
-//! std 1.100's growth policy picks, `vec::vec_amortized_cap`); `VecDeque<T, A>`, `HashMap<K, V, S,
-//! A>`, `Rc::map`/`Arc::map` and the containers' `clone`/`split_off` (which allocate with a clone
-//! of the allocator) charge the maximum, since vstd does not name their arguments; cloning the
-//! allocator costs `allocator_clone_cost::<A>()`.
+//! an allocator that obtain memory, see `vir/src/alloc_check.rs`. Only the program's calls to an
+//! allocator are counted, one each (`allocate`, `allocate_zeroed`, `grow`, `grow_zeroed`,
+//! `shrink`), whatever the allocator: an allocator's own code is the runtime, and what it
+//! allocates itself is not counted (as in FP², where the memory manager is outside the calculus).
 #![allow(unused_imports)]
 use super::super::prelude::*;
 
@@ -218,256 +211,21 @@ pub assume_specification[ Layout::align ](l: &Layout) -> (r: usize)
         0,
 ;
 
-/// -V alloc-check: an upper bound on the allocations of one call of `allocate`,
-/// `allocate_zeroed`, `grow`, `grow_zeroed` or `shrink` of any allocator of type `A`, with any
-/// arguments. Allocations are counted at the leaves: a call to the global or the system allocator
-/// is 1, and an allocator that implements `vstd::alloc_check::BoundedAllocator` costs at most what
-/// its `max_cost` says. For any other type, this is an uninterpreted per-type cost (like
-/// `iter_adapter_cost`: it does not constrain implementations that Verus does not check). The
-/// containers charge it where they allocate with arguments (or an allocator) that their
-/// specifications cannot name (a cloned allocator, a hash table, ...).
-pub uninterp spec fn allocator_max_cost<A: ?Sized>() -> int;
-
-/// -V alloc-check: the allocations of `a.allocate(layout)` and `a.allocate_zeroed(layout)`, i.e.
-/// the bound of these methods on the `Allocator` declaration. It may depend on the allocator's
-/// value (its configuration) and on the arguments. (For a `BoundedAllocator`, its `allocate_cost`,
-/// cut down to `max_cost`.)
-pub uninterp spec fn allocator_allocate_cost<A: ?Sized>(a: &A, layout: Layout) -> int;
-
-/// -V alloc-check: the allocations of `a.grow(ptr, old_layout, new_layout)`
-pub uninterp spec fn allocator_grow_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-) -> int;
-
-/// -V alloc-check: the allocations of `a.grow_zeroed(ptr, old_layout, new_layout)`
-pub uninterp spec fn allocator_grow_zeroed_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-) -> int;
-
-/// -V alloc-check: the allocations of `a.shrink(ptr, old_layout, new_layout)`
-pub uninterp spec fn allocator_shrink_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-) -> int;
-
-/// -V alloc-check: the allocations of cloning an allocator of type `A` (which the containers'
-/// `clone` and `split_off` do): 0 for the global allocator, for references and for a
-/// `vstd::alloc_check::BoundedAllocator`; for any other allocator, an uninterpreted per-type cost.
-pub uninterp spec fn allocator_clone_cost<A: ?Sized>() -> int;
-
-pub broadcast axiom fn axiom_allocator_max_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_max_cost::<A>() >= 0,
-;
-
-// (each cost of one call is at most the maximum, which is defined as an upper bound of all of
-// them)
-pub broadcast axiom fn axiom_allocator_allocate_cost<A: ?Sized>(a: &A, layout: Layout)
-    ensures
-        0 <= #[trigger] allocator_allocate_cost::<A>(a, layout) <= allocator_max_cost::<A>(),
-;
-
-pub broadcast axiom fn axiom_allocator_grow_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-)
-    ensures
-        0 <= #[trigger] allocator_grow_cost::<A>(a, ptr, old_layout, new_layout)
-            <= allocator_max_cost::<A>(),
-;
-
-pub broadcast axiom fn axiom_allocator_grow_zeroed_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-)
-    ensures
-        0 <= #[trigger] allocator_grow_zeroed_cost::<A>(a, ptr, old_layout, new_layout)
-            <= allocator_max_cost::<A>(),
-;
-
-pub broadcast axiom fn axiom_allocator_shrink_cost<A: ?Sized>(
-    a: &A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-)
-    ensures
-        0 <= #[trigger] allocator_shrink_cost::<A>(a, ptr, old_layout, new_layout)
-            <= allocator_max_cost::<A>(),
-;
-
-pub open spec fn clamp_cost(c: int, max: int) -> int {
-    if c <= 0 {
-        0
-    } else if c <= max {
-        c
-    } else if max >= 0 {
-        max
-    } else {
-        0
-    }
-}
-
-/// A `BoundedAllocator`'s costs (clamped at 0, and cut down to its `max_cost`)
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_max_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->()
-    ensures
-        #[trigger] allocator_max_cost::<A>() == clamp_cost(A::max_cost(), A::max_cost()),
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_allocate_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->(a: &A, layout: Layout)
-    ensures
-        #[trigger] allocator_allocate_cost::<A>(a, layout) == clamp_cost(
-            a.allocate_cost(layout),
-            A::max_cost(),
-        ),
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_grow_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->(a: &A, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout)
-    ensures
-        #[trigger] allocator_grow_cost::<A>(a, ptr, old_layout, new_layout) == clamp_cost(
-            a.grow_cost(ptr, old_layout, new_layout),
-            A::max_cost(),
-        ),
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_grow_zeroed_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->(a: &A, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout)
-    ensures
-        #[trigger] allocator_grow_zeroed_cost::<A>(a, ptr, old_layout, new_layout) == clamp_cost(
-            a.grow_zeroed_cost(ptr, old_layout, new_layout),
-            A::max_cost(),
-        ),
-;
-
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_shrink_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->(a: &A, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout)
-    ensures
-        #[trigger] allocator_shrink_cost::<A>(a, ptr, old_layout, new_layout) == clamp_cost(
-            a.shrink_cost(ptr, old_layout, new_layout),
-            A::max_cost(),
-        ),
-;
-
-/// A `BoundedAllocator`'s `clone` (if it has one) allocates nothing: the marker rule
-/// (`vir::alloc_check::check_bounded_allocator_impls`) requires it to be bounded by `allocates 0`
-/// and not to change the allocator heap, since std's containers clone their allocator where
-/// Verus does not see it (dropping a `BTreeMap` clones it for every node it frees). (`Allocator`'s
-/// safety contract already requires a clone to behave like the same allocator.)
-#[cfg(not(verus_verify_core))]
-pub broadcast axiom fn axiom_bounded_allocator_clone_cost<
-    A: crate::alloc_check::BoundedAllocator + ?Sized,
->()
-    ensures
-        #[trigger] allocator_clone_cost::<A>() == 0,
-;
-
-// `&A` and `&mut A` forward every method to `A` (std 1.100 `core/src/alloc/mod.rs`). (For `&mut A`
-// only the maximum is stated: a specification cannot dereference a `&&mut A` argument.)
-pub broadcast axiom fn axiom_ref_allocator_max_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_max_cost::<&A>() == allocator_max_cost::<A>(),
-;
-
-pub broadcast axiom fn axiom_mut_ref_allocator_max_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_max_cost::<&mut A>() == allocator_max_cost::<A>(),
-;
-
-pub broadcast axiom fn axiom_ref_allocator_allocate_cost<A: ?Sized>(a: &&A, layout: Layout)
-    ensures
-        #[trigger] allocator_allocate_cost::<&A>(a, layout) == allocator_allocate_cost::<A>(
-            *a,
-            layout,
-        ),
-;
-
-pub broadcast axiom fn axiom_ref_allocator_grow_cost<A: ?Sized>(
-    a: &&A,
-    ptr: NonNull<u8>,
-    old_layout: Layout,
-    new_layout: Layout,
-)
-    ensures
-        #[trigger] allocator_grow_cost::<&A>(a, ptr, old_layout, new_layout)
-            == allocator_grow_cost::<A>(*a, ptr, old_layout, new_layout),
-;
-
-pub broadcast axiom fn axiom_allocator_clone_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_clone_cost::<A>() >= 0,
-;
-
-/// (cloning a shared reference copies it)
-pub broadcast axiom fn axiom_ref_allocator_clone_cost<A: ?Sized>()
-    ensures
-        #[trigger] allocator_clone_cost::<&A>() == 0,
-;
-
 pub broadcast group group_rust_1_100_core_axioms {
     axiom_spec_layout_size,
     axiom_spec_layout_align,
-    axiom_allocator_max_cost,
-    axiom_allocator_allocate_cost,
-    axiom_allocator_grow_cost,
-    axiom_allocator_grow_zeroed_cost,
-    axiom_allocator_shrink_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_max_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_allocate_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_grow_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_grow_zeroed_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_shrink_cost,
-    #[cfg(not(verus_verify_core))]
-    axiom_bounded_allocator_clone_cost,
-    axiom_ref_allocator_max_cost,
-    axiom_mut_ref_allocator_max_cost,
-    axiom_ref_allocator_allocate_cost,
-    axiom_ref_allocator_grow_cost,
-    axiom_allocator_clone_cost,
-    axiom_ref_allocator_clone_cost,
 }
 
 /// The allocator trait. `deallocate`, `grow`, `grow_zeroed` and `shrink` need a live block of
 /// this allocator with a fitting layout, which a precondition cannot say: they are
 /// `#[verifier::trusted_only]` (so are their implementations), and verified code calls them only
 /// in a `#[verifier::trusted_call]` block (`vstd::raw_ptr::deallocate` frees with a `Dealloc`
-/// permission instead). -V alloc-check: `deallocate` allocates nothing (the drop rule relies on
-/// this: dropping a container calls it), and the others cost what `allocator_allocate_cost`,
-/// `allocator_grow_cost`, `allocator_grow_zeroed_cost` and `allocator_shrink_cost` say for the
-/// allocator and the arguments. These bounds hold for the std allocators and for every
-/// implementation that Verus checks, which `vstd::alloc_check::BoundedAllocator` requires. std's
-/// default bodies of `allocate_zeroed`, `grow`, `grow_zeroed` and `shrink` call `allocate` or
-/// `allocate_zeroed` once (with the new layout) and `deallocate` at most once, so they stay within
-/// `allocate_cost` of the new layout, which is what `BoundedAllocator`'s defaults say.
+/// permission instead). -V alloc-check counts a call to an allocator, not what the allocator does:
+/// `allocate` and `allocate_zeroed` are one allocation and do not deallocate; `grow`,
+/// `grow_zeroed` and `shrink` are one allocation and may deallocate (they may move the block);
+/// `deallocate` allocates nothing and deallocates. The bodies of `Allocator` impls (and of an
+/// allocator type's `Clone` and `Drop` impls) are the runtime: their allocations, deallocations and
+/// stack are not checked.
 /// `Allocator`'s contract for a block it returns: "the returned block of memory meets the size and
 /// alignment guarantees of `layout`" (std 1.100, `Allocator::allocate`; `grow` and `shrink` for
 /// the new layout). std's containers rely on it, and use only the pointer.
@@ -487,14 +245,14 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, layout),
         allocates
-            allocator_allocate_cost::<Self>(self, layout),
+            1int,
     ;
 
     fn allocate_zeroed(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
         ensures
             allocator_block_fits(r, layout),
         allocates
-            allocator_allocate_cost::<Self>(self, layout),
+            1int,
     ;
 
     #[verifier::trusted_only]
@@ -511,7 +269,7 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, new_layout),
         allocates
-            allocator_grow_cost::<Self>(self, ptr, old_layout, new_layout),
+            1int,
     ;
 
     #[verifier::trusted_only]
@@ -520,7 +278,7 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, new_layout),
         allocates
-            allocator_grow_zeroed_cost::<Self>(self, ptr, old_layout, new_layout),
+            1int,
     ;
 
     #[verifier::trusted_only]
@@ -531,19 +289,14 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, new_layout),
         allocates
-            allocator_shrink_cost::<Self>(self, ptr, old_layout, new_layout),
+            1int,
     ;
 }
 
 } // verus!
-// The std allocators: each method is one call to the allocator (`deallocate` frees memory and is
-// not counted), i.e. their `max_cost` is 1 (`vstd::alloc_check::BoundedAllocator`); the
-// specifications below have the bounds of the `Allocator` declaration. (`Global` is the global
-// allocator, `System` the system's; a `#[global_allocator]` replaces what `Global` calls.)
-// The std allocators' `allocate` and `allocate_zeroed` only obtain memory (std 1.100
-// `alloc/src/alloc.rs` `Global::alloc_impl`, `std/src/alloc.rs` `System`): they never deallocate,
-// so a `#[verifier::fip]` function (a `FipAllocator`'s `allocate`) may call them. (The bound is
-// the declaration's, restated to add the condition.)
+// The std allocators (`Global` is the global allocator, `System` the system's; a
+// `#[global_allocator]` replaces what `Global` calls), with the bounds of the `Allocator`
+// declaration.
 macro_rules! std_allocator_specs {
     ($cfg:meta, $a:ty) => {
         #[$cfg]
@@ -554,7 +307,7 @@ macro_rules! std_allocator_specs {
             ) -> (r: Result<NonNull<[u8]>, AllocError>)
                 ensures
                     allocator_block_fits(r, layout),
-                allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
+                allocates deallocates_when(1int, false)
             ;
 
             pub assume_specification[ <$a as core::alloc::Allocator>::allocate_zeroed ](
@@ -563,7 +316,7 @@ macro_rules! std_allocator_specs {
             ) -> (r: Result<NonNull<[u8]>, AllocError>)
                 ensures
                     allocator_block_fits(r, layout),
-                allocates deallocates_when(allocator_allocate_cost::<$a>(a, layout), false)
+                allocates deallocates_when(1int, false)
             ;
 
             #[verifier::trusted_only]
@@ -629,16 +382,6 @@ pub assume_specification[ <std::sync::Once as core::default::Default>::default ]
         0,
 ;
 
-pub broadcast axiom fn axiom_system_allocator_cost()
-    ensures
-        #[trigger] allocator_max_cost::<std::alloc::System>() == 1,
-        #[trigger] allocator_clone_cost::<std::alloc::System>() == 0,
-;
-
-pub broadcast group group_rust_1_100_std_axioms {
-    axiom_system_allocator_cost,
-}
-
 } // verus!
 std_allocator_specs!(cfg(feature = "std"), std::alloc::System);
 
@@ -668,21 +411,9 @@ pub broadcast axiom fn axiom_vec_from_fn_cost_fn<T, F: Fn(usize) -> T>(f: F, len
         #[trigger] vec_from_fn_cost::<T, F>(f, length) == 0,
 ;
 
-pub broadcast axiom fn axiom_global_allocator_allocate_cost()
-    ensures
-        #[trigger] allocator_max_cost::<alloc::alloc::Global>() == 1,
-;
-
-pub broadcast axiom fn axiom_global_allocator_clone_cost()
-    ensures
-        #[trigger] allocator_clone_cost::<alloc::alloc::Global>() == 0,
-;
-
 pub broadcast group group_rust_1_100_axioms {
     axiom_vec_from_fn_cost,
     axiom_vec_from_fn_cost_fn,
-    axiom_global_allocator_allocate_cost,
-    axiom_global_allocator_clone_cost,
 }
 
 // `(0..length).map(f).collect()`: `Map<Range<usize>, F>` is `TrustedLen`, so the vector is
@@ -706,7 +437,6 @@ pub assume_specification<T, F: FnMut(usize) -> T>[ Vec::<T>::from_fn::<F> ](
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::allocator ](v: &Vec<T, A>) -> (r: &A)
     ensures
         *r == super::vec::spec_vec_allocator(v),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates
@@ -720,7 +450,6 @@ pub assume_specification<T: ?Sized, A: Allocator>[ Box::<T, A>::allocator ](b: &
     &A)
     ensures
         *r == spec_box_allocator(b),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates
@@ -728,35 +457,18 @@ pub assume_specification<T: ?Sized, A: Allocator>[ Box::<T, A>::allocator ](b: &
 ;
 
 /// `Box::new_in` allocates `Layout::new::<T>()` with the given allocator (or nothing for a
-/// zero-sized `T`)
+/// zero-sized `T`: std 1.100 `Box::try_new_uninit_in` gives it a dangling pointer, without calling
+/// the allocator)
 pub assume_specification<T, A: Allocator>[ Box::<T, A>::new_in ](x: T, alloc: A) -> (b: Box<T, A>)
     ensures
         *b == x,
         spec_box_allocator(&b) == alloc,
-        // (std 1.100 `Box::try_new_uninit_in`: a zero-sized `T` gets a dangling pointer, without
-        // calling the allocator)
-        crate::layout::size_of::<T>() == 0 ==> crate::alloc_heap::allocator_heap()
-            == crate::alloc_heap::old_allocator_heap(),
-        crate::layout::size_of::<T>() > 0 ==> exists|
-            r: Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>,
-        |
-            crate::alloc_heap::allocator_heap()
-                == #[trigger] crate::alloc_heap::allocator_allocate_heap_in::<A>(
-                crate::alloc_heap::old_allocator_heap(),
-                &alloc,
-                spec_array_layout::<T>(1),
-                r,
-            ),
     allocates
-        (if crate::layout::size_of::<T>() == 0 {
+        if crate::layout::size_of::<T>() == 0 {
             0int
         } else {
-            crate::alloc_heap::allocator_allocate_cost_in::<A>(
-                crate::alloc_heap::old_allocator_heap(),
-                &alloc,
-                spec_array_layout::<T>(1),
-            )
-        }),
+            1int
+        },
 ;
 
 /// `Box::take` moves the value out and keeps the allocation (with uninitialized contents)
@@ -767,7 +479,6 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::take ](boxed: Box<T, A>)
     ensures
         r.0 == *boxed,
         spec_box_allocator(&r.1) == spec_box_allocator(&boxed),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     opens_invariants none
     no_unwind
     allocates
@@ -789,9 +500,9 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(T) -> U>[ Box::<T, A>::ma
     allocates
         (if super::super::layout::size_of::<T>() == super::super::layout::size_of::<U>()
             && super::super::layout::align_of::<T>() == super::super::layout::align_of::<U>() {
-            0
+            0int
         } else {
-            allocator_allocate_cost::<A>(&spec_box_allocator(&this), spec_array_layout::<U>(1))
+            1int
         }) + call_allocates(f, (*this,)),
 ;
 
@@ -804,7 +515,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::ma
     ensures
         f.ensures((&*this,), *r),
     allocates
-        allocator_max_cost::<A>() + call_allocates(f, (&*this,)),
+        1 + call_allocates(f, (&*this,)),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::map::<U> ](
@@ -816,7 +527,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::m
     ensures
         f.ensures((&*this,), *r),
     allocates
-        allocator_max_cost::<A>() + call_allocates(f, (&*this,)),
+        1 + call_allocates(f, (&*this,)),
 ;
 
 } // verus!

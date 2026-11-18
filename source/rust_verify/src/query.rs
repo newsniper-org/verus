@@ -742,8 +742,7 @@ pub fn get_global_query<'tcx>(_tcx: TyCtxt<'tcx>) -> Option<Rc<Query<'tcx>>> {
 /// every impl in the program. An impl that Verus does not see (one outside `verus!` that Verus
 /// does not import, or one in a dependency whose .vir is not imported) is unchecked, so it is
 /// rejected if it
-/// - implements `vstd::alloc_check::AllocFreeDrop` or `vstd::alloc_check::BoundedAllocator` (the
-///   drop rule trusts these bounds), or
+/// - implements `vstd::alloc_check::AllocFreeDrop` (the drop rule trusts it), or
 /// - defines a method whose trait declaration has an `allocates` bound (callers rely on the
 ///   bound for every implementation).
 /// (No impl in the toolchain can implement these traits. The traits that vstd specifies are not
@@ -786,9 +785,7 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
         .map(|t| &t.x.name)
         .filter(|p| {
             let name = vir::ast_util::path_as_friendly_rust_name(p);
-            name == "vstd::alloc_check::AllocFreeDrop"
-                || name == "vstd::alloc_check::BoundedAllocator"
-                || vir::alloc_check::op_marker(p).is_some()
+            name == "vstd::alloc_check::AllocFreeDrop" || vir::alloc_check::op_marker(p).is_some()
         })
         .cloned()
         .collect();
@@ -832,52 +829,6 @@ fn check_impls_outside_vir(ctxt: &Context, krate: &Krate) -> Result<(), VirErr> 
                     )
                 };
                 return Err(vir::messages::error(&crate::spans::err_air_span(span), msg));
-            }
-        }
-    }
-    // A `BoundedAllocator`'s `Clone` impls must be ones that Verus checks too: std's containers
-    // clone their allocator where Verus does not see it, which the marker rule bounds by the
-    // clone impls that Verus sees (`vir::alloc_check::check_bounded_allocator_impls`). (All the
-    // `Clone` impls of the allocator's type constructor, whatever their instance.)
-    let bounded = tcx.all_traits_including_private().find(|t| {
-        vir::ast_util::path_as_friendly_rust_name(&ctxt.def_id_to_vir_path(*t))
-            == "vstd::alloc_check::BoundedAllocator"
-    });
-    if let (Some(bounded), Some(clone_trait)) = (bounded, tcx.lang_items().clone_trait()) {
-        let mut adts: HashSet<DefId> = HashSet::new();
-        for impl_def_id in tcx.all_impls(bounded) {
-            if tcx.crate_name(impl_def_id.krate).as_str() == "vstd" {
-                continue;
-            }
-            let mut ty = tcx.type_of(impl_def_id).instantiate_identity().skip_normalization();
-            while let rustc_middle::ty::Ref(_, inner, _) = ty.kind() {
-                ty = *inner;
-            }
-            if let Some(adt) = ty.ty_adt_def() {
-                adts.insert(adt.did());
-            }
-        }
-        if !adts.is_empty() {
-            for impl_def_id in tcx.all_impls(clone_trait) {
-                let ty = tcx.type_of(impl_def_id).instantiate_identity().skip_normalization();
-                let Some(adt) = ty.ty_adt_def() else { continue };
-                if !adts.contains(&adt.did()) {
-                    continue;
-                }
-                let unchecked =
-                    tcx.associated_items(impl_def_id).in_definition_order().any(|item| {
-                        item.ident(tcx).as_str() == "clone"
-                            && !vir_funs.contains(&ctxt.def_id_to_vir_path(item.def_id))
-                    });
-                if unchecked {
-                    return Err(vir::messages::error(
-                        &crate::spans::err_air_span(tcx.def_span(impl_def_id)),
-                        format!(
-                            "-V alloc-check: this `Clone` impl is for a `BoundedAllocator` (`{}`), so it must be one that Verus checks (std's containers clone their allocator where Verus does not see it)",
-                            tcx.def_path_str(adt.did())
-                        ),
-                    ));
-                }
             }
         }
     }

@@ -1,6 +1,5 @@
 use super::super::prelude::*;
 
-use super::rust_1_100::{allocator_clone_cost, allocator_max_cost};
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::sync::Arc;
@@ -98,7 +97,7 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::
     ensures
         cloned::<T>(**b, *res),
     allocates
-        allocator_max_cost::<A>() + call_allocates(T::clone, (&**b,)) + allocator_clone_cost::<A>(),
+        1 + call_allocates(T::clone, (&**b,)),
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>) -> (result: Result<
@@ -110,7 +109,6 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>)
             Ok(t) => t == *v,
             Err(e) => e == v,
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
@@ -120,12 +118,11 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>)
 >)
     ensures
         result matches Some(t) ==> t == *v,
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
     allocates
         0,
 ;
 
-// Cloning an `Rc`/`Arc` increments its reference count and clones its allocator
+// Cloning an `Rc`/`Arc` increments its reference count and clones its allocator (the runtime's)
 #[cfg(not(verus_verify_core))]
 pub assume_specification<T: ?Sized, A: core::alloc::AllocatorClone>[ <Rc<T, A> as Clone>::clone ](
     r: &Rc<T, A>,
@@ -133,7 +130,7 @@ pub assume_specification<T: ?Sized, A: core::alloc::AllocatorClone>[ <Rc<T, A> a
     ensures
         res == *r,
     allocates
-        allocator_clone_cost::<A>(),
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -143,7 +140,7 @@ pub assume_specification<T: ?Sized, A: core::alloc::AllocatorClone>[ <Arc<T, A> 
     ensures
         res == *r,
     allocates
-        allocator_clone_cost::<A>(),
+        0,
 ;
 
 } // verus!

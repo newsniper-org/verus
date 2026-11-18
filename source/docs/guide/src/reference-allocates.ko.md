@@ -140,46 +140,55 @@ reallocate(grow·shrink)입니다. deallocate는 세지 않습니다.
 
 ### 사용자 정의 할당기
 
-전역 할당기가 아닌 할당기를 쓰는 컨테이너(`Vec<T, A>`, `Box<T, A>`, `Rc<T, A>` 등)는 할당 한 번마다
-그때 하는 할당기 호출의 비용을 청구합니다. 할당은 말단에서 셉니다. 전역 할당기나 시스템 할당기를 한 번
-호출하면 1입니다. 사용자 정의 할당기의 비용은 unsafe 표시 trait `vstd::alloc_check::BoundedAllocator`로
-정합니다.
+할당기(`core::alloc::Allocator`)는 FP²의 메모리 관리자처럼 런타임입니다. `-V alloc-check`는 프로그램이
+할당기를 부르는 호출을 세고, 할당기가 하는 일은 세지 않습니다. 어떤 할당기든 다음과 같습니다.
+
+* `allocate`, `allocate_zeroed`: 호출마다 할당 1이고, 아무것도 해제하지 않습니다.
+* `grow`, `grow_zeroed`, `shrink`: 호출마다 할당 1이고, 해제할 수 있습니다(블록을 옮길 수 있음).
+* `deallocate`: 할당은 0이고, 해제합니다.
+
+그래서 커지는 `Vec::push`는 어떤 할당기든 1이고(버퍼가 없는 벡터는 `allocate`를, 버퍼가 있는 벡터는
+`grow`를 부릅니다), `Box::new_in`은 1입니다(크기 0인 타입이면 아무것도 부르지 않으므로 0). 이미 가진
+메모리를 내주는 arena도 호출마다 1입니다. 그 호출은 프로그램의 것이기 때문입니다.
+
+할당기 자신의 코드(그 타입의 `Allocator`, `Clone`, `Drop` impl)는 `allocates`, `#[verifier::fip]`, drop
+규칙으로 검사하지 않습니다. 그 코드가 (전역 할당기나 다른 할당기에서) 할당하는 것, 해제하는 것, 쓰는 스택은
+세지 않습니다. 그래서 다음이 성립합니다.
+
+* 할당기는 `verus!` 안에 있을 필요도, 그 crate가 `-V alloc-check`로 검증될 필요도 없습니다. (`verus!`
+  안에 있으면 Verus는 나머지, 즉 아래의 `ensures`는 그대로 검증합니다.)
+* 컨테이너를 drop하면 할당기의 `deallocate`를 부르고 할당기를 drop합니다. 그래서 상한 있는 함수는 어떤
+  할당기를 쓰는 컨테이너든 drop할 수 있습니다. (fip 함수는 여전히 안 됩니다. 버퍼를 해제하는 것은 프로그램의
+  해제이기 때문입니다.)
+* 컨테이너를 clone하면(`split_off`도) 할당기도 clone하는데, 이것은 세지 않습니다. std 컨테이너가 Verus가
+  보지 못하는 곳에서 하는 clone도 마찬가지입니다(`BTreeMap`을 drop하면 해제하는 노드마다 할당기를
+  clone합니다). 할당기의 `a.clone()` 호출은 0입니다.
+* fip 함수와 strict 함수는 어떤 할당기든 쓸 수 있습니다. 제네릭 `A: Allocator`도 됩니다.
 
 ```rust
 use std::alloc::{Allocator, AllocError, Global, Layout};
 use std::ptr::NonNull;
-use vstd::alloc_check::BoundedAllocator;
 
-pub struct Fwd;
+pub struct Twice;
 
-unsafe impl Allocator for Fwd {
-    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
-        allocates 1
-    {
+unsafe impl Allocator for Twice {
+    fn allocate(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>) {
+        let _ = Global.allocate(layout); // 할당기 자신의 것: 세지 않음
         Global.allocate(layout)
     }
 
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
-        allocates 0
-    {
-        #[verifier::trusted_call] {
-            unsafe { Global.deallocate(ptr, layout) }
-        }
-    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) { }
 }
 
-unsafe impl AllocFreeDrop for Fwd {}
-
-unsafe impl BoundedAllocator for Fwd {
-    open spec fn max_cost() -> int { 1 }
-}
-
-fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
-    allocates 1
+fn push_one(v: &mut Vec<u64, Twice>, x: u64)
+    allocates if old(v)@.len() == spec_vec_capacity(&*old(v)) { 1int } else { 0int }
 {
     v.push(x);
 }
 ```
+
+따라서 사용자 정의 할당기를 쓰는 함수의 상한은 그 할당기가 전역 할당기를 몇 번 부르는지에 대해서는 아무것도
+말하지 않습니다. 상한은 할당기로 들어가는 호출을 셉니다("신뢰와 한계" 참고).
 
 `deallocate`, `grow`, `grow_zeroed`, `shrink`는 `#[verifier::trusted_only]`입니다. std는 포인터가 이
 할당기의 살아 있는 블록이고 layout이 맞을 것을 요구하는데, 이 조건은 전제조건으로 쓸 수 없습니다.
@@ -233,163 +242,6 @@ fn push_one(v: &mut Vec<u64, Fwd>, x: u64)
 
 테스트 `one_slot_allocator_frees_no_cheating`(`rust_verify_test/tests/alloc_check_custom_allocator.rs`)이
 한 번에 블록 하나를 다루는 이런 할당기입니다.
-
-`Allocator` 선언은 `deallocate`의 상한을 `allocates 0`으로 두고, `allocate`, `allocate_zeroed`, `grow`,
-`grow_zeroed`, `shrink`의 상한은 표시 trait이 정하는 비용으로 둡니다. `max_cost()`는 모든 호출의
-상한입니다. 호출 한 번의 비용인 `allocate_cost(&self, layout)`(`allocate_zeroed`에도 씀),
-`grow_cost(&self, ptr, old_layout, new_layout)`, `grow_zeroed_cost`, `shrink_cost`는 할당기의 값과 인자에
-따라 달라도 됩니다. 기본값은 `allocate_cost`가 `max_cost()`이고, 나머지는 새 layout의 `allocate_cost`입니다.
-`max_cost()`를 넘는 호출 비용은 `max_cost()`로 깎습니다. Verus는 impl을 이 상한에 대해 검증합니다.
-impl이 정의하지 않은 메서드는 std의 기본 본문을 실행하는데, 그 본문은 각각 새 layout으로 `allocate`나
-`allocate_zeroed`를 한 번 호출합니다. 그래서 표시 trait은 impl이 `grow`, `grow_zeroed`, `shrink`를 정의할
-때만 `grow_cost`, `grow_zeroed_cost`, `shrink_cost`를 정의할 수 있습니다.
-
-`Vec<T, A>`와 `Box<T, A>`는 실제로 하는 호출의 비용을 청구합니다. 버퍼가 없는(capacity 0) 벡터가
-성장할 때는 대신 `allocate`를 부르므로 새 layout의 `allocate_cost`가 청구됩니다. 크기 0인 `T`(그리고
-그런 `T`의 `Box::new_in`)는 아무것도 부르지 않습니다. 기존 버퍼를 키우는 `Vec::push`에는 벡터의
-할당기(`spec_vec_allocator`), 버퍼 포인터, 이전 capacity의 layout, 그리고 std의 성장 정책이 고르는
-capacity(`vec_amortized_cap`, std 1.100의 정책)의 layout으로 계산한 `grow_cost`가 청구됩니다. 성장한 뒤
-벡터의 capacity는 정확히 그 값이고, 할당기는 바뀌지 않습니다. 그래서 설정이나 요청 크기에 따라 비용이
-달라지는 할당기도 정확한 상한을 줄 수 있습니다.
-
-```rust
-pub struct Chunked { pub limit: usize }
-
-unsafe impl BoundedAllocator for Chunked {
-    open spec fn max_cost() -> int { 1 }
-
-    open spec fn allocate_cost(&self, layout: Layout) -> int {
-        if spec_layout_size(layout) <= self.limit { 0 } else { 1 }
-    }
-}
-
-fn push_fits(v: &mut Vec<u64, Chunked>)
-    requires
-        spec_vec_allocator(&*old(v)).limit == 256,
-        old(v)@.len() == 8,
-        spec_vec_capacity(&*old(v)) == 8,
-    allocates 0
-{
-    v.push(1); // 16개, 128바이트로 성장
-}
-```
-
-`VecDeque<T, A>`, `HashMap<K, V, S, A>`, `Rc::map`, `Arc::map`은 할당기 호출의 인자를 vstd가 이름 붙이지
-않으므로 대신 `allocator_max_cost::<A>()`를 청구합니다. 이미 가진 메모리를 나눠 주는 arena는 비용을
-0으로 둘 수 있고, 그러면 그 arena를 쓰는 컨테이너는 아무것도 할당하지 않습니다.
-
-* 할당기의 `Allocator` impl이 Verus가 검사하는 것(`verus!` 안)일 때만 표시 impl을 받습니다.
-  표시 impl도 모두 Verus가 검사하는 것이어야 합니다.
-* 컨테이너를 drop하면 그 할당기의 `deallocate`가 호출됩니다. 그래서 할당기가 전역 할당기나 시스템
-  할당기이거나 `BoundedAllocator`일 때만 컨테이너를 drop할 수 있습니다. 그런 할당기에 대한 참조도
-  됩니다. 제네릭 할당기에는 `A: Allocator + BoundedAllocator` bound가 필요합니다. `AllocFreeDrop`이
-  `BoundedAllocator`의 supertrait이므로, 할당기 자체를 drop할 때도 할당하면 안 됩니다.
-* 컨테이너를 clone하면(`split_off`도) 할당기도 clone하며, 그 비용은 `allocator_clone_cost::<A>()`입니다.
-  std의 컨테이너는 Verus가 보지 못하는 곳에서도 할당기를 clone합니다. `BTreeMap`(또는 그 `IntoIter`)을
-  drop하면 해제하는 노드마다 한 번씩 clone합니다. 그래서 `BoundedAllocator`의 `Clone` impl은 Verus가
-  검사하는 impl이어야 하고, `allocates 0`으로 묶여야 하며, 할당기 힙을 바꾸면 안 됩니다(다음 절).
-  (그래서 할당기에 `#[derive(Clone)]`을 쓰면 거부됩니다. derive로 만든 impl은 Verus가 검사하지 않으므로,
-  impl을 `verus!` 안에 직접 씁니다.)
-  `Allocator`의 계약도 이미 clone한 할당기가 같은 할당기처럼 동작하기를 요구합니다. 따라서 이 비용은
-  `BoundedAllocator`에서 0이며, 전역 할당기와 참조에서도 0입니다. 다른 할당기에서는 해석되지 않는 항입니다.
-* `BoundedAllocator`만으로는 비용이 할당기의 값과 인자에만 의존할 수 있습니다. 메서드가 받는 `&self` 뒤의
-  가변 상태에는 의존할 수 없습니다. 이 제한은 다음 절에서 풉니다.
-
-### 상태 있는 할당기
-
-이미 가진 블록을 먼저 내주는 풀이나, 다 쓰면 바닥나는 arena는 상태에 따라 비용이 다릅니다.
-`vstd::alloc_heap::StatefulAllocator`(`BoundedAllocator` 위의 trait)는 상태의 타입, 그 위의 preorder
-("적어도 그만큼 좋다"), 한 상태에서 `allocate`의 비용(`allocate_cost_at`)과 그 뒤의 상태(`allocate_next`)를
-줍니다:
-
-```rust
-pub struct Free(pub nat);          // 남은 블록 수; 많을수록 좋다
-
-impl Preorder for Free {
-    open spec fn le(self, other: Self) -> bool { self.0 <= other.0 }
-    proof fn le_refl(a: Self) {}
-    proof fn le_trans(a: Self, b: Self, c: Self) {}
-}
-
-unsafe impl StatefulAllocator for Pool {
-    type State = Free;
-    open spec fn loc(&self) -> Loc { self.reg@.loc() }
-    proof fn witness<'a>(tracked &'a self) -> (tracked w: &'a Registered<Free>) { self.reg.borrow() }
-    open spec fn allocate_cost_at(&self, s: Free, layout: Layout) -> int {
-        if s.0 > 0 { 0 } else { 1 }
-    }
-    open spec fn allocate_next(&self, s: Free, layout: Layout, r: Result<NonNull<[u8]>, AllocError>) -> Free {
-        if s.0 > 0 { Free((s.0 - 1) as nat) } else { s }
-    }
-}
-
-fn two(p: &Pool, l: Layout)
-    requires allocator_state(p).0 >= 2,
-    ensures allocator_state(p).0 == old_allocator_state(p).0 - 2,
-    allocates 0
-{
-    let _ = p.allocate(l);
-    let _ = p.allocate(l);
-}
-```
-
-Verus는 스레드마다 이 상태들의 하한을 담은 ghost heap을 둡니다. 명세에서는 `allocator_state(a)`(`ensures`에서는
-호출 뒤, `requires`와 본문에서는 현재 상태)와 `old_allocator_state(a)`(함수가 불렸을 때의 상태. `allocates`
-상한에서는 이 형태만 쓸 수 있습니다)로 읽습니다. `a.allocate(layout)` 호출은
-`allocate_cost_at(allocator_state(a), layout)`(`max_cost()`로 자름)만큼 청구되고, 상태를 `allocate_next`로
-옮깁니다. impl의 `allocate`는 같은 두 사실에 대해 검증됩니다.
-
-* 구현은 실제 상태를 `AllocAuth<S>`(자기 불변식 안)에 둡니다. `AllocAuth::register(s)`가 이것을 만들고,
-  할당기가 가지고 있어야 하는 증인 `Registered<S>`도 돌려줍니다(`witness`). `AllocAuth::step`은 실제 상태와
-  heap의 하한을 함께 옮기고(할당), `AllocAuth::raise`는 실제 상태만 올립니다(해제).
-* heap은 상태가 아니라 하한을 담습니다. `deallocate`는 Verus가 보지 못하는 곳(컨테이너를 drop할 때)에서
-  실행되므로 상태를 올리기만 할 수 있습니다. heap을 바꿀 수 있는 `deallocate`나 `Drop::drop`은 거부됩니다.
-* `Registered`는 `Send`도 `Sync`도 아니므로, 이것을 가진 할당기도 그렇습니다. 상태와 그 하한은 한 스레드에
-  머뭅니다. 이는 할당기가 스스로 `Send`나 `Sync`를 구현하지 않는다는 데 기댑니다. `verus!` 밖에 쓴
-  `unsafe impl Send`/`Sync`는 (auto trait의 `unsafe impl`이 늘 그렇듯) Verus가 검사하지 않으며, 상태를 다른
-  스레드로 옮길 수 있게 합니다.
-* 명세에서 heap을 언급하는 함수는 그 변화를 호출자에게 전합니다. heap을 바꿀 수 있는 다른 함수(상태 있는
-  할당기에서 할당하거나, Verus가 효과를 볼 수 없는 코드: 클로저, Verus의 heap 분석 없이 검증된 crate의
-  함수를 부르는 함수)를 부른 뒤에는 상태를 모르게 되고, 그때 비용은 `max_cost()`입니다. 분석은 인스턴스마다
-  이루어집니다. 타입 매개변수 `A`를 통해서만 할당기에 닿는 제네릭 함수(`Vec<u8, A>`에 `v.push(1)`)는
-  `A = Global`로 부르면 상태를 유지합니다. heap을 바꾸는 proof
-  함수는 `ensures`에서 어떻게 바꾸는지 밝혀야 합니다.
-* `external_body` 함수와 `assume_specification`은 `allocates` 상한처럼 신뢰합니다. 이들은 타입 인자(타입
-  매개변수, 클로저, 사용자 crate의 타입)를 통해서만 heap을 바꿀 수 있다고 봅니다. 그래서 사용자 타입으로
-  인스턴스화한 std 호출(`Vec<MyStruct>::push`)도 상태를 모르게 만듭니다.
-* `grow`(`grow_zeroed`)와 `shrink`도 `grow_cost_at`/`grow_next`, `shrink_cost_at`/`shrink_next`로 상태를
-  옮깁니다. 기본값은 std 기본 본문이 하는 일(새 layout으로 `allocate` 한 번)이고, 할당기는 자기 `Allocator`
-  impl이 정의한 메서드에 대해서만 바꿀 수 있습니다. `&A`를 통한 호출은 `A`의 메서드 호출입니다.
-* 컨테이너 명세는 heap에 무엇을 하는지 말합니다:
-  * `Vec`: 할당하는 모든 연산(`with_capacity_in`, `reserve`, `try_reserve`, `try_reserve_exact`, `push`,
-    `insert`, `append`, `extend_from_slice`, `resize`)은 상태에서의 할당기 호출 비용만큼 들고, 상태를 할당기가
-    말하는 대로 옮깁니다(전역 할당기이거나 벡터에 자리가 있으면 그대로). 나머지 연산은 heap을 그대로 둡니다.
-    `Box::new_in`도 같습니다.
-  * `VecDeque`(`new_in`, `with_capacity_in` 포함), `HashMap`, `HashSet`: 할당하는 연산은 할당기를 최대 한 번
-    부르고(`allocator_some_call_heap_in`), 비용은 상태 없는 비용입니다. 나머지는 heap을 그대로 둡니다.
-    `BTreeMap`/`BTreeSet`의 읽기와 삭제도 그대로 둡니다.
-  * 그 뒤에 heap을 모르게 되는 것: 할당기를 clone하는 연산(`clone`, `split_off`), 클로저를 부르는 연산
-    (`Box`/`Rc`/`Arc::map`), trait 메서드(`Deref`, `Index`, `IntoIterator`), `BTreeMap`/`BTreeSet`의 삽입
-    (`allocates` 상한이 없음).
-  * 원소 타입을 통해 사용자 코드가 상태 있는 할당기에 닿을 수 있으면(`Vec<Vec<u8, &Pool>>`: `T::clone`, drop)
-    컨테이너 명세는 heap을 말하지 않고, 호출 뒤 heap을 모르게 됩니다.
-* 클로저 자신의 명세도 heap을 말할 수 있습니다. `requires`와 본문에서 `allocator_state(a)`는 호출 중 그 지점의
-  heap, `ensures`에서는 돌아갈 때의 heap, `old_allocator_state(a)`는 호출됐을 때의 heap입니다. 클로저 값을
-  부르면(`f(x)`) 호출자의 heap에서 그 명세를 씁니다. `allocates` 상한은 함수와 마찬가지로 호출될 때 계산되므로
-  `old_` 형태만 쓸 수 있습니다.
-
-  ```rust
-  let f = |u: u8| -> (r: Result<NonNull<[u8]>, AllocError>)
-      allocates if old_allocator_state(p).0 > 0 { 0int } else { 1int }
-  {
-      p.allocate(l)
-  };
-  ```
-
-  이런 클로저(`requires`, `ensures`, `allocates` 중 하나라도 heap을 말하는 클로저)는 `call_requires(f, args)`만
-  아는 곳(제네릭 코드)에 넘길 수 없습니다. 그것은 "모든 heap에서"를 뜻하기 때문입니다. `allocates` 상한이 heap을
-  말하는 함수를 값으로 쓸 때도 같습니다(`let g = take; g(p, l)`은 되고, `take`를 제네릭 코드에 넘기는 것은 안
-  됩니다).
 
 ## 콜백, 클로저, trait
 
@@ -532,14 +384,10 @@ fn push_spare(v: &mut Vec<u64>)
 검증·컴파일되어 라이브러리 파일과 함께 import된 경우에만 받고(그 컴파일이 검사했으므로), 그렇지 않으면
 거부합니다.
 
-컨테이너는 std 코드 안에서 할당기의 메서드를 부릅니다. 그래서 fip 함수는 전역 할당기나 시스템 할당기가
-아닌 할당기로 std나 vstd 코드를 쓸 때(`Vec<u8, A>::push`, `Vec::with_capacity_in(n, a)`), 그 할당기가
-unsafe 표시 trait `vstd::alloc_check::FipAllocator`를 구현해야 합니다. 제네릭 할당기에는
-`A: FipAllocator` bound가 필요합니다. `unsafe impl FipAllocator for X`는 `X`의 `allocate`, (`Allocator`
-impl이 정의한다면) `allocate_zeroed`, (있다면) `Clone::clone`이 모두 같은 crate의 `#[verifier::fip]`
-함수일 때만 받습니다. `Allocator`, `BoundedAllocator`, `NoDeallocDrop`이 supertrait입니다.
-`#[verifier::fip(strict)]` 함수에는 대신 `FipStrictAllocator`가 필요하고, 그 메서드는
-`#[verifier::fip(strict)]`여야 합니다.
+컨테이너는 std 코드 안에서 할당기의 메서드를 부릅니다. 그 메서드는 런타임의 것이므로("사용자 정의 할당기"
+참고), fip 함수와 strict 함수는 어떤 할당기로든 std나 vstd 코드를 쓸 수 있습니다(`Vec<u8, A>::push`,
+`Vec::with_capacity_in(n, a)`). 할당기 자신의 코드는 말단으로 보며, 해제 검사도 스택 검사도 따라가지
+않습니다.
 
 `allocates`와 마찬가지로 unwind하는 경로는 다루지 않습니다. drop 검사는 Verus의 컴파일 단계에서
 돌기 때문에, `--no-lifetime`과 `--no-erasure-check`는 `#[verifier::fip]` 함수를 거부합니다.
@@ -852,6 +700,9 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
   `fip_strict_tail_calls_*`가 `opt-level=0`과 `3`에서 깊이 10^8의 `become` 재귀를 실행해 확인)
 * `vstd::alloc_check::reclaim`을 위한 std의 `Allocator` 계약: `deallocate`(또는 `grow`, `shrink`)가 받는 블록은
   이 할당기가 내준, 아직 살아 있는 블록이라는 점("사용자 정의 할당기" 참고)
+* 할당기 자신의 코드는 런타임이라는 점: 상한은 프로그램이 할당기를 부르는 호출(한 번에 1)을 세고, 할당기가
+  하는 일은 세지 않습니다(그 `Allocator`, `Clone`, `Drop` impl은 할당, 해제, 스택을 검사하지 않음. "사용자
+  정의 할당기" 참고)
 * `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등). `--no-cheating`은 지금
   검증하는 crate에만 적용됩니다. 그것 없이 검증된 의존 crate의 블록(과 `external_body` 함수)은 그대로
   신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다
@@ -871,9 +722,6 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.
-* 할당기가 전역 할당기도, 참조도, `BoundedAllocator`도 아닌 컨테이너의 clone, 그리고 자신이 가진 할당기에
-  위임하는 할당기(`Box`, `Rc`, `Arc`, `Pin`을 할당기로 쓰는 경우): 비용이 해석되지 않는 항
-  (`allocator_clone_cost::<A>()`, `allocator_max_cost::<A>()`)이므로 그 항을 그대로 쓰는 상한만 검증됩니다
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop
 * drop glue 안의 projection 타입(예: `Cow`)
 * 구조체의 필드 하나만 캡처하는 클로저를 구조체 전체를 캡처한 것처럼 검사하는 점

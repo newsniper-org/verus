@@ -17,7 +17,10 @@ that violate the spirit of not cheating", #3392)에서 갈라졌습니다. 변�
 
 Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 `fip-beta`로 맞췄습니다. 그래서 이 페이지의
 내용은 두 브랜치에 모두 있습니다. 다만 아래 표의 "도입" 열이 `fip` (1.100)인 것은 그 뒤에 `fip`에 더한 것입니다.
-나머지는 이 열이 두 층 중 어디서 들어왔는지를 나타냅니다.
+나머지는 이 열이 두 층 중 어디서 들어왔는지를 나타냅니다. `fip` (1.100)의 변경 하나는 없앤 것도 있습니다.
+할당기를 런타임으로 보고 프로그램이 할당기를 부르는 호출만 세게 되면서, `BoundedAllocator`,
+`FipAllocator`/`FipStrictAllocator`, 할당기 상태(`vstd::alloc_heap`), `PreorderAuth`가 `fip`에서 없어졌습니다.
+(동결된 `fip-beta`에는 이전 비용 모델이 그대로 있습니다.)
 
 새 검증 기능은 모두 실험적입니다.
 
@@ -54,8 +57,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 |---|---|---|---|
 | 할당 상한 | `exec` 함수나 클로저에 `allocates n`, `-V alloc-check`로 검사 | `fip` | [할당 상한](./reference-allocates.ko.md) |
 | 할당 상한이 있으면 unwind 없음 | `-V alloc-check-strict` | `fip` | [할당 상한](./reference-allocates.ko.md)의 `-V alloc-check-strict` 절 |
-| 사용자 정의 할당기 | `unsafe impl BoundedAllocator for A`, 그다음 `Vec<T, A>`, `Box<T, A>` 등 | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "사용자 정의 할당기" 절 |
-| 상태 있는 할당기 | `vstd::alloc_heap`(`allocator_state`, `AllocAuth`) | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "상태 있는 할당기" 절 |
+| 사용자 정의 할당기 | 어떤 할당기든 `Vec<T, A>`, `Box<T, A>` 등. 할당기 호출마다 1이고, 할당기가 스스로 하는 일은 세지 않음 | `fip-beta`. 호출만 세는 것은 `fip` (1.100)부터 | [할당 상한](./reference-allocates.ko.md)의 "사용자 정의 할당기" 절 |
 | bound 명세 | 타입 매개변수, `where` 절, impl, struct의 `T: Tr with { .. }` | `fip-beta` | [할당 상한](./reference-allocates.ko.md)의 "bound 명세" 절 |
 | 완전한 제자리 함수 (해제 없음) | `#[verifier::fip]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
 | 상수 스택 공간 | `become`과 함께 `#[verifier::fip(strict)]` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md), [레퍼런스](./reference-allocates.ko.md) |
@@ -65,9 +67,8 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 스택 증가 린터 | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md)의 "도구" 절 |
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 
-이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop`, `BoundedAllocator`,
-`FipAllocator` 같은 marker trait, 그리고 `FipAdd`, `FipOrd` 같은 연산자 marker), `vstd::alloc_heap`, `vstd::resource::impls::preorder_auth`에 있습니다.
-`PreorderAuth`는 권위 있는 상태와 배타적인 하한 조각을 짝지은 것으로, 할당기 heap이 씁니다.
+이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop` 같은 marker trait, 그리고
+`FipAdd`, `FipOrd` 같은 연산자 marker)에 있습니다.
 
 ## 새 옵션 없이도 적용되는 변경
 

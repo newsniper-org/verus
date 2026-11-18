@@ -305,6 +305,7 @@ fn handle_autospec<'tcx>(
                     alloc_check_skip_drops: false,
                     fip: false,
                     fip_strict: false,
+                    allocator_runtime: false,
                     trusted_only: false,
                     alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
                     heap_effect_params: None,
@@ -1568,6 +1569,11 @@ fn make_attributes<'tcx>(
             "`#[verifier::spinoff_prover]` is implied for assert by `nonlinear_arith`",
         );
     }
+    // -V alloc-check: the allocator runtime's code (`fip_mir::allocator_runtime`)
+    let allocator_runtime =
+        ctxt.cmd_line_args.alloc_check && crate::fip_mir::allocator_runtime(ctxt.tcx, def_id);
+    let runtime_clone_drop =
+        allocator_runtime && !crate::fip_mir::allocator_impl_method(ctxt.tcx, def_id);
     let fattrs = FunctionAttrsX {
         uses_ghost_blocks,
         inline: vattrs.inline,
@@ -1605,8 +1611,11 @@ fn make_attributes<'tcx>(
             vattrs.exec_allows_no_decreases_clause
         },
         alloc_check_skip_drops: vattrs.alloc_check_skip_drops,
-        fip: vattrs.fip.is_some(),
-        fip_strict: vattrs.fip == Some(true),
+        // (an allocator's `Clone` and `Drop` are the runtime's: they deallocate nothing of the
+        // program's and are a leaf, `fip_mir::allocator_runtime`; their bodies are not checked)
+        fip: vattrs.fip.is_some() || runtime_clone_drop,
+        fip_strict: vattrs.fip == Some(true) || runtime_clone_drop,
+        allocator_runtime,
         trusted_only: vattrs.trusted_only,
         alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
         heap_effect_params: None,
@@ -2529,6 +2538,16 @@ pub(crate) fn finish_function<'tcx>(
             header.allocates =
                 Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
         }
+    }
+    // -V alloc-check: an allocator's `Clone` and `Drop` are the runtime's and count nothing (a call
+    // of one is not the program's allocation; `fip_mir::allocator_runtime`)
+    if ctxt.cmd_line_args.alloc_check
+        && header.allocates.is_none()
+        && crate::fip_mir::allocator_runtime(ctxt.tcx, def_id)
+        && !crate::fip_mir::allocator_impl_method(ctxt.tcx, def_id)
+    {
+        header.allocates =
+            Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
     }
     if header.deallocates.is_some() && !(vattrs.external_body || vattrs.external_fn_specification) {
         return err_span(

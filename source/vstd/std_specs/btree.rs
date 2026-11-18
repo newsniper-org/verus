@@ -225,7 +225,6 @@ pub assume_specification<'a, Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Val
             &&& IteratorSpec::decrease(&iter) is Some
             &&& increasing_seq(iter.remaining().map_values(|kv: (&Key, &Value)| *kv.0))
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 /// Specifications for the behavior of [`alloc::collections::BTreeMap`](https://doc.rust-lang.org/alloc/collections/struct.BTreeMap.html).
@@ -526,7 +525,6 @@ pub assume_specification<Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, 
 ) -> (len: usize)
     ensures
         len == spec_btree_map_len(m),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, A>::is_empty ](
@@ -534,7 +532,6 @@ pub assume_specification<Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, 
 ) -> (res: bool)
     ensures
         res == m@.is_empty(),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<K: Clone, V: Clone, A: AllocatorClone>[ <BTreeMap::<
@@ -612,7 +609,6 @@ pub assume_specification<
     bool)
     ensures
         obeys_cmp::<Key>() ==> result == contains_borrowed_key(m@, k),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -668,7 +664,6 @@ pub assume_specification<
             Some(v) => maps_borrowed_key_to_value(m@, k, *v),
             None => !contains_borrowed_key(m@, k),
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -728,7 +723,6 @@ pub assume_specification<
                 None => !contains_borrowed_key(old(m)@, k),
             }
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 /// Relates a map before and after mutating the value selected by a borrowed key.
@@ -810,7 +804,6 @@ pub assume_specification<
             Some(value) => borrowed_key_mutated(old(map)@, final(map)@, key, *value, *final(value)),
             None => !contains_borrowed_key(old(map)@, key) && final(map)@ == old(map)@,
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, A>::clear ](
@@ -818,7 +811,6 @@ pub assume_specification<Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, 
 )
     ensures
         final(m)@ == Map::<Key, Value>::empty(),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 /// Specification for [`BTreeMap::lower_bound_mut`].
@@ -841,7 +833,6 @@ pub assume_specification<
             &&& final(map)@ == cursor.final_map()
             &&& positioned_at_lower_bound(cursor@, bound)
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 /// Specification for [`BTreeMap::upper_bound_mut`].
@@ -864,7 +855,6 @@ pub assume_specification<
             &&& final(map)@ == cursor.final_map()
             &&& positioned_at_upper_bound(cursor@, bound)
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 /// Specification for [`CursorMut::next`].
@@ -1034,7 +1024,6 @@ pub assume_specification<'a, Key: Ord, Value, A: AllocatorClone>[ CursorMut::<
                 &&& final(cursor)@ == old(cursor)@
             },
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<'a, Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, A>::keys ](
@@ -1049,7 +1038,6 @@ pub assume_specification<'a, Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Val
             &&& into_iter_keys(keys) == IteratorSpec::remaining(&keys).unref()
             &&& IteratorSpec::decrease(&keys) is Some
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<'a, Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Value, A>::values ](
@@ -1069,7 +1057,6 @@ pub assume_specification<'a, Key, Value, A: AllocatorClone>[ BTreeMap::<Key, Val
                     &&& IteratorSpec::remaining(&values) == key_seq.map(|i: int, k| &m@[k])
                 }
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub broadcast axiom fn axiom_btree_map_decreases<Key, Value, A: AllocatorClone>(
@@ -1165,7 +1152,6 @@ pub assume_specification<Key, A: AllocatorClone>[ BTreeSet::<Key, A>::len ](
 ) -> (len: usize)
     ensures
         len == spec_btree_set_len(m),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<Key, A: AllocatorClone>[ BTreeSet::<Key, A>::is_empty ](
@@ -1173,7 +1159,6 @@ pub assume_specification<Key, A: AllocatorClone>[ BTreeSet::<Key, A>::is_empty ]
 ) -> (res: bool)
     ensures
         res == m@.is_empty(),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<K: Clone, A: AllocatorClone>[ <BTreeSet::<K, A> as Clone>::clone ](
@@ -1238,7 +1223,6 @@ pub assume_specification<Key: Borrow<Q> + Ord, A: AllocatorClone, Q: Ord + ?Size
 >::contains ](m: &BTreeSet<Key, A>, k: &Q) -> (result: bool)
     ensures
         obeys_cmp::<Key>() ==> result == set_contains_borrowed_key(m@, k),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 // The specification for `get` has a parameter `key: &Q` where you'd
@@ -1280,7 +1264,6 @@ pub assume_specification<'a, Key: Borrow<Q> + Ord, A: AllocatorClone, Q: Ord + ?
             Some(v) => sets_borrowed_key_to_key(m@, k, v),
             None => !set_contains_borrowed_key(m@, k),
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 // The specification for `remove` has a parameter `key: &Q` where
@@ -1325,7 +1308,6 @@ pub assume_specification<Key: Borrow<Q> + Ord, A: AllocatorClone, Q: Ord + ?Size
             &&& sets_differ_by_borrowed_key(old(m)@, final(m)@, k)
             &&& result == set_contains_borrowed_key(old(m)@, k)
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<Key, A: AllocatorClone>[ BTreeSet::<Key, A>::clear ](
@@ -1333,7 +1315,6 @@ pub assume_specification<Key, A: AllocatorClone>[ BTreeSet::<Key, A>::clear ](
 ) where A: Clone
     ensures
         final(m)@ == Set::<Key>::empty(),
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub assume_specification<'a, Key, A: AllocatorClone>[ BTreeSet::<Key, A>::iter ](
@@ -1348,7 +1329,6 @@ pub assume_specification<'a, Key, A: AllocatorClone>[ BTreeSet::<Key, A>::iter ]
             &&& into_iter_btree_keys(r) == IteratorSpec::remaining(&r).unref()
             &&& IteratorSpec::decrease(&r) is Some
         },
-        crate::alloc_heap::allocator_heap() == crate::alloc_heap::old_allocator_heap(),
 ;
 
 pub broadcast axiom fn axiom_btree_set_decreases<Key, A: AllocatorClone>(m: BTreeSet<Key, A>)

@@ -19,7 +19,10 @@ in two layers, first on two branches:
 When Rust 1.100.0 was released, `fip-beta` moved to it, and `fip` was set to `fip-beta`. So
 everything on this page is in both branches, except what the column "since" in the tables below
 marks as `fip` (1.100): that was added to `fip` afterwards. Otherwise the column says which of the
-two layers introduced it.
+two layers introduced it. One change on `fip` (1.100) also removes things: an allocator is now the
+runtime, and only the program's calls to it are counted, so `BoundedAllocator`,
+`FipAllocator`/`FipStrictAllocator`, the allocator state (`vstd::alloc_heap`) and
+`PreorderAuth` are gone from `fip`. (`fip-beta`, frozen, keeps the earlier cost model.)
 
 All of the new verification features are experimental.
 
@@ -59,8 +62,7 @@ What this changes for verified code:
 |---|---|---|---|
 | Allocation bounds | `allocates n` on an `exec` function or closure, checked with `-V alloc-check` | `fip` | [Allocation bounds](./reference-allocates.md) |
 | Allocation bounds imply no unwinding | `-V alloc-check-strict` | `fip` | [`-V alloc-check-strict`](./reference-allocates.md#-v-alloc-check-strict) |
-| Custom allocators | `unsafe impl BoundedAllocator for A`, then `Vec<T, A>`, `Box<T, A>`, ... | `fip-beta` | [Custom allocators](./reference-allocates.md#custom-allocators) |
-| Allocators with a state | `vstd::alloc_heap` (`allocator_state`, `AllocAuth`) | `fip-beta` | [Allocators with a state](./reference-allocates.md#allocators-with-a-state) |
+| Custom allocators | `Vec<T, A>`, `Box<T, A>`, ... with any allocator: each call to an allocator is 1, and what the allocator does itself is not counted | `fip-beta`; calls only since `fip` (1.100) | [Custom allocators](./reference-allocates.md#custom-allocators) |
 | Bound specifications | `T: Tr with { .. }` on type parameters, in `where` clauses, impls and structs | `fip-beta` | [Bound specifications](./reference-allocates.md#bound-specifications-t-tr-with---) |
 | Fully in-place functions (no deallocation) | `#[verifier::fip]` | `fip-beta` | [FIP and FBIP](./fip-fbip.md), [reference](./reference-allocates.md#fully-in-place-functions-verifierfip) |
 | Constant stack space | `#[verifier::fip(strict)]` with `become` | `fip-beta` | [reference](./reference-allocates.md#constant-stack-space-verifierfipstrict) |
@@ -71,10 +73,7 @@ What this changes for verified code:
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |
 
 The new vstd items for these features are in `vstd::alloc_check` (marker traits such as
-`AllocFreeDrop`, `NoDeallocDrop`, `BoundedAllocator`, `FipAllocator`, and the operator markers
-such as `FipAdd` and `FipOrd`), `vstd::alloc_heap`, and
-`vstd::resource::impls::preorder_auth` (`PreorderAuth`, an authoritative state with an exclusive
-lower-bound fragment, which the allocator heap uses).
+`AllocFreeDrop` and `NoDeallocDrop`, and the operator markers such as `FipAdd` and `FipOrd`).
 
 ## Changes that apply without the new options
 

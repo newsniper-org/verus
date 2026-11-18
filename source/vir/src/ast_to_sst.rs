@@ -2031,11 +2031,26 @@ fn fip_call_check(
             return Ok(None);
         }
     }
-    // (a trait method call resolved to an impl is checked against that impl)
+    // (a trait method call resolved to an impl is checked against that impl, except an allocator's
+    // method, which is the runtime's: its call counts as the `Allocator` declaration says)
     let (callee, callee_typs) = match resolved {
         Some((r, ts)) => (get_function(ctx, span, r)?, ts.clone()),
         None => (target_fun.clone(), target_typs.clone()),
     };
+    let allocator_call = callee.x.attrs.allocator_runtime
+        && matches!(&callee.x.kind, crate::ast::FunctionKind::TraitMethodImpl { trait_path, .. }
+            if crate::alloc_check::is_allocator_trait(trait_path));
+    if allocator_call {
+        // `allocate` and `allocate_zeroed` only obtain memory: they never free a block of the
+        // program's (what the allocator does inside is the runtime's); `grow`, `grow_zeroed` and
+        // `shrink` may move the block, and `deallocate` frees it
+        let name = crate::ast_util::fun_as_friendly_rust_name(target);
+        if name == "core::alloc::Allocator::allocate"
+            || name == "core::alloc::Allocator::allocate_zeroed"
+        {
+            return Ok(None);
+        }
+    }
     if callee.x.attrs.fip {
         return Ok(None);
     }
