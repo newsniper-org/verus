@@ -173,6 +173,22 @@ fn double<S: Shape>(s: &S) -> (r: u64) {
 }
 ```
 
+기본 본문이 없는 선언은 대신 `allocates deallocates_when(n, c)`로 구현이 조건부로 해제하도록 허용할 수 있습니다.
+Verus가 검사하는 구현은 여전히 모두 `#[verifier::fip]`이어야 하고(검증된 본문이 없는 구현은 선언의 조건을
+따릅니다), fip 함수는 그 조건이 거짓임을 보일 수 있는 곳에서 호출할 수 있습니다.
+
+```rust
+pub trait Pool {
+    fn take(&mut self, n: u64) -> (r: u64)
+        allocates deallocates_when(0int, n > 10);
+}
+
+#[verifier::fip]
+fn take_few<P: Pool>(p: &mut P) -> (r: u64) {
+    p.take(3) // 괜찮습니다: `3 > 10`은 거짓입니다
+}
+```
+
 strict 함수는 그런 drop이 어떤 소멸자를 실행하는지도 알아야 합니다. 그래서 타입 매개변수의 값은 아예 drop할 수
 없습니다(`Copy` bound가 있으면 소멸자가 없습니다). 그래도 값을 drop하지 않고 옮기기만 하는 std 함수는 부를 수
 있습니다. `mem::swap`, `mem::replace`, slice와 `Vec`의 뷰 함수들이 그렇습니다.
@@ -204,6 +220,35 @@ fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
 `allocates 0`(그리고 fip이나 strict)일 때만 받습니다. marker trait이 있으면 fip 함수가 비교하는 std 함수도
 부를 수 있습니다. 예를 들어 `T: FipOrd`나 `T: FipPartialEq`일 때 `v.sort_unstable()`과 `s.contains(x)`입니다.
 
+### 클로저와 함수 값
+
+fip 함수 안의 함수 값 호출(클로저, 또는 `F: Fn(..)`인 `f: F`에 대한 `f(x)`)은 `f.deallocates(x)`가 거짓이 아니면
+메모리를 해제할 수 있습니다. 클로저 식에 `#[verifier::fip]`을 붙이면 거짓이 됩니다. 그 클로저의 본문은 fip
+함수처럼 검사하고, `allocates` 상한이 없으면 할당도 하지 않습니다. 제네릭 함수는 그 조건을 호출하는 쪽에 넘기고,
+상한도 `f.allocates(x)`로 넘깁니다.
+
+```rust
+#[verifier::fip]
+fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+    requires
+        f.requires((x,)),
+        !(*f).deallocates(x),
+    allocates
+        (*f).allocates(x),
+{
+    f(x)
+}
+
+#[verifier::fip]
+fn halve_seven() -> (r: u64) {
+    let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+    apply(&half, 7)
+}
+```
+
+strict 함수는 자기가 만든 `#[verifier::fip(strict)]` 클로저는 부를 수 있지만, 스택 사용을 알 수 없는 타입
+매개변수 `F`의 값은 부를 수 없습니다.
+
 ## 자주 만나는 거부
 
 | 코드 | 거부되는 이유 | 대신 |
@@ -214,6 +259,8 @@ fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
 | fip 함수 안의 `v.push(x)` | `push`는 커질 때 옛 버퍼를 해제할 수 있습니다 | `old(v)@.len() < spec_vec_capacity(&*old(v))`를 요구하거나, fip 함수 밖에서 미리 reserve합니다 |
 | `b`를 drop하는 `fn f<T>(a: T, b: T)` | `T`의 drop이 알려져 있지 않습니다 | `T: NoDeallocDrop` (strict 함수에서는 쓸 수 없습니다) |
 | `T: PartialEq`일 때 `a == b` | impl을 알 수 없는 제네릭 호출입니다 | `T: FipPartialEq` (strict 함수에서는 `FipStrictPartialEq`) |
+| fip 함수 안에서 클로저나 `F: Fn(..)`에 대한 `f(x)` | 호출이 메모리를 해제할 수 있습니다 | 클로저에 `#[verifier::fip]`을 붙이거나 `requires !f.deallocates(x)` |
+| strict 함수 안에서 `F: Fn(..)`에 대한 `f(x)` | `F`의 스택 사용을 알 수 없습니다 | 함수 안에서 만든 `#[verifier::fip(strict)]` 클로저 |
 | strict 함수 안의 `count(n - 1, acc)` | 평범한 꼬리 호출은 여전히 스택을 키울 수 있습니다 | `become count(n - 1, acc)` |
 | strict 함수 안의 `len(t) + 1` | 꼬리 호출이 아닙니다 | 누산기와 `become`을 쓰거나 루프로 바꿉니다 |
 

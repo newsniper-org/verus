@@ -307,6 +307,29 @@ fn small() -> (r: u64) {
 vstd's specifications of std's blanket `Into` (and `TryInto`, `TryFrom` through `Into`) forward
 this way to the `From` impl they call.
 
+A call of a function value has the condition `f.deallocates(x)` in the same way, so a fip function
+can call a closure marked `#[verifier::fip]` (whose `call_deallocates` is `false`), or a generic
+`f` whose caller shows the condition false:
+
+```rust
+#[verifier::fip]
+fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+    requires
+        f.requires((x,)),
+        !(*f).deallocates(x),
+    allocates
+        (*f).allocates(x),
+{
+    f(x)
+}
+
+#[verifier::fip]
+fn halve_seven() -> (r: u64) {
+    let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+    apply(&half, 7)
+}
+```
+
 A bound on a trait method declaration bounds every implementation:
 
 ```rust
@@ -770,9 +793,10 @@ completely (not with `--no-verify` or a `--verify-*` filter), and successfully:
 
 `-V alloc-check-strict` does what `-V alloc-check` does. In addition, every function with an
 `allocates` bound must be `no_unwind`, so that no panic path exists, and closures cannot have
-bounds. vstd's specifications of allocating std functions (`Box::new`, `Vec::push`, ...) are not
-`no_unwind`: capacity overflow is a `panic!` that can unwind. So in practice, a function that
-allocates cannot pass the strict mode yet.
+bounds (nor be `#[verifier::fip]`, which gives a closure `allocates 0`). vstd's specifications
+of allocating std functions (`Box::new`, `Vec::push`, ...) are not `no_unwind`: capacity
+overflow is a `panic!` that can unwind. So in practice, a function that allocates cannot pass
+the strict mode yet.
 
 ## Trust and limitations
 

@@ -178,6 +178,23 @@ fn double<S: Shape>(s: &S) -> (r: u64) {
 }
 ```
 
+A declaration without a default body may instead let its implementations deallocate under a
+condition, with `allocates deallocates_when(n, c)`. Every implementation that Verus checks must
+still be `#[verifier::fip]` (one without a verified body has the declaration's condition), and a
+fip function may make the call where it shows the condition false:
+
+```rust
+pub trait Pool {
+    fn take(&mut self, n: u64) -> (r: u64)
+        allocates deallocates_when(0int, n > 10);
+}
+
+#[verifier::fip]
+fn take_few<P: Pool>(p: &mut P) -> (r: u64) {
+    p.take(3) // fine: `3 > 10` is false
+}
+```
+
 A strict function must also know which destructors such a drop runs, so it cannot drop a value of
 a type parameter at all (a `Copy` bound rules out a destructor). It may still call the std
 functions that move values without dropping them, such as `mem::swap`, `mem::replace` and the
@@ -212,6 +229,36 @@ Verus and its methods are `allocates 0` (and fip, or strict). The markers also l
 call the std functions that compare, such as `v.sort_unstable()` and `s.contains(x)` for
 `T: FipOrd` or `T: FipPartialEq`.
 
+### Closures and function values
+
+A call of a function value in a fip function (a closure, or `f(x)` for `f: F` with
+`F: Fn(..)`) may free memory unless `f.deallocates(x)` is false. `#[verifier::fip]` on a closure
+expression makes it so: the closure's body is checked like a fip function's, and without an
+`allocates` bound it allocates nothing. A generic function passes the condition on to its caller,
+and its bound with `f.allocates(x)`:
+
+```rust
+#[verifier::fip]
+fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+    requires
+        f.requires((x,)),
+        !(*f).deallocates(x),
+    allocates
+        (*f).allocates(x),
+{
+    f(x)
+}
+
+#[verifier::fip]
+fn halve_seven() -> (r: u64) {
+    let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+    apply(&half, 7)
+}
+```
+
+A strict function may call a `#[verifier::fip(strict)]` closure that it makes itself, but not a
+value of a type parameter `F`, whose stack use is not known.
+
 ## Common rejections
 
 | Code | Why it is rejected | Instead |
@@ -222,6 +269,8 @@ call the std functions that compare, such as `v.sort_unstable()` and `s.contains
 | `v.push(x)` in a fip function | `push` may free the old buffer when it grows | require `old(v)@.len() < spec_vec_capacity(&*old(v))`, or reserve beforehand outside the fip function |
 | `fn f<T>(a: T, b: T)` dropping `b` | the drop of a `T` is not known | `T: NoDeallocDrop` (not available in a strict function) |
 | `a == b` with `T: PartialEq` | a generic call, whose impl is not known | `T: FipPartialEq` (`FipStrictPartialEq` in a strict function) |
+| `f(x)` in a fip function, for a closure or `F: Fn(..)` | the call may free memory | `#[verifier::fip]` on the closure, or `requires !f.deallocates(x)` |
+| `f(x)` for `F: Fn(..)` in a strict function | the stack use of `F` is not known | a `#[verifier::fip(strict)]` closure made in the function |
 | `count(n - 1, acc)` in a strict function | a plain tail call may still grow the stack | `become count(n - 1, acc)` |
 | `len(t) + 1` in a strict function | not a tail call | use an accumulator and `become`, or a loop |
 

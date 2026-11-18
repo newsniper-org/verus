@@ -294,6 +294,29 @@ fn small() -> (r: u64) {
 std의 blanket `Into`(그리고 `TryInto`, `Into`를 거치는 `TryFrom`)에 대한 vstd 명세도 이렇게 자기가 부르는
 `From` impl에 넘깁니다.
 
+함수 값의 호출에도 같은 방식으로 `f.deallocates(x)` 조건이 붙습니다. 그래서 fip 함수는 `#[verifier::fip]`을
+붙인 클로저(그 `call_deallocates`는 `false`)를 부를 수 있고, 호출하는 쪽이 조건이 거짓임을 보이는 제네릭 `f`도
+부를 수 있습니다.
+
+```rust
+#[verifier::fip]
+fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+    requires
+        f.requires((x,)),
+        !(*f).deallocates(x),
+    allocates
+        (*f).allocates(x),
+{
+    f(x)
+}
+
+#[verifier::fip]
+fn halve_seven() -> (r: u64) {
+    let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+    apply(&half, 7)
+}
+```
+
 trait 메서드 선언에 붙은 상한은 모든 구현을 제한합니다.
 
 ```rust
@@ -721,7 +744,7 @@ import한 crate의 상한은 그 crate가 다음 조건으로 검증되었을 �
 ## `-V alloc-check-strict`
 
 `-V alloc-check-strict`는 `-V alloc-check`가 하는 일에 더해, `allocates` 상한이 있는 모든 함수가 `no_unwind`일
-것을 요구합니다. 그래서 panic 경로가 존재하지 않습니다. 또 클로저에는 상한을 붙일 수 없습니다.
+것을 요구합니다. 그래서 panic 경로가 존재하지 않습니다. 또 클로저에는 상한을 붙일 수 없습니다(클로저에 `allocates 0`을 주는 `#[verifier::fip]`도 붙일 수 없습니다).
 할당하는 std 함수(`Box::new`, `Vec::push`, ...)에 대한 vstd 명세는 `no_unwind`가 아닙니다. capacity
 overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실제로는 할당하는 함수가 아직 strict 모드를
 통과할 수 없습니다.
