@@ -1156,9 +1156,14 @@ pub(crate) fn check_closures_with_bounds(
     })?;
     for (span, closure) in closures {
         if ctx.global.alloc_check_strict {
+            let fip = matches!(&closure.x, ExprX::NonSpecClosure { fip: true, .. });
             return Err(error(
                 &span,
-                "with -V alloc-check-strict, a closure cannot have an `allocates` bound (it cannot be `no_unwind`)",
+                if fip {
+                    "with -V alloc-check-strict, a closure cannot be `#[verifier::fip]` (it would be `allocates 0`, and a closure cannot be `no_unwind`)"
+                } else {
+                    "with -V alloc-check-strict, a closure cannot have an `allocates` bound (it cannot be `no_unwind`)"
+                },
             ));
         }
         let mut checker = DropGlueCheck::new(

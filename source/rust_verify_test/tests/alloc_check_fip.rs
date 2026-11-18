@@ -3089,3 +3089,17 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "is not `#[verifier::fip(strict)]`")
 }
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_strict_mode_rejected ["vstd", "-V alloc-check-strict"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn f() -> (r: u64)
+            no_unwind
+            allocates 0
+        {
+            let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
+            half(4)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "a closure cannot be `#[verifier::fip]`")
+}
