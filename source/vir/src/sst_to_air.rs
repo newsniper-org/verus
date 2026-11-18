@@ -1000,9 +1000,6 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
             let skip_first_decoration = match func {
                 InternalFun::ClosureReq
                 | InternalFun::ClosureEns
-                | InternalFun::ClosureReqHeap
-                | InternalFun::ClosureEnsHeap
-                | InternalFun::ClosureAllocHeap
                 | InternalFun::ClosureOpensInvariants
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc => true,
@@ -1020,9 +1017,6 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 match func {
                     InternalFun::ClosureReq => str_ident(crate::def::CLOSURE_REQ),
                     InternalFun::ClosureEns => str_ident(crate::def::CLOSURE_ENS),
-                    InternalFun::ClosureReqHeap => str_ident(crate::def::CLOSURE_REQ_HEAP),
-                    InternalFun::ClosureEnsHeap => str_ident(crate::def::CLOSURE_ENS_HEAP),
-                    InternalFun::ClosureAllocHeap => str_ident(crate::def::CLOSURE_ALLOC_HEAP),
                     InternalFun::ClosureOpensInvariants => {
                         str_ident(crate::def::CLOSURE_OPENS_INVARIANTS)
                     }
@@ -1891,9 +1885,7 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             // `call_requires(f, (args...))` and `call_ensures(f, (args...), ret)`
             // We don't want to do this all the time though --- only when the generic
             // FnDef types exist post-pruning.
-            // (a heap-aware function cannot be used as a function value: alloc_heap.rs)
-            let heap_aware = ctx.global.alloc_heap.as_ref().is_some_and(|i| i.aware.contains(fun));
-            let emit_generic_conditions = ctx.fndef_types.contains(fun) && !heap_aware;
+            let emit_generic_conditions = ctx.fndef_types.contains(fun);
             let resolved_fun = resolved_method.as_ref().map(|(f, _)| f).cloned();
 
             assert!(split.is_none());

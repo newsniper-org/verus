@@ -59,9 +59,6 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let resolved = str_to_node(HAS_RESOLVED);
     let closure_req = str_to_node(CLOSURE_REQ);
     let closure_ens = str_to_node(CLOSURE_ENS);
-    let closure_req_heap = str_to_node(CLOSURE_REQ_HEAP);
-    let closure_ens_heap = str_to_node(CLOSURE_ENS_HEAP);
-    let closure_alloc_heap = str_to_node(CLOSURE_ALLOC_HEAP);
     let closure_opens_invariants = str_to_node(CLOSURE_OPENS_INVARIANTS);
     let closure_alloc = str_to_node(CLOSURE_ALLOC);
     let default_ens = str_to_node(DEFAULT_ENS);
@@ -1039,22 +1036,6 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         (declare-fun [closure_ens] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Bool)
         (declare-fun [closure_opens_invariants] (/*[decoration] skipped */ [typ] [decoration] [typ] [decoration] [typ] [Poly] [Poly]) Poly)
         (declare-fun [default_ens] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Bool)
-        // closure_req and closure_ens at given allocator heaps (alloc_heap.rs): closure_req holds
-        // at every heap, closure_ens at some heaps
-        (declare-fun [closure_req_heap] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Bool)
-        (declare-fun [closure_ens_heap] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly] [Poly] [Poly]) Bool)
-        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (h [Poly])) (!
-            (=> ([closure_req] tf d ta f a) ([closure_req_heap] tf d ta f a h))
-            :pattern (([closure_req_heap] tf d ta f a h))
-            :qid prelude_closure_req_heap
-            :skolemid skolem_prelude_closure_req_heap
-        )))
-        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (r [Poly]) (h1 [Poly]) (h2 [Poly])) (!
-            (=> ([closure_ens_heap] tf d ta f a r h1 h2) ([closure_ens] tf d ta f a r))
-            :pattern (([closure_ens_heap] tf d ta f a r h1 h2))
-            :qid prelude_closure_ens_heap
-            :skolemid skolem_prelude_closure_ens_heap
-        )))
         // call_allocates (-V alloc-check): the `allocates` bound of a function value at given args.
         // Allocation counts are never negative (charges are clamped at 0), so neither is an
         // unknown bound.
@@ -1064,24 +1045,6 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
             :pattern (([closure_alloc] t1 d2 t2 f a))
             :qid prelude_closure_alloc_nonneg
             :skolemid skolem_prelude_closure_alloc_nonneg
-        )))
-        // closure_alloc at a given allocator heap when the call starts (alloc_heap.rs). Where the
-        // heap-free closure_req holds, it is the heap-free closure_alloc. (A closure or function
-        // whose allocates bound depends on the heap gets no heap-free closure_req axiom, so
-        // closure_req may be false for it, and this axiom does not force its bound to be the
-        // same at every heap.)
-        (declare-fun [closure_alloc_heap] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly] [Poly]) Int)
-        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (h [Poly])) (!
-            (<= 0 ([closure_alloc_heap] tf d ta f a h))
-            :pattern (([closure_alloc_heap] tf d ta f a h))
-            :qid prelude_closure_alloc_heap_nonneg
-            :skolemid skolem_prelude_closure_alloc_heap_nonneg
-        )))
-        (axiom (forall ((tf [typ]) (d [decoration]) (ta [typ]) (f [Poly]) (a [Poly]) (h [Poly])) (!
-            (=> ([closure_req] tf d ta f a) (= ([closure_alloc_heap] tf d ta f a h) ([closure_alloc] tf d ta f a)))
-            :pattern (([closure_alloc_heap] tf d ta f a h))
-            :qid prelude_closure_alloc_heap
-            :skolemid skolem_prelude_closure_alloc_heap
         )))
 
         // Decreases

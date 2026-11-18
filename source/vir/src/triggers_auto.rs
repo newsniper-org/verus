@@ -348,9 +348,6 @@ fn gather_terms(ctxt: &mut Ctxt, ctx: &Ctx, exp: &Exp, depth: u64) -> (bool, Ter
                 CallFun::InternalFun(
                     InternalFun::ClosureReq
                     | InternalFun::ClosureEns
-                    | InternalFun::ClosureReqHeap
-                    | InternalFun::ClosureEnsHeap
-                    | InternalFun::ClosureAllocHeap
                     | InternalFun::ClosureOpensInvariants
                     | InternalFun::DefaultEns
                     | InternalFun::ClosureAlloc,

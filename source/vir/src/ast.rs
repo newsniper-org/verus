@@ -1009,12 +1009,6 @@ pub enum BuiltinSpecFun {
     Allocated,
     /// `call_allocates(f, args)`: the `allocates` bound of a function value at the given args
     ClosureAlloc,
-    /// `closure_req(f, args)` at a given allocator heap (alloc_heap.rs; not user syntax)
-    ClosureReqHeap,
-    /// `closure_ens(f, args, r)` at given allocator heaps before and after the call
-    ClosureEnsHeap,
-    /// `closure_alloc(f, args)` at a given allocator heap when the call starts
-    ClosureAllocHeap,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]
@@ -1673,11 +1667,6 @@ pub struct FunctionAttrsX {
     /// The crate defining this function was verified with -V alloc-check, so its `allocates`
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,
-    /// The function's body (in the crate that defined it) changes the ghost allocator heap
-    /// (alloc_heap.rs) only if one of these type parameters is instantiated with a type through
-    /// which it may (none: never). Computed when the crate is exported; None (may change it)
-    /// otherwise.
-    pub heap_effect_params: Option<Arc<Vec<Ident>>>,
     /// `-V alloc-check`: the function (or its impl) has trait bounds that do not appear in
     /// `typ_bounds` (auto traits such as `Send`), so its `call_allocates` axiom cannot be guarded
     /// by them and is not emitted

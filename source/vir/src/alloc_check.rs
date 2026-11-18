@@ -1249,6 +1249,19 @@ pub(crate) fn check_alloc_free_drop_impls(
     Ok(())
 }
 
+/// `core::alloc::Allocator`'s `allocate`, `allocate_zeroed`, `grow`, `grow_zeroed` or `shrink`:
+/// a method that returns a block (in an allocator's body, `hand_out` gives one up)
+pub(crate) fn is_block_allocator_method(fun: &crate::ast::Fun) -> bool {
+    matches!(
+        crate::ast_util::fun_as_friendly_rust_name(fun).as_str(),
+        "core::alloc::Allocator::allocate"
+            | "core::alloc::Allocator::allocate_zeroed"
+            | "core::alloc::Allocator::grow"
+            | "core::alloc::Allocator::grow_zeroed"
+            | "core::alloc::Allocator::shrink"
+    )
+}
+
 /// A method of an impl of `core::alloc::Allocator`: the allocator runtime's code, whose own
 /// allocations are not counted (a call of it counts as the `Allocator` declaration says), so it
 /// need not come from a crate verified with -V alloc-check

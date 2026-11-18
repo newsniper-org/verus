@@ -88,8 +88,6 @@ pub struct GlobalCtx {
     pub(crate) copy_impls: Arc<crate::alloc_check::CopyImpls>,
     /// -V alloc-check: the allocator datatypes (`alloc_check::allocator_dts`)
     pub(crate) allocator_dts: Arc<std::collections::HashSet<Dt>>,
-    /// The ghost allocator heap (vstd::alloc_heap), if vstd provides it
-    pub(crate) alloc_heap: Option<Arc<crate::alloc_heap::HeapInfo>>,
     /// -V alloc-check: datatypes of the whole crate (not pruned per module, so a type's
     /// private fields are still there for the drop rule)
     pub(crate) alloc_datatypes: Arc<HashMap<Dt, crate::ast::Datatype>>,
@@ -380,12 +378,6 @@ impl GlobalCtx {
         let copy_datatypes = crate::alloc_check::copy_datatypes(krate);
         let copy_impls = crate::alloc_check::copy_impls(krate);
         let allocator_dts = crate::alloc_check::allocator_dts(krate);
-        let alloc_heap = crate::alloc_heap::heap_info(krate).map(Arc::new);
-        if let Some(info) = &alloc_heap {
-            crate::alloc_heap::check_hidden_calls_preserve(info, krate)?;
-            crate::alloc_heap::check_impls_follow_decls(krate)?;
-            crate::alloc_heap::check_stateful_overrides(krate)?;
-        }
         let alloc_datatypes: HashMap<Dt, crate::ast::Datatype> = if alloc_check {
             krate.datatypes.iter().map(|d| (d.x.name.clone(), d.clone())).collect()
         } else {
@@ -827,7 +819,6 @@ impl GlobalCtx {
             copy_datatypes: Arc::new(copy_datatypes),
             copy_impls: Arc::new(copy_impls),
             allocator_dts: Arc::new(allocator_dts),
-            alloc_heap,
             alloc_datatypes: Arc::new(alloc_datatypes),
             alloc_exec_typs: Arc::new(HashMap::new()),
             axiom_usage_info,
@@ -868,7 +859,6 @@ impl GlobalCtx {
             copy_datatypes: self.copy_datatypes.clone(),
             copy_impls: self.copy_impls.clone(),
             allocator_dts: self.allocator_dts.clone(),
-            alloc_heap: self.alloc_heap.clone(),
             alloc_datatypes: self.alloc_datatypes.clone(),
             alloc_exec_typs: self.alloc_exec_typs.clone(),
             axiom_usage_info: self.axiom_usage_info,
