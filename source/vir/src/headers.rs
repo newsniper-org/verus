@@ -270,28 +270,13 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                             _ => unreachable!(),
                         };
                     }
-                    HeaderExprX::Allocates(expr, dealloc, alloc_cond) => {
-                        if dealloc.is_some() && matches!(allows, HeaderAllows::Closure) {
-                            return Err(error(
-                                &stmt.span,
-                                "a closure cannot have `deallocates_when` in its `allocates` bound",
-                            ));
-                        }
+                    HeaderExprX::Allocates(expr, alloc_cond) => {
                         allowed |= matches!(allows, HeaderAllows::Closure);
                         if allocates.is_some() {
                             return Err(error(&stmt.span, "only one `allocates` spec allowed"));
                         }
-                        if dealloc.is_some() && deallocations.is_some() {
-                            return Err(error(
-                                &stmt.span,
-                                "`allocates deallocates_when(n, c)` cannot be used with `deallocates`: write `allocates n deallocates deallocates_when(d, c)`",
-                            ));
-                        }
                         allocates = Some(expr.clone());
                         allocates_cond = alloc_cond.clone();
-                        if dealloc.is_some() {
-                            deallocates = dealloc.clone();
-                        }
                     }
                     HeaderExprX::Deallocates(count, cond) => {
                         allowed |= matches!(allows, HeaderAllows::Closure);

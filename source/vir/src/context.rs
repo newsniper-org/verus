@@ -386,7 +386,6 @@ impl GlobalCtx {
         if alloc_check {
             crate::alloc_check::check_imported_bounds_were_checked(krate)?;
             crate::alloc_check::check_unverified_impls_of_bounded_decls(krate)?;
-            crate::alloc_check::check_impls_of_dealloc_decls(krate)?;
         }
         if alloc_check {
             crate::alloc_check::check_alloc_free_drop_impls(

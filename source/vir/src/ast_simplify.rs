@@ -1743,9 +1743,11 @@ fn add_fndef_axioms_to_function(
     }
 
     // `call_deallocates(f, args)` (-V alloc-check): `false` for a `#[verifier::fip]` function, and
-    // its condition for one with `deallocates_when`. A trait method declaration's condition holds
-    // for every implementation (`alloc_check::check_impls_of_dealloc_decls`), so for the
-    // declaration it is an upper bound (an implication); an impl has its own equation.
+    // its condition for one with a `deallocates` bound. A trait method declaration's bound holds
+    // for every implementation (a verified body is counted against it, an implementation's own
+    // bound is checked on entry to stay within it, one without a verified body has the
+    // declaration's), so for the declaration it is an upper bound (an implication); an impl has
+    // its own equation.
     if alloc_check && (function.x.attrs.fip || function.x.deallocates.is_some()) {
         let span = &function.span;
         let bool_typ = Arc::new(TypX::Bool);

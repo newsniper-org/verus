@@ -1429,50 +1429,6 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
     Ok(())
 }
 
-/// `deallocates_when(n, c)` on a trait method declaration is a contract of every implementation:
-/// it deallocates only when `c` holds, which a generic call relies on (`fip_call_check`). An
-/// implementation with a verified body must therefore never deallocate (`#[verifier::fip]`:
-/// whether it deallocates is checked as a whole, not under a condition), unless it is the
-/// allocator runtime's code, which is not checked (`FunctionAttrsX::allocator_runtime`). One
-/// without a verified body (`external_body`, an `assume_specification`) is trusted, like its
-/// other specifications, with the declaration's condition
-/// (`check_unverified_impls_of_bounded_decls`). (An imported implementation has no body here: its
-/// crate checked it, or `check_imported_bounds_were_checked` rejects it.)
-pub(crate) fn check_impls_of_dealloc_decls(krate: &Krate) -> Result<(), VirErr> {
-    // (a declaration with a `deallocates` bound gives its implementations a bound that their
-    // bodies are counted against; only the transitional `allocates deallocates_when(n, c)`, a
-    // condition without a number, needs them to be fip)
-    let decl_has_dealloc: HashSet<&crate::ast::Fun> = krate
-        .functions
-        .iter()
-        .filter(|f| {
-            f.x.deallocates.is_some()
-                && f.x.deallocations.is_none()
-                && matches!(f.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
-        })
-        .map(|f| &f.x.name)
-        .collect();
-    for f in krate.functions.iter() {
-        let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
-        if decl_has_dealloc.contains(method)
-            && f.x.body.is_some()
-            && !f.x.attrs.is_external_body
-            && f.x.proxy.is_none()
-            && !f.x.attrs.fip
-            && !f.x.attrs.allocator_runtime
-        {
-            return Err(error(
-                &f.span,
-                format!(
-                    "this implements `{}`, whose declaration has a `deallocates_when` condition: the implementation must be `#[verifier::fip]` (a generic call of the method relies on every implementation, and a verified body is checked to never deallocate, not to deallocate only under a condition)",
-                    crate::ast_util::fun_as_friendly_rust_name(method),
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// All `Copy` impls of datatypes
 pub(crate) fn copy_impls(krate: &Krate) -> CopyImpls {
     let mut map: CopyImpls = HashMap::new();

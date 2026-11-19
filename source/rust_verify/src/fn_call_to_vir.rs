@@ -1035,7 +1035,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                                 // `allocates allocates_when(a, c)`
                                 let a = expr_to_vir_consume(bctx, &cargs[0])?;
                                 let c = expr_to_vir_consume(bctx, &cargs[1])?;
-                                HeaderExprX::Allocates(when(a, &c), None, Some(c))
+                                HeaderExprX::Allocates(when(a, &c), Some(c))
                             } else if wrapper(BuiltinFunctionItem::DeallocatesWhen).is_some() {
                                 return err_span(
                                     expr.span,
@@ -1043,7 +1043,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                                 );
                             } else {
                                 let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
-                                HeaderExprX::Allocates(arg, None, None)
+                                HeaderExprX::Allocates(arg, None)
                             }
                         }
                         SpecItem::Deallocates => {

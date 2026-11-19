@@ -2576,23 +2576,6 @@ pub(crate) fn finish_function<'tcx>(
         header.allocates =
             Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
     }
-    // The transitional `allocates deallocates_when(n, c)` gives a condition without a bound on the
-    // number of deallocations, which a verified body cannot be checked against; only a
-    // specification without one may state it. (A trait method declaration without a default body
-    // may state one too: a contract of every implementation, see vir's `alloc_check`.)
-    if header.deallocates.is_some()
-        && header.deallocations.is_none()
-        && !header.encapsulates_alloc
-        && !(vattrs.external_body
-            || vattrs.external_fn_specification
-            || (matches!(kind, FunctionKind::TraitMethodDecl { .. }) && header.no_method_body))
-    {
-        return err_span(
-            sig.span,
-            "only a specification without a verified body (`assume_specification`, `external_body`, a trait method declaration without a default body) can state `allocates deallocates_when(n, c)`; a verified function states `deallocates d` (or `deallocates deallocates_when(d, c)`), or is `#[verifier::fip]` if it never deallocates",
-        );
-    }
-
     let body = if vattrs.external_body || vattrs.external_fn_specification || header.no_method_body
     {
         None

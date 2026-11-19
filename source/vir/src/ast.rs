@@ -857,12 +857,9 @@ pub enum HeaderExprX {
     NoUnwind,
     /// This function will not unwind if the given condition holds (function of arguments)
     NoUnwindWhen(Expr),
-    /// `allocates e`: upper bound on the number of allocations (exec functions)
-    /// `allocates n` (with `deallocates_when(n, c)`: and the condition `c` under which the
-    /// function may deallocate)
-    /// (the second is the transitional `allocates deallocates_when(n, c)`'s condition, the third
-    /// `allocates allocates_when(a, c)`'s)
-    Allocates(Expr, Option<Expr>, Option<Expr>),
+    /// `allocates e`: upper bound on the number of allocations (exec functions), with the
+    /// condition `c` for `allocates allocates_when(a, c)`
+    Allocates(Expr, Option<Expr>),
     /// `deallocates d` (with the condition `c` for `deallocates deallocates_when(d, c)`, whose
     /// count is `if c { d } else { 0 }`)
     Deallocates(Expr, Option<Expr>),
