@@ -46,18 +46,45 @@ pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: na
     }
 }
 
+/// Sum of the `deallocates` bounds of cloning the first `n` elements (for `-V alloc-check`)
+pub open spec fn seq_clone_deallocations<T: Clone>(s: Seq<T>, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_clone_deallocations(s, (n - 1) as nat) + call_deallocations(T::clone, (&s[n - 1],))
+    }
+}
+
+/// Cloning elements that each deallocate nothing deallocates nothing in total
+pub broadcast proof fn lemma_seq_clone_deallocations_zero<T: Clone>(s: Seq<T>, n: nat)
+    ensures
+        (forall|i: int| 0 <= i < n ==> #[trigger] call_deallocations(T::clone, (&s[i],)) == 0)
+            ==> #[trigger] seq_clone_deallocations(s, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_clone_deallocations_zero(s, (n - 1) as nat);
+    }
+}
+
 pub assume_specification[ <bool as Clone>::clone ](b: &bool) -> (res: bool)
     returns
         b,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 pub assume_specification[ <char as Clone>::clone ](c: &char) -> (res: char)
     returns
         c,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 #[allow(suspicious_double_ref_op)]
@@ -67,7 +94,9 @@ pub assume_specification<'b, T: core::marker::PointeeSized, 'a>[ <&'b T as Clone
     ensures
         res == b,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T: Clone, const N: usize>[ <[T; N] as Clone>::clone ](a: &[T; N]) -> (res:

@@ -198,7 +198,9 @@ pub fn unreached<A>() -> A
     requires
         false,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     panic!("unreached_external")
 }

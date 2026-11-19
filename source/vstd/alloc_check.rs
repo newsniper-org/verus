@@ -174,8 +174,19 @@ pub broadcast axiom fn axiom_no_dealloc_drop<T: NoDeallocDrop + ?Sized>()
         !#[trigger] drop_may_deallocate::<T>(),
 ;
 
+/// -V alloc-check: the number of deallocations of dropping the values of `s` (in order). Not
+/// defined yet (counting implicit drops is still to come); 0 for a type whose drop cannot
+/// deallocate.
+pub uninterp spec fn seq_drop_deallocations<T>(s: Seq<T>) -> nat;
+
+pub broadcast axiom fn axiom_seq_drop_deallocations_no_dealloc<T>(s: Seq<T>)
+    ensures
+        !drop_may_deallocate::<T>() ==> #[trigger] seq_drop_deallocations(s) == 0,
+;
+
 pub broadcast group group_alloc_check_axioms {
     axiom_no_dealloc_drop,
+    axiom_seq_drop_deallocations_no_dealloc,
     group_op_marker_axioms,
 }
 

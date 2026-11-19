@@ -344,6 +344,73 @@ pub broadcast proof fn lemma_seq_contains_allocates_zero<T: PartialEq<T>>(s: Seq
     }
 }
 
+/// -V alloc-check: the sum of the `deallocates` bounds of `a[i] != b[i]` for `i < n`
+pub open spec fn seq_ne_deallocations<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_ne_deallocations(a, b, (n - 1) as nat) + call_deallocations(
+            <T as PartialEq<U>>::ne,
+            (&a[n - 1], &b[n - 1]),
+        )
+    }
+}
+
+pub broadcast proof fn lemma_seq_ne_deallocations_zero<T: PartialEq<U>, U>(
+    a: Seq<T>,
+    b: Seq<U>,
+    n: nat,
+)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_deallocations(<T as PartialEq<U>>::ne, (&a[i], &b[i]))
+                == 0) ==> #[trigger] seq_ne_deallocations(a, b, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_ne_deallocations_zero(a, b, (n - 1) as nat);
+    }
+}
+
+pub open spec fn seq_eq_deallocations<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>) -> int {
+    if a.len() == b.len() {
+        seq_ne_deallocations(a, b, a.len())
+    } else {
+        0
+    }
+}
+
+pub open spec fn seq_contains_deallocations<T: PartialEq<T>>(s: Seq<T>, value: &T, n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_contains_deallocations(s, value, (n - 1) as nat) + call_deallocations(
+            <T as PartialEq<T>>::eq,
+            (&s[n - 1], value),
+        )
+    }
+}
+
+pub broadcast proof fn lemma_seq_contains_deallocations_zero<T: PartialEq<T>>(
+    s: Seq<T>,
+    value: &T,
+    n: nat,
+)
+    ensures
+        (forall|i: int|
+            0 <= i < n ==> #[trigger] call_deallocations(<T as PartialEq<T>>::eq, (&s[i], value))
+                == 0) ==> #[trigger] seq_contains_deallocations(s, value, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_contains_deallocations_zero(s, value, (n - 1) as nat);
+    }
+}
+
 pub broadcast group group_std_slice_alloc_axioms {
     axiom_next_cost_chunks,
     axiom_aux_alloc_free_chunks,
@@ -355,6 +422,8 @@ pub broadcast group group_std_slice_alloc_axioms {
     axiom_next_back_cost_slice_iter,
     lemma_seq_ne_allocates_zero,
     lemma_seq_contains_allocates_zero,
+    lemma_seq_ne_deallocations_zero,
+    lemma_seq_contains_deallocations_zero,
 }
 
 // starts_with
@@ -381,14 +450,21 @@ pub assume_specification<T: PartialEq>[ <[T]>::starts_with ](
             slice,
             needle,
         )),
-    allocates deallocates_when(
+    allocates
         if needle@.len() <= slice@.len() {
             seq_ne_allocates(needle@, slice@.subrange(0, needle@.len() as int), needle@.len())
         } else {
             0
         },
-        !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
-    )
+    deallocates
+        deallocates_when(
+            if needle@.len() <= slice@.len() {
+            seq_ne_deallocations(needle@, slice@.subrange(0, needle@.len() as int), needle@.len())
+        } else {
+            0
+        },
+            !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
+        )
 ;
 
 // ends_with
@@ -415,7 +491,7 @@ pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
             slice,
             needle,
         )),
-    allocates deallocates_when(
+    allocates
         if needle@.len() <= slice@.len() {
             seq_ne_allocates(
                 needle@,
@@ -425,8 +501,19 @@ pub assume_specification<T: PartialEq>[ <[T]>::ends_with ](
         } else {
             0
         },
-        !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
-    )
+    deallocates
+        deallocates_when(
+            if needle@.len() <= slice@.len() {
+            seq_ne_deallocations(
+                needle@,
+                slice@.subrange(slice@.len() - needle@.len(), slice@.len() as int),
+                needle@.len(),
+            )
+        } else {
+            0
+        },
+            !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
+        )
 ;
 
 impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {
@@ -440,7 +527,10 @@ pub assume_specification<T, I>[ <[T]>::get::<I> ](slice: &[T], i: I) -> (b: Opti
     &<I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::get, (i, slice), b),  allocates deallocates_when(0int, false)
+        call_ensures(<I as SliceIndex<[T]>>::get, (i, slice), b),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -448,7 +538,10 @@ pub assume_specification<T, I>[ <[T]>::get_mut::<I> ](slice: &mut [T], i: I) -> 
     &mut <I as SliceIndex<[T]>>::Output,
 >) where I: SliceIndex<[T]>
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::get_mut, (i, slice), b),  allocates deallocates_when(0int, false)
+        call_ensures(<I as SliceIndex<[T]>>::get_mut, (i, slice), b),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -457,7 +550,10 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as Index<I>>::index ](
     index: I,
 ) -> (output: &<I as SliceIndex<[T]>>::Output)
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),  allocates deallocates_when(0int, false)
+        call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -466,7 +562,10 @@ pub assume_specification<T, I: SliceIndex<[T]>>[ <[T] as IndexMut<I>>::index_mut
     index: I,
 ) -> (output: &mut <I as SliceIndex<[T]>>::Output)
     ensures
-        call_ensures(<I as SliceIndex<[T]>>::index_mut, (index, slice), output),  allocates deallocates_when(0int, false)
+        call_ensures(<I as SliceIndex<[T]>>::index_mut, (index, slice), output),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 // `get_unchecked(i)`/`get_unchecked_mut(i)` share the contract of `index`/`index_mut`, with
@@ -479,7 +578,10 @@ pub assume_specification<T, I>[ <[T]>::get_unchecked::<I> ](
     requires
         index.in_bounds(slice),
     ensures
-        index.index_postcondition(slice, output),  allocates deallocates_when(0int, false)
+        index.index_postcondition(slice, output),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -490,7 +592,10 @@ pub assume_specification<T, I>[ <[T]>::get_unchecked_mut::<I> ](
     requires
         index.in_bounds(&*old(slice)),
     ensures
-        index.index_mut_postcondition(&*old(slice), &*final(slice), output, &*final(output)),  allocates deallocates_when(0int, false)
+        index.index_mut_postcondition(&*old(slice), &*final(slice), output, &*final(output)),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 impl<T, I, const N: usize> super::core::IndexSpecImpl<I> for [T; N]
@@ -507,7 +612,10 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index ](array: &[T; N]
     where
         [T]: Index<I>,
     ensures
-        call_ensures(<[T]>::index, (array, index), output),  allocates deallocates_when(0int, false)
+        call_ensures(<[T]>::index, (array, index), output),  allocates
+            0int,
+        deallocates
+            0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -519,7 +627,10 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index_mut ](array: &mu
             &&& #[trigger] slice@ == old(array)@
             &&& final(slice)@ == final(array)@
             &&& call_ensures(<[T]>::index_mut, (slice, index), output)
-        },  allocates deallocates_when(0int, false)
+        },  allocates
+            0int,
+        deallocates
+            0
 ;
 
 pub assume_specification[ core::hint::unreachable_unchecked ]() -> !
@@ -561,7 +672,13 @@ pub assume_specification<T>[ <[T]>::contains ] (slice: &[T], value: &T) -> (resu
         T: PartialEq<T>,
         ensures
             <T as super::cmp::PartialEqSpec<T>>::obeys_eq_spec() ==> result == spec_slice_contains(slice, value),
-        allocates deallocates_when(seq_contains_allocates(slice@, value, slice@.len()), !super::super::alloc_check::partial_eq_is_fip::<T, T>())
+        allocates
+            seq_contains_allocates(slice@, value, slice@.len()),
+        deallocates
+            deallocates_when(
+                seq_contains_deallocations(slice@, value, slice@.len()),
+                !super::super::alloc_check::partial_eq_is_fip::<T, T>(),
+            )
 ;
 
 // sort_unstable and binary_search (-V alloc-check: they compare their elements with `Ord`'s
@@ -570,8 +687,12 @@ pub assume_specification<T>[ <[T]>::contains ] (slice: &[T], value: &T) -> (resu
 /// What `<[T]>::sort_unstable` on `s` allocates (0 for `T: FbipOrd`)
 pub uninterp spec fn slice_sort_unstable_allocates<T>(s: Seq<T>) -> int;
 
+pub uninterp spec fn slice_sort_unstable_deallocations<T>(s: Seq<T>) -> nat;
+
 /// What `<[T]>::binary_search` on `s` for `x` allocates (0 for `T: FbipOrd`)
 pub uninterp spec fn slice_binary_search_allocates<T>(s: Seq<T>, x: &T) -> int;
+
+pub uninterp spec fn slice_binary_search_deallocations<T>(s: Seq<T>, x: &T) -> nat;
 
 /// `s` is sorted by `T`'s `cmp_spec` (each element is not `Greater` than any later one)
 pub open spec fn spec_sorted_by_cmp<T: Ord>(s: Seq<T>) -> bool {
@@ -591,11 +712,17 @@ pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](slice: &mut [T])
         final(slice)@.to_multiset() == old(slice)@.to_multiset(),
         super::super::laws_cmp::obeys_cmp::<T>() ==> spec_sorted_by_cmp(final(slice)@),
     allocates
+        if super::super::alloc_check::ord_is_fbip::<T>() {
+                0
+            } else {
+                slice_sort_unstable_allocates(old(slice)@)
+            },
+    deallocates
         deallocates_when(
             if super::super::alloc_check::ord_is_fbip::<T>() {
                 0
             } else {
-                slice_sort_unstable_allocates(old(slice)@)
+                slice_sort_unstable_deallocations(old(slice)@)
             },
             !super::super::alloc_check::ord_is_fip::<T>(),
         ),
@@ -630,11 +757,17 @@ pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> 
             },
         },
     allocates
+        if super::super::alloc_check::ord_is_fbip::<T>() {
+                0
+            } else {
+                slice_binary_search_allocates(slice@, x)
+            },
+    deallocates
         deallocates_when(
             if super::super::alloc_check::ord_is_fbip::<T>() {
                 0
             } else {
-                slice_binary_search_allocates(slice@, x)
+                slice_binary_search_deallocations(slice@, x)
             },
             !super::super::alloc_check::ord_is_fip::<T>(),
         ),
@@ -654,7 +787,10 @@ pub assume_specification<T>[ <[T]>::swap ](slice: &mut [T], a: usize, b: usize)
         b < old(slice)@.len(),
     ensures
         final(slice)@ == old(slice)@.update(a as int, old(slice)@[b as int]).update(b as int, old(slice)@[a as int]),
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 // The `iter` method of a `<T>` returns an iterator of type `Iter<'_, T>`,
@@ -786,7 +922,10 @@ pub assume_specification<T> [ <[T]>::first ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
         slice.len() != 0 ==> res.is_some() && res.unwrap() == slice[0]
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -794,7 +933,10 @@ pub assume_specification<T> [ <[T]>::last ](slice: &[T]) -> (res: Option<&T>)
     ensures
         slice.len() == 0 ==> res.is_none(),
         slice.len() != 0 ==> res.is_some() && res.unwrap() == slice@.last()
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[doc(hidden)]
@@ -804,7 +946,10 @@ pub assume_specification<T> [ <[T]>::first_mut ](slice: &mut [T]) -> (res: Optio
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
         old(slice).len() != 0 ==> res.is_some() && *res.unwrap() == old(slice)[0]
             && final(slice)@ == old(slice)@.update(0, *final(res.unwrap()))
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[doc(hidden)]
@@ -814,7 +959,10 @@ pub assume_specification<T> [ <[T]>::last_mut ](slice: &mut [T]) -> (res: Option
         old(slice).len() == 0 ==> res.is_none() && final(slice)@ == seq![],
         old(slice).len() != 0 ==> res.is_some() && *res.unwrap() == old(slice)@.last()
             && final(slice)@ == old(slice)@.update(old(slice).len() - 1, *final(res.unwrap()))
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -824,7 +972,10 @@ pub assume_specification<T> [ <[T]>::split_at ](slice: &[T], mid: usize) -> (ret
     ensures
         ret.0@ == slice@[..mid],
         ret.1@ == slice@[mid..],
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[doc(hidden)]
@@ -838,7 +989,10 @@ pub assume_specification<T> [ <[T]>::split_at_mut ](slice: &mut [T], mid: usize)
         final(ret.0)@.len() == ret.0@.len(),
         final(ret.1)@.len() == ret.1@.len(),
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 // The non-panicking (`Option`-returning) form of `split_at`: `Some((a, b))` split at `mid`
@@ -850,7 +1004,10 @@ pub assume_specification<T> [ <[T]>::split_at_checked ](slice: &[T], mid: usize)
             && a@ == slice@[..mid]
             && b@ == slice@[mid..]),
         mid > slice.len() ==> ret is None,
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -860,7 +1017,10 @@ pub assume_specification<T> [ <[T]>::split_at_unchecked ](slice: &[T], mid: usiz
     ensures
         ret.0@ == slice@[..mid],
         ret.1@ == slice@[mid..],
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[doc(hidden)]
@@ -874,7 +1034,10 @@ pub assume_specification<T> [ <[T]>::split_at_mut_unchecked ](slice: &mut [T], m
         final(ret.0)@.len() == ret.0@.len(),
         final(ret.1)@.len() == ret.1@.len(),
         final(slice)@ == final(ret.0)@ + final(ret.1)@,
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -882,7 +1045,10 @@ pub assume_specification<T> [ <[T]>::split_first ](slice: &[T]) -> (ret: Option<
     ensures
         slice.len() == 0 ==> ret.is_none(),
         slice.len() > 0 ==> (ret matches Some((a, b)) && a == slice[0] && b@ == slice@[1..])
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -895,7 +1061,10 @@ pub assume_specification<T> [ <[T]>::split_first_mut ](slice: &mut [T]) -> (ret:
             && b@.len() == final(b)@.len()
             && final(slice)@ == seq![*final(a)] + final(b)@
         )
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 // The non-panicking form of `split_at_mut` (std 1.100: `split_at_mut_unchecked` when
@@ -911,7 +1080,10 @@ pub assume_specification<T> [ <[T]>::split_at_mut_checked ](slice: &mut [T], mid
             && final(b)@.len() == b@.len()
             && final(slice)@ == final(a)@ + final(b)@),
         mid > old(slice).len() ==> ret is None && final(slice)@ == old(slice)@,
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -919,7 +1091,10 @@ pub assume_specification<T> [ <[T]>::split_last ](slice: &[T]) -> (ret: Option<(
     ensures
         slice.len() == 0 ==> ret.is_none(),
         slice.len() > 0 ==> (ret matches Some((a, b)) && a == slice@.last() && b@ == slice@.drop_last())
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -932,7 +1107,10 @@ pub assume_specification<T> [ <[T]>::split_last_mut ](slice: &mut [T]) -> (ret: 
             && b@.len() == final(b)@.len()
             && final(slice)@ == final(b)@ + seq![*final(a)]
         )
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 /// Copy the contents of `src` into `dst`, which must have the same length.

@@ -320,7 +320,10 @@ macro_rules! std_allocator_specs {
             ) -> (r: Result<NonNull<[u8]>, AllocError>)
                 ensures
                     allocator_block_fits(r, layout),
-                allocates deallocates_when(1int, false)
+                allocates
+                    1int,
+                deallocates
+                    0
             ;
 
             pub assume_specification[ <$a as core::alloc::Allocator>::allocate_zeroed ](
@@ -329,7 +332,10 @@ macro_rules! std_allocator_specs {
             ) -> (r: Result<NonNull<[u8]>, AllocError>)
                 ensures
                     allocator_block_fits(r, layout),
-                allocates deallocates_when(1int, false)
+                allocates
+                    1int,
+                deallocates
+                    0
             ;
 
             #[verifier::trusted_only]

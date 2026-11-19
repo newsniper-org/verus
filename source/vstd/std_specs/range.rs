@@ -146,8 +146,13 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
 // rustc 1.99.1 `RangeBounds::contains`: `start <= item && item < end`
 
     allocates
+        call_allocations(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocations(
+            <U as PartialOrd<Idx>>::lt,
+            (i, &r.end),
+        ),
+    deallocates
         deallocates_when(
-            call_allocations(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocations(
+            call_deallocations(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_deallocations(
                 <U as PartialOrd<Idx>>::lt,
                 (i, &r.end),
             ),
@@ -170,11 +175,17 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
 // `start <= item && (if exhausted { item < start } else { item <= end })`
 
     allocates
+        call_allocations(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
+            call_allocations(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
+        } else {
+            call_allocations(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+        },
+    deallocates
         deallocates_when(
-            call_allocations(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
-                call_allocations(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
+            call_deallocations(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
+                call_deallocations(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
             } else {
-                call_allocations(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+                call_deallocations(<U as PartialOrd<Idx>>::le, (i, &r@.end))
             },
             !(super::super::alloc_check::partial_ord_is_fip::<Idx, U>()
                 && super::super::alloc_check::partial_ord_is_fip::<U, Idx>()),

@@ -446,9 +446,11 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * **지금은 암묵적 drop을 세지 않습니다.** `deallocates` 상한이 있는 함수(자기 것이든 trait 선언에서 물려받은 것이든)는
   컴파일러가 넣는 drop으로 메모리를 놓으면 안 됩니다. fip 함수처럼 컴파일된 프로그램에서 검사합니다. 클로저에는 아직
   `deallocates`를 붙일 수 없습니다(`#[verifier::fip]` 클로저는 해제하지 않습니다).
-* (과도기: 이전 형태 `allocates deallocates_when(n, c)`는 검증된 본문이 없는 명세에서 아직 받습니다. `allocates n`에 조건
-  `c`가 붙은 것이고 해제 횟수에는 상한이 없으므로, `deallocates` 상한이 있는 함수는 이것을 부를 수 없습니다. vstd는 위의
-  형태로 옮겨 갑니다.)
+* 이전 형태 `allocates deallocates_when(n, c)`(횟수 없는 조건)는 더는 받지 않습니다.
+  `allocates n deallocates deallocates_when(d, c)`로 씁니다.
+* std 함수에 대한 vstd 명세는 해제를 적습니다. 메모리를 놓을 수 있는 함수는 횟수로 적습니다(`Vec::push`는 기존 버퍼를
+  키울 때 1, `Vec::clear`와 `truncate`는 지운 원소들의 drop, 사용자 코드를 부르는 비교나 `clone`은 그 호출들이 해제하는
+  만큼). 아직 적지 않은 명세는 `deallocates` 상한이 있는 함수(그리고 fip 함수)에서 부를 수 없습니다.
 
 ## 완전한 제자리 함수: `#[verifier::fip]`
 
@@ -486,8 +488,7 @@ fn push_spare(v: &mut Vec<u64>)
   메서드 선언도 상한이나 조건을 적을 수 있고, 그러면 모든 구현이 지켜야 하는 계약이 됩니다. 검증된 본문이 있는 구현은
   그 상한으로 셉니다. 본문이 없는 구현(`external_body`, `assume_specification`)은 선언의 것을 따르며 자기 것을 따로 적을
   수 없습니다. 할당기 런타임의 코드는 예외입니다(`Allocator::allocate`는 `deallocates 0`으로 선언되어 있습니다).
-  (횟수가 없는 과도기 형태 `allocates deallocates_when(n, c)`에서는 검증된 본문이 있는 구현이 `#[verifier::fip]`여야
-  합니다.) Verus가 검사하지 않는 구현이나 `-V alloc-check`로 검증하지
+ Verus가 검사하지 않는 구현이나 `-V alloc-check`로 검증하지
   않은 crate의 구현은 거부합니다.
   impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)은 그 메서드의 선언이 `#[verifier::fip]`이거나, 선언의
   조건이 거짓임을 호출하는 쪽이 보이거나, 연산자 trait의 메서드를 그 표시 trait을 통해 부를

@@ -96,14 +96,18 @@ pub assume_specification[ <f32 as Clone>::clone ](f: &f32) -> (res: f32)
     ensures
         res == f,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 pub assume_specification[ <f64 as Clone>::clone ](f: &f64) -> (res: f64)
     ensures
         res == f,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 #[verifier::external_trait_specification]
@@ -136,7 +140,9 @@ pub fn float_cast<From: Copy + IeeeFloatCast<To>, To>(from: From) -> (to: To)
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     unimplemented!{}
 }

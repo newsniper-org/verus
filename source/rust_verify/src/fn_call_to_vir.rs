@@ -1012,7 +1012,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                         }
                         _ => None,
                     };
-                    // `if c { n } else { 0 }`
+                    // `if c { n } else { 0 }` (with a copy of `c`, which is also the condition)
                     let when = |n: vir::ast::Expr, c: &vir::ast::Expr| {
                         let zero = bctx.spanned_typed_new(
                             expr.span,
@@ -1020,7 +1020,8 @@ fn verus_item_to_vir<'tcx, 'a>(
                             ExprX::Const(Constant::Int(num_bigint::BigInt::from(0))),
                         );
                         let typ = n.typ.clone();
-                        bctx.spanned_typed_new(expr.span, &typ, ExprX::If(c.clone(), n, Some(zero)))
+                        let c = bctx.clone_expr_with_fresh_ids(c);
+                        bctx.spanned_typed_new(expr.span, &typ, ExprX::If(c, n, Some(zero)))
                     };
                     let header = match spec_item {
                         SpecItem::Allocates => {
@@ -1035,14 +1036,11 @@ fn verus_item_to_vir<'tcx, 'a>(
                                 let a = expr_to_vir_consume(bctx, &cargs[0])?;
                                 let c = expr_to_vir_consume(bctx, &cargs[1])?;
                                 HeaderExprX::Allocates(when(a, &c), None, Some(c))
-                            } else if let Some(cargs) =
-                                wrapper(BuiltinFunctionItem::DeallocatesWhen)
-                            {
-                                // (transitional) `allocates deallocates_when(n, c)`: the bound `n`,
-                                // and the condition `c` under which the function may deallocate
-                                let n = expr_to_vir_consume(bctx, &cargs[0])?;
-                                let c = expr_to_vir_consume(bctx, &cargs[1])?;
-                                HeaderExprX::Allocates(n, Some(c), None)
+                            } else if wrapper(BuiltinFunctionItem::DeallocatesWhen).is_some() {
+                                return err_span(
+                                    expr.span,
+                                    "`allocates deallocates_when(n, c)` is no longer accepted: write `allocates n deallocates deallocates_when(d, c)` (at most `d` deallocations, only when `c`)",
+                                );
                             } else {
                                 let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
                                 HeaderExprX::Allocates(arg, None, None)
@@ -1066,8 +1064,20 @@ fn verus_item_to_vir<'tcx, 'a>(
                                     "`allocates_when(a, c)` belongs in an `allocates` bound; a `deallocates` bound takes `deallocates_when(d, c)`",
                                 );
                             } else {
+                                // `deallocates d`: the condition is `d > 0` (on a copy of `d`)
                                 let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
-                                HeaderExprX::Deallocates(arg, None)
+                                let zero = bctx.spanned_typed_new(
+                                    expr.span,
+                                    &arg.typ,
+                                    ExprX::Const(Constant::Int(num_bigint::BigInt::from(0))),
+                                );
+                                let positive = vir::ast_util::mk_ineq(
+                                    &arg.span,
+                                    &zero,
+                                    &bctx.clone_expr_with_fresh_ids(&arg),
+                                    vir::ast::InequalityOp::Lt,
+                                );
+                                HeaderExprX::Deallocates(arg, Some(positive))
                             }
                         }
                         SpecItem::EncapsulatesAlloc => {

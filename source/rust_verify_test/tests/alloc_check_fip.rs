@@ -191,7 +191,7 @@ test_verify_one_file_with_options! {
         use vstd::prelude::*;
         #[verifier::external_body]
         fn maybe_free(v: &mut Vec<u64>, b: bool)
-            allocates deallocates_when(0int, b)
+            allocates 0int deallocates deallocates_when(1int, b)
         {
         }
         #[verifier::fip]
@@ -206,13 +206,14 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] deallocates_when_needs_unverified_body ["vstd", "-V alloc-check"] => verus_code! {
+    #[test] deallocates_when_transitional_form_rejected ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
+        #[verifier::external_body]
         fn f(b: bool)
             allocates deallocates_when(0int, b)
         {
         }
-    } => Err(err) => assert_vir_error_msg(err, "only a specification without a verified body")
+    } => Err(err) => assert_vir_error_msg(err, "`allocates deallocates_when(n, c)` is no longer accepted")
 }
 
 test_verify_one_file_with_options! {
@@ -2819,7 +2820,7 @@ test_verify_one_file_with_options! {
 
         pub trait Pool {
             fn take(&mut self, n: u64) -> (r: u64)
-                allocates deallocates_when(0int, n > 10);
+                allocates 0int deallocates deallocates_when(1int, n > 10);
         }
 
         pub struct P;
@@ -2857,7 +2858,7 @@ test_verify_one_file_with_options! {
 
         pub trait Pool {
             fn take(&mut self, n: u64) -> (r: u64)
-                allocates deallocates_when(0int, n > 10);
+                allocates 0int deallocates deallocates_when(1int, n > 10);
         }
 
         #[verifier::fip]
@@ -2868,12 +2869,13 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
+    // (an implementation that is not fip is counted against the declaration's bound)
     #[test] fip_trait_decl_deallocates_when_impl_not_fip ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
 
         pub trait Pool {
             fn take(&mut self, n: u64) -> (r: u64)
-                allocates deallocates_when(0int, n > 10);
+                allocates 0 deallocates deallocates_when(1int, n > 10);
         }
 
         pub struct P;
@@ -2885,21 +2887,22 @@ test_verify_one_file_with_options! {
                 n
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "the implementation must be `#[verifier::fip]`")
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
-    #[test] fip_trait_decl_deallocates_when_default_body_rejected ["vstd", "-V alloc-check"] => verus_code! {
+    // (a default body is counted against the bound, as any verified body)
+    #[test] fip_trait_decl_deallocates_when_default_body ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
 
         pub trait Pool {
             fn take(&mut self, n: u64) -> (r: u64)
-                allocates deallocates_when(0int, n > 10)
+                allocates 0 deallocates deallocates_when(1int, n > 10)
             {
                 n
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "can state `allocates deallocates_when(n, c)`")
+    } => Ok(())
 }
 
 // `f.allocations(args)` / `f.deallocates(args)` (`call_allocations`, `call_deallocates`): a
@@ -2916,21 +2919,21 @@ test_verify_one_file_with_options! {
 
         #[verifier::external_body]
         fn shrink_if_big(x: u64) -> (r: u64)
-            allocates deallocates_when(0int, x > 5)
+            allocates 0int deallocates deallocates_when(1int, x > 5)
         {
             x
         }
 
         #[verifier::external_body]
         fn outer(x: u64) -> (r: u64)
-            allocates deallocates_when(inner.allocations(x), inner.deallocates(x))
+            allocates inner.allocations(x) deallocates deallocates_when(inner.deallocations(x), inner.deallocates(x))
         {
             inner(x)
         }
 
         #[verifier::external_body]
         fn outer2(x: u64) -> (r: u64)
-            allocates deallocates_when(shrink_if_big.allocations(x), shrink_if_big.deallocates(x))
+            allocates shrink_if_big.allocations(x) deallocates deallocates_when(shrink_if_big.deallocations(x), shrink_if_big.deallocates(x))
         {
             shrink_if_big(x)
         }
@@ -2960,14 +2963,14 @@ test_verify_one_file_with_options! {
 
         #[verifier::external_body]
         fn shrink_if_big(x: u64) -> (r: u64)
-            allocates deallocates_when(0int, x > 5)
+            allocates 0int deallocates deallocates_when(1int, x > 5)
         {
             x
         }
 
         #[verifier::external_body]
         fn outer2(x: u64) -> (r: u64)
-            allocates deallocates_when(shrink_if_big.allocations(x), shrink_if_big.deallocates(x))
+            allocates shrink_if_big.allocations(x) deallocates deallocates_when(shrink_if_big.deallocations(x), shrink_if_big.deallocates(x))
         {
             shrink_if_big(x)
         }
@@ -2986,7 +2989,7 @@ test_verify_one_file_with_options! {
 
         pub trait Pool {
             fn peek(&self, n: u64) -> (r: u64)
-                allocates deallocates_when(0int, n > 10);
+                allocates 0int deallocates deallocates_when(1int, n > 10);
         }
 
         proof fn decl_bound<T: Pool>(t: &T, n: u64)
@@ -3230,7 +3233,7 @@ test_verify_one_file_with_options! {
         use vstd::prelude::*;
         trait T {
             fn m(&self) allocates 1;
-            fn n(&self, k: u64) allocates deallocates_when(0int, k > 5);
+            fn n(&self, k: u64) allocates 0int deallocates deallocates_when(1int, k > 5);
         }
         struct S;
         impl T for S {
@@ -3254,10 +3257,14 @@ test_verify_one_file_with_options! {
 test_verify_one_file_with_options! {
     #[test] encapsulates_alloc_impl_exceeds_condition ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
-        trait T { fn n(&self, k: u64) allocates deallocates_when(0int, k > 5); }
+        trait T { fn n(&self, k: u64) allocates 0int deallocates deallocates_when(1int, k > 5); }
         struct S;
         impl T for S { fn n(&self, k: u64) encapsulates alloc(0, if k > 2 { 1 } else { 0 }) { } }
-    } => Err(err) => assert_vir_error_msg(err, "may deallocate where the trait method may not")
+    // (the declaration's bound is 0 where `k <= 5`, so the count check reports it as well)
+    } => Err(err) => assert_vir_error_msgs(err, &[
+        "may deallocate where the trait method may not",
+        "may count more deallocations than the trait method's",
+    ])
 }
 
 // across crates: the clause is in the `.vir`, and a strict function may call such a function as a

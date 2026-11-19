@@ -125,7 +125,9 @@ pub assume_specification<T>[ Option::<T>::is_some ](option: &Option<T>) -> (b: b
         b == is_some(option),
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // is_none
@@ -140,7 +142,9 @@ pub assume_specification<T>[ Option::<T>::is_none ](option: &Option<T>) -> (b: b
         b == is_none(option),
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // as_ref
@@ -150,7 +154,9 @@ pub assume_specification<T>[ Option::<T>::as_ref ](option: &Option<T>) -> (a: Op
         a is Some ==> option->0 == a->0,
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // unwrap
@@ -169,7 +175,9 @@ pub assume_specification<T>[ Option::<T>::unwrap ](option: Option<T>) -> (t: T)
     ensures
         t == spec_unwrap(option),
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // unwrap_or
@@ -206,7 +214,9 @@ pub assume_specification<T>[ Option::<T>::expect ](option: Option<T>, msg: &str)
     ensures
         t == spec_expect(option, msg),
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // take
@@ -216,7 +226,9 @@ pub assume_specification<T>[ Option::<T>::take ](option: &mut Option<T>) -> (t: 
         *final(option) is None,
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // map
@@ -370,9 +382,15 @@ pub assume_specification<T: PartialEq>[ <Option<T> as PartialEq>::eq ](
     y: &Option<T>,
 ) -> bool
     allocates
+        if x.is_some() && y.is_some() {
+            call_allocations(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
+        } else {
+            0
+        },
+    deallocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocations(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
+                call_deallocations(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },
@@ -402,9 +420,15 @@ pub assume_specification<T: PartialOrd>[ <Option<T> as PartialOrd>::partial_cmp 
     y: &Option<T>,
 ) -> Option<core::cmp::Ordering>
     allocates
+        if x.is_some() && y.is_some() {
+            call_allocations(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
+        } else {
+            0
+        },
+    deallocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocations(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
+                call_deallocations(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },
@@ -433,9 +457,15 @@ pub assume_specification<T: Ord>[ <Option<T> as Ord>::cmp ](
     y: &Option<T>,
 ) -> core::cmp::Ordering
     allocates
+        if x.is_some() && y.is_some() {
+            call_allocations(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
+        } else {
+            0
+        },
+    deallocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocations(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
+                call_deallocations(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },
@@ -469,7 +499,9 @@ pub assume_specification<T>[ Option::as_mut ](option: &mut Option<T>) -> (res: O
                 && *final(res.unwrap()) == final(option).unwrap(),
         }),
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T>[ Option::as_slice ](option: &Option<T>) -> (res: &[T])

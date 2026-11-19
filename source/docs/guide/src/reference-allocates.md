@@ -469,10 +469,13 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   its trait method declaration's) must not free memory through the drops that the compiler
   inserts: they are checked on the compiled program, as a fip function's are. A closure cannot
   have a `deallocates` bound yet (a `#[verifier::fip]` closure deallocates nothing).
-* (Transitional: `allocates deallocates_when(n, c)`, the earlier form, is still accepted on a
-  specification without a verified body. It is `allocates n` with the condition `c` and no bound
-  on the number of deallocations, so a function with a `deallocates` bound cannot call it. vstd
-  moves to the forms above.)
+* The earlier form `allocates deallocates_when(n, c)` (a condition without a number) is no longer
+  accepted: write `allocates n deallocates deallocates_when(d, c)`.
+* vstd's specifications of std functions state their deallocations: those that may free memory
+  do it with a count (`Vec::push` 1 where it grows an existing buffer, `Vec::clear` and
+  `truncate` the drops of the removed elements, a comparison or `clone` that calls the user's
+  code what those calls deallocate). A specification that does not state it yet cannot be
+  called from a function with a `deallocates` bound (nor from a fip function).
 
 ## Fully in-place functions: `#[verifier::fip]`
 
@@ -513,8 +516,7 @@ Two things are checked:
   of every implementation: an implementation with a verified body is counted against it, one
   without (`external_body`, an `assume_specification`) has the declaration's and may not state
   its own, and the allocator runtime's code is exempt (`Allocator::allocate` is declared
-  `deallocates 0`). (With the transitional `allocates deallocates_when(n, c)`, which has no
-  number, an implementation with a verified body must be `#[verifier::fip]`.) An implementation
+  `deallocates 0`). An implementation
   that Verus does not check, or one in a crate not verified with `-V alloc-check`, is rejected. A
   call of a trait method that does not resolve to an impl (a generic call) is accepted only if
   the method's declaration is `#[verifier::fip]`, if the caller shows its declaration's

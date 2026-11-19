@@ -65,7 +65,9 @@ pub exec fn slice_index_get<T>(slice: &[T], i: usize) -> (out: &T)
     ensures
         *out == slice@.index(i as int),
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     &slice[i]
 }
@@ -89,7 +91,9 @@ pub assume_specification<T>[ <[T]>::len ](slice: &[T]) -> (len: usize)
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 pub open spec fn spec_slice_is_empty<T>(slice: &[T]) -> bool {

@@ -358,6 +358,16 @@ impl<'tcx> crate::context::BodyCtxt<'tcx> {
         )
     }
 
+    /// Clones an expression with fresh IDs (for an expression used twice, such as a condition
+    /// that is also part of a count: its temporaries must not share IDs)
+    pub(crate) fn clone_expr_with_fresh_ids(&self, e: &vir::ast::Expr) -> vir::ast::Expr {
+        let stmt = vir::def::Spanned::new(e.span.clone(), vir::ast::StmtX::Expr(e.clone()));
+        match &self.clone_stmts_with_fresh_ids(&[stmt])[0].x {
+            vir::ast::StmtX::Expr(e) => e.clone(),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn spanned_new<X>(&self, span: Span, x: X) -> Arc<Spanned<X>> {
         self.ctxt.spanned_new(span, x)
     }

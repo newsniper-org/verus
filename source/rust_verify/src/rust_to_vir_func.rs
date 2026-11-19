@@ -2592,13 +2592,6 @@ pub(crate) fn finish_function<'tcx>(
             "only a specification without a verified body (`assume_specification`, `external_body`, a trait method declaration without a default body) can state `allocates deallocates_when(n, c)`; a verified function states `deallocates d` (or `deallocates deallocates_when(d, c)`), or is `#[verifier::fip]` if it never deallocates",
         );
     }
-    // `deallocates d` without a condition: the function may deallocate where `d > 0`
-    if let (Some(count), None) = (&header.deallocations, &header.deallocates) {
-        let zero = vir::ast_util::mk_int_lit_from_usize(&count.span, 0);
-        let zero = vir::ast::SpannedTyped::new(&count.span, &count.typ, zero.x.clone());
-        header.deallocates =
-            Some(vir::ast_util::mk_ineq(&count.span, &zero, count, vir::ast::InequalityOp::Lt));
-    }
 
     let body = if vattrs.external_body || vattrs.external_fn_specification || header.no_method_body
     {

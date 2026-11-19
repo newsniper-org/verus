@@ -82,7 +82,9 @@ pub exec fn array_index_get<T, const N: usize>(ar: &[T; N], i: usize) -> (out: &
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     &ar[i]
 }
@@ -127,7 +129,9 @@ pub fn array_as_slice<T, const N: usize>(ar: &[T; N]) -> (out: &[T])
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     ar
 }
@@ -164,7 +168,9 @@ pub fn array_fill_for_copy_types<T: Copy, const N: usize>(t: T) -> (res: [T; N])
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     [t;N]
 }
@@ -202,7 +208,9 @@ pub fn ref_mut_array_unsizing_coercion<T, const N: usize>(r: &mut [T; N]) -> (ou
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 {
     r
 }

@@ -180,7 +180,10 @@ pub assume_specification<T>[ core::mem::swap::<T> ](a: &mut T, b: &mut T)
         *final(a) == *old(b),
         *final(b) == *old(a),
     opens_invariants none
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::alloc_check_skip_drops]
@@ -189,13 +192,19 @@ pub assume_specification<T>[ core::mem::replace::<T> ](dest: &mut T, src: T) -> 
         *final(dest) == src,
         res == *old(dest),
     opens_invariants none
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 // `forget` never runs a destructor, so it never deallocates (what `t` owns is leaked instead)
 pub assume_specification<T>[ core::mem::forget::<T> ](t: T)
     opens_invariants none
-    no_unwind  allocates deallocates_when(0int, false)
+    no_unwind  allocates
+        0int,
+    deallocates
+        0
 ;
 
 #[verifier::external_type_specification]

@@ -1268,6 +1268,29 @@ pub fn func_def_to_sst(
                     StmX::Assert(state.next_assert_id(), Some(msg), le),
                 ));
             }
+            // (and `d <= bound` for the declaration's `deallocates` bound)
+            if let (Some(own), Some(inh)) = (&function.x.deallocations, &decl.x.deallocations) {
+                let own = lo_current.lower_pure(ctx, &mut state, own, &mut req_stms)?;
+                let inh = lo.lower_pure(ctx, &mut state, inh, &mut req_stms)?;
+                let msg = crate::messages::error(
+                    &own.span,
+                    "this `encapsulates alloc(a, d)` may count more deallocations than the trait method's `deallocates` bound",
+                )
+                .secondary_label(&inh.span, "the trait method's bound");
+                let le = SpannedTyped::new(
+                    &own.span,
+                    &bool_typ,
+                    crate::sst::ExpX::Binary(
+                        crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                        own.clone(),
+                        inh,
+                    ),
+                );
+                encapsulates_entry_checks.push(Spanned::new(
+                    own.span.clone(),
+                    StmX::Assert(state.next_assert_id(), Some(msg), le),
+                ));
+            }
             let decl_cond =
                 if decl.x.attrs.fip { Some(None) } else { decl.x.deallocates.as_ref().map(Some) };
             if let (Some(own), Some(decl_cond)) = (&function.x.deallocates, decl_cond) {

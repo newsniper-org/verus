@@ -16,7 +16,9 @@ pub assume_specification<T, A: Allocator>[ <[T]>::into_vec ](b: Box<[T], A>) -> 
     ensures
         v@ == b@,
     allocates
-        deallocates_when(0int, false),
+        0int,
+    deallocates
+        0,
 ;
 
 // std 1.100 `alloc/src/boxed/convert.rs`: `Box::clone_from_ref`, which allocates once (nothing
@@ -33,12 +35,14 @@ pub assume_specification<'a, T: Clone>[ <Box<[T]> as core::convert::From<&'a [T]
         forall|i| #![all_triggers] 0 <= i < slice@.len() ==> cloned::<T>(slice@[i], res@[i]),
         slice@ =~= res@ ==> slice@ == res@,
     allocates
+        (if slice@.len() == 0 {
+            0int
+        } else {
+            1int
+        }) + super::clone::seq_clone_allocates(slice@, slice@.len()),
+    deallocates
         deallocates_when(
-            (if slice@.len() == 0 {
-                0int
-            } else {
-                1int
-            }) + super::clone::seq_clone_allocates(slice@, slice@.len()),
+            super::clone::seq_clone_deallocations(slice@, slice@.len()),
             !super::super::alloc_check::clone_is_fip::<T>(),
         ),
 ;
@@ -47,7 +51,9 @@ pub assume_specification<T>[ Box::<T>::new ](t: T) -> (v: Box<T>)
     ensures
         *v == t,
     allocates
-        deallocates_when(1int, false),
+        1int,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T: core::default::Default>[ <Box<

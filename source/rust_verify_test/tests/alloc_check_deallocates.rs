@@ -165,3 +165,14 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_encapsulates_impl_within_decl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        trait T { fn m(&mut self) deallocates 1; }
+        struct S;
+        impl T for S { fn m(&mut self) encapsulates alloc(0, 1) { } }
+        struct U;
+        impl T for U { fn m(&mut self) encapsulates alloc(0, 2) { } }
+    } => Err(err) => assert_vir_error_msg(err, "may count more deallocations than the trait method's")
+}

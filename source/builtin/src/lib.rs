@@ -2191,9 +2191,6 @@ pub fn deallocated() -> int {
 /// -V alloc-check: `deallocates deallocates_when(d, c)`: the function deallocates (on a normal
 /// return) only when `c` holds, at most `d` times: its count is `if c { d } else { 0 }` and
 /// `call_deallocates` of it is `c` (both evaluated at entry).
-/// (Transitional: `allocates deallocates_when(n, c)`, the earlier form, is the bound `allocates n`
-/// with the condition `c` and no bound on the number of deallocations; only a function without a
-/// verified body may state it.)
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::deallocates_when"]
 pub fn deallocates_when<A: Integer>(_deallocates: A, _when: bool) -> A {
