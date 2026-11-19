@@ -86,6 +86,10 @@ pub struct Header {
     pub unwind_spec: Option<UnwindSpec>,
     pub allocates: Option<Expr>,
     pub deallocates: Option<Expr>,
+    /// `allocates allocates_when(a, c)`'s condition `c`
+    pub allocates_cond: Option<Expr>,
+    /// `deallocates d` (or `deallocates_when(d, c)`, or `encapsulates alloc(a, d)`): the count
+    pub deallocations: Option<Expr>,
     /// `encapsulates alloc(a, d)` (which also gives `allocates` and `deallocates`)
     pub encapsulates_alloc: bool,
     pub extra_dependencies: Vec<Fun>,
@@ -111,6 +115,8 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
     let mut unwind_spec: Option<UnwindSpec> = None;
     let mut allocates: Option<Expr> = None;
     let mut deallocates: Option<Expr> = None;
+    let mut allocates_cond: Option<Expr> = None;
+    let mut deallocations: Option<Expr> = None;
     let mut encapsulates_alloc = false;
     let mut open_visibility_qualifier: Option<Visibility> = None;
     let mut n = 0;
@@ -264,7 +270,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                             _ => unreachable!(),
                         };
                     }
-                    HeaderExprX::Allocates(expr, dealloc) => {
+                    HeaderExprX::Allocates(expr, dealloc, alloc_cond) => {
                         if dealloc.is_some() && matches!(allows, HeaderAllows::Closure) {
                             return Err(error(
                                 &stmt.span,
@@ -275,10 +281,33 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                         if allocates.is_some() {
                             return Err(error(&stmt.span, "only one `allocates` spec allowed"));
                         }
+                        if dealloc.is_some() && deallocations.is_some() {
+                            return Err(error(
+                                &stmt.span,
+                                "`allocates deallocates_when(n, c)` cannot be used with `deallocates`: write `allocates n deallocates deallocates_when(d, c)`",
+                            ));
+                        }
                         allocates = Some(expr.clone());
-                        deallocates = dealloc.clone();
+                        allocates_cond = alloc_cond.clone();
+                        if dealloc.is_some() {
+                            deallocates = dealloc.clone();
+                        }
                     }
-                    HeaderExprX::EncapsulatesAlloc(a, cond) => {
+                    HeaderExprX::Deallocates(count, cond) => {
+                        allowed |= matches!(allows, HeaderAllows::Closure);
+                        if deallocations.is_some() {
+                            return Err(error(&stmt.span, "only one `deallocates` spec allowed"));
+                        }
+                        if deallocates.is_some() {
+                            return Err(error(
+                                &stmt.span,
+                                "`deallocates` cannot be used with `allocates deallocates_when(n, c)`: write `allocates n deallocates deallocates_when(d, c)`",
+                            ));
+                        }
+                        deallocations = Some(count.clone());
+                        deallocates = cond.clone();
+                    }
+                    HeaderExprX::EncapsulatesAlloc(a, d, cond) => {
                         if !matches!(allows, HeaderAllows::All) {
                             return Err(error(
                                 &stmt.span,
@@ -291,7 +320,14 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                                 "a function with `encapsulates alloc(a, d)` cannot also have `allocates` (each call counts as `a` allocations)",
                             ));
                         }
+                        if deallocations.is_some() || deallocates.is_some() {
+                            return Err(error(
+                                &stmt.span,
+                                "a function with `encapsulates alloc(a, d)` cannot also have `deallocates` (each call counts as `d` deallocations)",
+                            ));
+                        }
                         allocates = Some(a.clone());
+                        deallocations = Some(d.clone());
                         deallocates = Some(cond.clone());
                         encapsulates_alloc = true;
                     }
@@ -350,6 +386,8 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
         unwind_spec,
         allocates,
         deallocates,
+        allocates_cond,
+        deallocations,
         encapsulates_alloc,
         extra_dependencies,
         open_visibility_qualifier,

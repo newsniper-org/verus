@@ -519,7 +519,8 @@ fn visit_exp(ctx: &Ctx, state: &mut State, exp: &Exp) -> Exp {
             CallFun::InternalFun(
                 InternalFun::OpenInvariantMask(name, _)
                 | InternalFun::AllocBound(name)
-                | InternalFun::DeallocCond(name),
+                | InternalFun::DeallocCond(name)
+                | InternalFun::DeallocBound(name),
             ) => {
                 let function = &ctx.func_sst_map[name].x;
                 let is_spec = function.mode == Mode::Spec;
@@ -1112,6 +1113,7 @@ fn visit_func_decl_sst(
         unwind_condition,
         alloc_bound,
         dealloc_cond,
+        dealloc_bound,
         fndef_axioms,
     } = function;
 
@@ -1123,6 +1125,7 @@ fn visit_func_decl_sst(
     let unwind_condition = unwind_condition.as_ref().map(|e| visit_exp_native(ctx, state, e));
     let alloc_bound = alloc_bound.as_ref().map(|e| visit_exp_native(ctx, state, e));
     let dealloc_cond = dealloc_cond.as_ref().map(|e| visit_exp_native(ctx, state, e));
+    let dealloc_bound = dealloc_bound.as_ref().map(|e| visit_exp_native(ctx, state, e));
     state.types.pop_scope();
 
     state.types.push_scope(true);
@@ -1141,6 +1144,7 @@ fn visit_func_decl_sst(
         unwind_condition,
         alloc_bound,
         dealloc_cond,
+        dealloc_bound,
         fndef_axioms,
     }
 }

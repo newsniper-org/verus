@@ -733,6 +733,27 @@ pub fn func_decl_to_air(ctx: &mut Ctx, function: &FunctionSst) -> Result<Command
         );
     }
 
+    // Deallocation bound (-V alloc-check, `deallocates`)
+    if let Some(e) = &func_decl_sst.dealloc_bound {
+        let _ = req_ens_to_air(
+            ctx,
+            &mut decl_commands,
+            &func_decl_sst.req_inv_pars,
+            &vec![],
+            &Arc::new(vec![e.clone()]),
+            &Arc::new(vec![]),
+            &function.x.typ_params,
+            &req_typs,
+            &crate::def::prefix_dealloc_bound(&fun_to_air_ident(&ctx.name_ctxt, &function.x.name)),
+            None,
+            function.x.attrs.integer_ring,
+            typ_to_air(ctx, &e.typ),
+            false,
+            None,
+            None,
+        );
+    }
+
     // Deallocation condition (-V alloc-check, `deallocates_when`)
     if let Some(e) = &func_decl_sst.dealloc_cond {
         let _ = req_ens_to_air(

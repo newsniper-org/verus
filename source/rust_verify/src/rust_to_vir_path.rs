@@ -110,6 +110,27 @@ fn def_to_friendly_path_ident<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Segment
     }
 }
 
+/// `def_id_to_vir_path_option` without its process-wide cache, for a compilation other than the
+/// one Verus verified (`fip_mir`'s checks run on the compile that erases ghost code, whose
+/// `DefId`s differ from the verified one's: a cached `DefId` could name another item there)
+pub(crate) fn def_id_to_vir_path_option_uncached<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    verus_items: &VerusItems,
+    def_id: DefId,
+) -> Option<Path> {
+    use crate::verus_items::RustPrivate;
+    let verus_item = verus_items.id_to_name.get(&def_id);
+    if let Some(VerusItem::RustPrivate(RustPrivate::Path(path))) = verus_item {
+        return Some(path.clone());
+    }
+    if let Some(v @ VerusItem::RustPrivate(_)) = verus_item {
+        if let Some(id) = verus_items.name_to_rust_private_id.get(v) {
+            return unchecked_def_id_to_vir_path(tcx, verus_items, *id);
+        }
+    }
+    unchecked_def_id_to_vir_path(tcx, verus_items, def_id)
+}
+
 fn remapped_def_id_to_vir_path<'tcx>(
     tcx: TyCtxt<'tcx>,
     verus_items: &VerusItems,

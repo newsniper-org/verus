@@ -39,10 +39,10 @@ use verus_syn::{
     ItemConst, ItemEnum, ItemFn, ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemUnion,
     Lit, Local, MatchesOpExpr, MatchesOpToken, Meta, MetaList, ModeSpec, ModeSpecChecked, Pat,
     PatIdent, PatType, Path, PathArguments, Publish, Receiver, Recommends, Requires, ReturnType,
-    Returns, Signature, SignatureAllocates, SignatureDecreases, SignatureEncapsulates,
-    SignatureInvariants, SignatureSpec, SignatureSpecAttr, SignatureUnwind, Stmt, Token, TraitItem,
-    TraitItemFn, Type, TypeFnProof, TypeFnSpec, TypePath, TypeReference, UnOp, Visibility, braced,
-    bracketed, parenthesized, parse_macro_input,
+    Returns, Signature, SignatureAllocates, SignatureDeallocates, SignatureDecreases,
+    SignatureEncapsulates, SignatureInvariants, SignatureSpec, SignatureSpecAttr, SignatureUnwind,
+    Stmt, Token, TraitItem, TraitItemFn, Type, TypeFnProof, TypeFnSpec, TypePath, TypeReference,
+    UnOp, Visibility, braced, bracketed, parenthesized, parse_macro_input,
 };
 
 pub(crate) const VERUS_SPEC: &str = "VERUS_SPEC__";
@@ -996,6 +996,7 @@ impl Visitor {
         let opens_invariants = self.take_ghost(&mut spec.invariants);
         let unwind = self.take_ghost(&mut spec.unwind);
         let allocates = self.take_ghost(&mut spec.allocates);
+        let deallocates = self.take_ghost(&mut spec.deallocates);
         let encapsulates = self.take_ghost(&mut spec.encapsulates);
         debug_assert!(spec.atomic_spec.is_none());
 
@@ -1305,6 +1306,28 @@ impl Visitor {
                 spec_stmts.push(Stmt::Expr(
                     Expr::Verbatim(
                         quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::allocates(#expr)),
+                    ),
+                    Some(Semi { spans: [token.span] }),
+                ));
+            }
+        }
+
+        if let Some(SignatureDeallocates { token, mut exprs }) = deallocates {
+            if exprs.exprs.len() != 1 {
+                let err = "deallocates takes exactly one expression, e.g. `deallocates n`";
+                let expr =
+                    Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err)));
+                spec_stmts.push(Stmt::Expr(expr, Some(Semi { spans: [token.span] })));
+            } else {
+                // (unsuffixed integer literals are `int`, as for `allocates`)
+                let expr = &mut exprs.exprs[0];
+                let inside_arith = self.inside_arith;
+                self.inside_arith = InsideArith::Int;
+                self.visit_expr_mut(expr);
+                self.inside_arith = inside_arith;
+                spec_stmts.push(Stmt::Expr(
+                    Expr::Verbatim(
+                        quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::deallocates(#expr)),
                     ),
                     Some(Semi { spans: [token.span] }),
                 ));
@@ -2303,6 +2326,7 @@ impl Visitor {
             invariants,
             unwind,
             allocates,
+            deallocates,
             encapsulates,
             semi,
         } = assume_specification.clone();
@@ -2340,6 +2364,7 @@ impl Visitor {
                 invariants: invariants,
                 unwind: unwind,
                 allocates: allocates,
+                deallocates: deallocates,
                 encapsulates: encapsulates,
                 with: None,
             },
@@ -2784,6 +2809,7 @@ impl Visitor {
                     || closure.ensures.is_some()
                     || closure.unwind.is_some()
                     || closure.allocates.is_some()
+                    || closure.deallocates.is_some()
                 {
                     let err = "quantifiers cannot have requires/ensures";
                     *expr = Expr::Verbatim(quote_spanned!(span => ::core::compile_error!(#err)));
@@ -3820,9 +3846,13 @@ impl Visitor {
             Expr::Closure(c) => self.take_ghost(&mut c.allocates),
             _ => unreachable!(),
         };
-        // (the same for `no_unwind when c`, whose condition is ghost code)
+        // (the same for `no_unwind when c`, whose condition is ghost code, and `deallocates`)
         let unwind = match expr {
             Expr::Closure(c) => self.take_ghost(&mut c.unwind),
+            _ => unreachable!(),
+        };
+        let deallocates = match expr {
+            Expr::Closure(c) => self.take_ghost(&mut c.deallocates),
             _ => unreachable!(),
         };
 
@@ -3840,9 +3870,11 @@ impl Visitor {
             if clos.requires.is_some()
                 || clos.ensures.is_some()
                 || allocates.is_some()
+                || deallocates.is_some()
                 || unwind.is_some()
             {
-                let err = "ghost closures cannot have requires/ensures/no_unwind/allocates";
+                let err =
+                    "ghost closures cannot have requires/ensures/no_unwind/allocates/deallocates";
                 *expr = Expr::Verbatim(quote_spanned!(span => ::core::compile_error!(#err)));
             } else {
                 *expr = Expr::Verbatim(quote_spanned_builtin!(verus_builtin, span =>
@@ -4015,6 +4047,34 @@ impl Visitor {
                     stmts.push(Stmt::Expr(
                         Expr::Verbatim(
                             quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::allocates(#expr)),
+                        ),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                }
+            }
+            if let Some(deallocates) = deallocates {
+                let SignatureDeallocates { token, mut exprs } = *deallocates;
+                if is_proof_fn {
+                    let err = "proof_fn closures cannot have deallocates";
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err))),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                } else if exprs.exprs.len() != 1 {
+                    let err = "deallocates takes exactly one expression, e.g. `deallocates n`";
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err))),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                } else {
+                    let expr = &mut exprs.exprs[0];
+                    let inside_arith = self.inside_arith;
+                    self.inside_arith = InsideArith::Int;
+                    self.visit_expr_mut(expr);
+                    self.inside_arith = inside_arith;
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(
+                            quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::deallocates(#expr)),
                         ),
                         Some(Semi { spans: [token.span] }),
                     ));

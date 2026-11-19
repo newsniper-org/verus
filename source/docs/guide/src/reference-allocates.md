@@ -278,11 +278,11 @@ fn two(p: &mut Pool) -> (Slot, Slot)
 }
 ```
 
-* A caller is charged `a` (the function's `allocates` is `a`), and the call may free memory where
-  `d > 0` (its `deallocates_when` condition is `d > 0`, so a fip function may make the call only
-  where it shows `d == 0`). `call_allocates`/`f.allocates(..)` and `call_deallocates`/
-  `f.deallocates(..)` are `a` and `d > 0`. (Verus counts allocations, and only whether a call may
-  free: `alloc(1, 1)` and `alloc(1, 3)` differ only in the `.vir`, which keeps `d` as written.)
+* A caller is charged `a` allocations and `d` deallocations (the function's `allocates` is `a`
+  and its `deallocates` is `d`), and the call may free memory where `d > 0` (so a fip function may
+  make the call only where it shows `d == 0`). `call_allocations`/`f.allocations(..)` and
+  `call_deallocations`/`f.deallocations(..)` are `a` and `d`; `call_allocates`/`f.allocates(..)`
+  and `call_deallocates`/`f.deallocates(..)` are `a > 0` and `d > 0`.
 * The body is the runtime's, as an `Allocator`'s is: what it allocates, frees or uses of the stack
   is not checked, so it may refill the pool from the global allocator. Its `ensures` are verified
   as usual. A strict function may call it as a leaf.
@@ -298,13 +298,13 @@ fn two(p: &mut Pool) -> (Slot, Slot)
 
 ## Callbacks, closures and traits
 
-A call through a generic function value is charged `call_allocates(f, args)`, the bound of
+A call through a generic function value is charged `call_allocations(f, args)`, the bound of
 whatever `f` turns out to be. A caller's bound can mention it:
 
 ```rust
 fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> u64
     requires f.requires((x,)),
-    allocates call_allocates(*f, (x,))
+    allocates call_allocations(*f, (x,))
 {
     f(x)
 }
@@ -317,28 +317,35 @@ fn use_apply() -> u64
 }
 ```
 
-For a closure with an `allocates` bound, or a function, `call_allocates` is that bound. The
+For a closure with an `allocates` bound, or a function, `call_allocations` is that bound, and
+`call_allocates(f, args)` (a `bool`: may the call allocate) is whether it is positive (`c` for
+`allocates allocates_when(a, c)`, below); a positive count implies it, so a generic caller that
+requires `!f.allocates(x)` is charged 0 for the call. The
 vstd specifications of std functions that call user code charge those calls the same way (for
 example `Vec::clone` charges `T::clone` once per element, and `HashMap::insert` charges the
 `Hash`/`Eq` callbacks through `hash_ops_cost(m, k)`).
 
-`call_deallocates(f, args)` is the deallocation condition of a function value in the same way: it
-is `false` for a `#[verifier::fip]` function, the condition of one with `deallocates_when`, and,
-for a trait method whose declaration has a condition, at most that condition (for every
-implementation). In ghost code inside `verus!` (specifications, `assert`, ...),
-`f.allocates(args)` is `call_allocates(f, (args,))` and `f.deallocates(args)` is
-`call_deallocates(f, (args,))` (exec code keeps methods of those names). So a specification that forwards to
-another function can pass on both, also a condition that holds only for some arguments:
+`call_deallocations(f, args)` (the count) and `call_deallocates(f, args)` (may the call
+deallocate) are the same for deallocations (see "Deallocation bounds" below): 0 and `false` for a
+`#[verifier::fip]` function, the `deallocates` bound and whether it is positive (or the condition
+`c` of `deallocates_when(d, c)`) otherwise, and, for a trait method whose declaration has a bound,
+at most that (for every implementation). In ghost code inside `verus!` (specifications,
+`assert`, ...), `f.allocations(args)`, `f.allocates(args)`, `f.deallocations(args)` and
+`f.deallocates(args)` are `call_allocations(f, (args,))` and so on (exec code keeps methods of
+those names). So a specification that forwards to another function can pass on all of them, also
+a condition that holds only for some arguments:
 
 ```rust
 #[verifier::external_body]
 fn shrink_if_big(x: u64) -> (r: u64)
-    allocates deallocates_when(0int, x > 5)
+    allocates 0
+    deallocates deallocates_when(1int, x > 5)
 { x }
 
 #[verifier::external_body]
 fn outer(x: u64) -> (r: u64)
-    allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+    allocates shrink_if_big.allocations(x)
+    deallocates deallocates_when(shrink_if_big.deallocations(x), shrink_if_big.deallocates(x))
 { shrink_if_big(x) }
 
 #[verifier::fip]
@@ -361,7 +368,7 @@ fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
         f.requires((x,)),
         !(*f).deallocates(x),
     allocates
-        (*f).allocates(x),
+        (*f).allocations(x),
 {
     f(x)
 }
@@ -421,12 +428,51 @@ that the type it instantiates `T` with meets it. A method's specification may ha
 (which the impl must accept), `ensures` (which the impl must give) and `allocates`.
 `fn drop allocates 0;` says that dropping a `T` allocates nothing; Verus checks it against the
 instantiation's drop glue, so the type that instantiates `T` needs no `AllocFreeDrop` impl. The block stands for
-`requires` clauses (`call_requires`, `call_ensures`, `call_allocates`). Besides a function's
+`requires` clauses (`call_requires`, `call_ensures`, `call_allocations`). Besides a function's
 type parameters, it may appear in a `where` clause (`where T: Clone with { .. }`, also for a type
 that is not a parameter), on an inherent impl block (every exec and proof method gets it), and
 on a struct's type parameter (every inherent impl block of the struct in the same `verus!`
 block gets it, for the type it instantiates the parameter with). It is rejected on a trait impl,
 whose methods cannot have `requires`.
+
+## Deallocation bounds: `deallocates`
+
+`deallocates d` bounds the number of deallocations of an exec function on a normal return, as
+`allocates` bounds its allocations. It comes after `allocates`:
+
+```rust
+fn drop_two(v: &mut Pool, a: Slot, b: Slot)
+    allocates 0
+    deallocates 2
+{
+    v.free(a);
+    v.free(b);
+}
+```
+
+* A deallocation is the program's release of one block: `Allocator::deallocate` is 1, `grow`,
+  `grow_zeroed` and `shrink` at most 1 (they may move the block), `vstd::raw_ptr::deallocate` 1,
+  and a function with `encapsulates alloc(a, d)` `d`. A `#[verifier::fip]` function is
+  `deallocates 0` (it cannot state `deallocates`). Any other callee needs a `deallocates` bound:
+  a function with one cannot call a function without one.
+* The body is checked as for `allocates`: a ghost counter, compared with the bound (evaluated at
+  entry) at every normal return. `deallocated()` is that counter, for loop invariants.
+* `deallocates deallocates_when(d, c)` is the bound `if c { d } else { 0 }`, and
+  `call_deallocates` of the function is `c`; `allocates allocates_when(a, c)` is the same for
+  allocations. A plain bound `d` makes `call_deallocates` `d > 0`.
+* A trait method declaration's bound is a contract of every implementation: an implementation's
+  body is counted against it, and one with a bound of its own must stay within it (checked on
+  entry).
+* `call_deallocations(f, args)` / `f.deallocations(x)` is the bound of a function value (see
+  "Callbacks, closures and traits").
+* **For now, implicit drops are not counted.** A function with a `deallocates` bound (its own or
+  its trait method declaration's) must not free memory through the drops that the compiler
+  inserts: they are checked on the compiled program, as a fip function's are. A closure cannot
+  have a `deallocates` bound yet (a `#[verifier::fip]` closure deallocates nothing).
+* (Transitional: `allocates deallocates_when(n, c)`, the earlier form, is still accepted on a
+  specification without a verified body. It is `allocates n` with the condition `c` and no bound
+  on the number of deallocations, so a function with a `deallocates` bound cannot call it. vstd
+  moves to the forms above.)
 
 ## Fully in-place functions: `#[verifier::fip]`
 
@@ -458,23 +504,22 @@ fn push_spare(v: &mut Vec<u64>)
 Two things are checked:
 
 * **Calls.** A callee must be `#[verifier::fip]` itself, or have a deallocation condition, which
-  the caller must show to be false. A specification without a verified body states this
-  condition as `allocates deallocates_when(n, c)`: the function allocates at most `n` and may
-  deallocate only when `c` holds (evaluated at entry). For example, `Vec::push` may deallocate
-  when it has to grow an existing buffer. Growing reallocates, which frees the old block. A
-  vector without a buffer grows by calling only its allocator's `allocate`, which never
-  deallocates (for any allocator: see "Custom allocators"). A trait method declaration without a
-  default body may state a condition too, as a contract of every implementation: one with a
-  verified body must be `#[verifier::fip]` (Verus checks that a body never deallocates, not that
-  it deallocates only under a condition), one without (`external_body`, an
-  `assume_specification`) has the declaration's condition and may not state its own, and the
-  allocator runtime's code is exempt (`Allocator::allocate` is declared
-  `deallocates_when(1, false)`). An implementation that Verus does not check, or one in a crate
-  not verified with `-V alloc-check`, is rejected. A call of a trait method that does not resolve
-  to an impl (a generic call) is accepted only if the method's declaration is
-  `#[verifier::fip]`, if its declaration has a `deallocates_when` condition that the caller shows
-  false, or if it calls an operator trait's method through its marker (see "Operator traits"
-  below). The attribute on a
+  the caller must show to be false: `d > 0` for `deallocates d`, `c` for `deallocates
+  deallocates_when(d, c)` (evaluated at entry; see "Deallocation bounds"). For example,
+  `Vec::push` may deallocate when it has to grow an existing buffer. Growing reallocates, which
+  frees the old block. A vector without a buffer grows by calling only its allocator's
+  `allocate`, which never deallocates (for any allocator: see "Custom allocators"). A trait
+  method declaration without a default body may state a bound or a condition too, as a contract
+  of every implementation: an implementation with a verified body is counted against it, one
+  without (`external_body`, an `assume_specification`) has the declaration's and may not state
+  its own, and the allocator runtime's code is exempt (`Allocator::allocate` is declared
+  `deallocates 0`). (With the transitional `allocates deallocates_when(n, c)`, which has no
+  number, an implementation with a verified body must be `#[verifier::fip]`.) An implementation
+  that Verus does not check, or one in a crate not verified with `-V alloc-check`, is rejected. A
+  call of a trait method that does not resolve to an impl (a generic call) is accepted only if
+  the method's declaration is `#[verifier::fip]`, if the caller shows its declaration's
+  condition false, or if it calls an operator trait's method through its marker (see "Operator
+  traits" below). The attribute on a
   declaration is a contract: every implementation of the method must be `#[verifier::fip]` too
   (`#[verifier::fip(strict)]` for a strict declaration), so its calls and its drops are
   checked, and an implementation that Verus does not check is rejected (as for a declaration
@@ -647,7 +692,7 @@ The rewrite is not offered, and the warning says why, when:
 ### Operator traits: `FipAdd`, `FipOrd`, ...
 
 A generic call of a trait method has no known impl. So `-V alloc-check` can bound it only through
-the caller's own bound (`call_allocates`), and a fip function cannot make it at all. For the
+the caller's own bound (`call_allocations`), and a fip function cannot make it at all. For the
 operator traits of `core`, vstd has unsafe marker traits that say what every impl of the trait for
 a type does. For each operator trait `Op` there are three, each a supertrait of the next:
 
@@ -714,7 +759,7 @@ allocate only what their comparisons allocate. vstd states this with spec-level 
 markers, `partial_eq_is_fip::<T, Rhs>()`, `partial_ord_is_fip::<T, Rhs>()`, `ord_is_fip::<T>()`
 and `ord_is_fbip::<T>()` (each true for a type with the marker), in their `deallocates_when`
 conditions, and with axioms that a method of an `FbipOp` type allocates nothing
-(`call_allocates(<T as PartialEq>::eq, ..) == 0`). So a fip function can call them for a type
+(`call_allocations(<T as PartialEq>::eq, ..) == 0`). So a fip function can call them for a type
 with the marker:
 
 ```rust

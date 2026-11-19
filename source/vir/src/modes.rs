@@ -2380,6 +2380,7 @@ fn check_expr(
             ensures,
             mask_spec,
             allocates,
+            deallocations,
             fip: _,
             unwind_spec,
             body,
@@ -2441,13 +2442,13 @@ fn check_expr(
                     }
                 }
 
-                if let Some(allocates) = &allocates {
+                for bound in [allocates, deallocations].into_iter().flatten() {
                     check_expr_has_mode(
                         ctxt,
                         record,
                         &mut ghost_typing,
                         Mode::Spec,
-                        allocates,
+                        bound,
                         Mode::Spec,
                         &Proph::No,
                     )?;
@@ -3955,7 +3956,10 @@ fn check_function_inner(
             )?;
         }
     }
-    if let Some(expr) = &function.x.deallocates {
+    for expr in [&function.x.deallocates, &function.x.allocates_cond, &function.x.deallocations]
+        .into_iter()
+        .flatten()
+    {
         let mut dealloc_typing = fun_typing.push_block_ghostness(Ghost::Ghost);
         let mut dealloc_typing = dealloc_typing.push_in_pure(true);
         check_expr_has_mode(

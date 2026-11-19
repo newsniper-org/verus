@@ -733,7 +733,11 @@ pub fn inherit_default_bodies(
                     mask_spec: None,
                     unwind_spec: None,
                     allocates,
-                    // (a trait method declaration cannot state `deallocates_when`)
+                    // (the deallocation bound is not inherited this way: a default body is
+                    // checked where it is declared, and a call of the copy charges it through
+                    // the declaration, `call_deallocations`)
+                    allocates_cond: None,
+                    deallocations: None,
                     deallocates: None,
                     item_kind: default_function.x.item_kind,
                     attrs: Arc::new(crate::ast::FunctionAttrsX {
@@ -1738,6 +1742,8 @@ fn check_dyn_spec(f: &Function) -> Result<(), ()> {
         atomic_update,
         unwind_spec,
         allocates,
+        allocates_cond,
+        deallocations,
         deallocates,
         item_kind: _,
         attrs: _,
@@ -1763,6 +1769,8 @@ fn check_dyn_spec(f: &Function) -> Result<(), ()> {
         visitor.visit_unwind_spec(unwind_spec)?;
     }
     visitor.visit_opt_expr(allocates)?;
+    visitor.visit_opt_expr(allocates_cond)?;
+    visitor.visit_opt_expr(deallocations)?;
     visitor.visit_opt_expr(deallocates)?;
     Ok(())
 }

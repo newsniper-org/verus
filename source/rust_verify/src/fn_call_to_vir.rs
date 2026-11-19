@@ -71,6 +71,7 @@ pub(crate) fn fn_call_to_vir<'tcx>(
                         | SpecItem::NoUnwind
                         | SpecItem::NoUnwindWhen
                         | SpecItem::Allocates
+                        | SpecItem::Deallocates
                         | SpecItem::EncapsulatesAlloc
                         | SpecItem::Decreases
                 ) | VerusItem::Directive(DirectiveItem::ExtraDependency)
@@ -727,6 +728,7 @@ fn verus_item_to_vir<'tcx, 'a>(
                     | SpecItem::NoUnwind
                     | SpecItem::NoUnwindWhen
                     | SpecItem::Allocates
+                    | SpecItem::Deallocates
                     | SpecItem::EncapsulatesAlloc => (true, false),
 
                     SpecItem::Ensures | SpecItem::Returns => (true, true),
@@ -986,22 +988,19 @@ fn verus_item_to_vir<'tcx, 'a>(
                     let header = Arc::new(HeaderExprX::NoUnwindWhen(arg));
                     mk_expr(ExprX::Header(header))
                 }
-                SpecItem::Allocates => {
+                SpecItem::Allocates | SpecItem::Deallocates | SpecItem::EncapsulatesAlloc => {
                     record_spec_fn_pure_args_only(bctx, expr);
                     let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
-                    internal_err_unless!(args.len() == 1, expr.span, "expected 1 argument", &args);
-                    // `allocates deallocates_when(n, c)`: the bound `n`, and the condition `c`
-                    // under which the function may deallocate
-                    let dealloc_args = match &args[0].kind {
+                    // a call of one of the condition forms, `allocates_when(n, c)` or
+                    // `deallocates_when(n, c)`, as the bound
+                    let wrapper = |item: BuiltinFunctionItem| match &args.get(0)?.kind {
                         rustc_hir::ExprKind::Call(fexpr, cargs) if cargs.len() == 2 => {
                             match &fexpr.kind {
                                 rustc_hir::ExprKind::Path(qpath) => {
                                     match bctx.types.qpath_res(qpath, fexpr.hir_id) {
                                         rustc_hir::def::Res::Def(_, did)
                                             if bctx.ctxt.get_verus_item(did)
-                                                == Some(&VerusItem::BuiltinFunction(
-                                                    BuiltinFunctionItem::DeallocatesWhen,
-                                                )) =>
+                                                == Some(&VerusItem::BuiltinFunction(item)) =>
                                         {
                                             Some(cargs)
                                         }
@@ -1013,24 +1012,79 @@ fn verus_item_to_vir<'tcx, 'a>(
                         }
                         _ => None,
                     };
-                    let header = if let Some(cargs) = dealloc_args {
-                        let n = expr_to_vir_consume(bctx, &cargs[0])?;
-                        let c = expr_to_vir_consume(bctx, &cargs[1])?;
-                        Arc::new(HeaderExprX::Allocates(n, Some(c)))
-                    } else {
-                        let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
-                        Arc::new(HeaderExprX::Allocates(arg, None))
+                    // `if c { n } else { 0 }`
+                    let when = |n: vir::ast::Expr, c: &vir::ast::Expr| {
+                        let zero = bctx.spanned_typed_new(
+                            expr.span,
+                            &n.typ,
+                            ExprX::Const(Constant::Int(num_bigint::BigInt::from(0))),
+                        );
+                        let typ = n.typ.clone();
+                        bctx.spanned_typed_new(expr.span, &typ, ExprX::If(c.clone(), n, Some(zero)))
                     };
-                    mk_expr(ExprX::Header(header))
-                }
-                SpecItem::EncapsulatesAlloc => {
-                    record_spec_fn_pure_args_only(bctx, expr);
-                    let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
-                    internal_err_unless!(args.len() == 3, expr.span, "expected 3 arguments", &args);
-                    // (the count `d` is in the condition `d > 0`)
-                    let a = expr_to_vir_consume(bctx, &args[0])?;
-                    let c = expr_to_vir_consume(bctx, &args[2])?;
-                    mk_expr(ExprX::Header(Arc::new(HeaderExprX::EncapsulatesAlloc(a, c))))
+                    let header = match spec_item {
+                        SpecItem::Allocates => {
+                            internal_err_unless!(
+                                args.len() == 1,
+                                expr.span,
+                                "expected 1 argument",
+                                &args
+                            );
+                            if let Some(cargs) = wrapper(BuiltinFunctionItem::AllocatesWhen) {
+                                // `allocates allocates_when(a, c)`
+                                let a = expr_to_vir_consume(bctx, &cargs[0])?;
+                                let c = expr_to_vir_consume(bctx, &cargs[1])?;
+                                HeaderExprX::Allocates(when(a, &c), None, Some(c))
+                            } else if let Some(cargs) =
+                                wrapper(BuiltinFunctionItem::DeallocatesWhen)
+                            {
+                                // (transitional) `allocates deallocates_when(n, c)`: the bound `n`,
+                                // and the condition `c` under which the function may deallocate
+                                let n = expr_to_vir_consume(bctx, &cargs[0])?;
+                                let c = expr_to_vir_consume(bctx, &cargs[1])?;
+                                HeaderExprX::Allocates(n, Some(c), None)
+                            } else {
+                                let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
+                                HeaderExprX::Allocates(arg, None, None)
+                            }
+                        }
+                        SpecItem::Deallocates => {
+                            internal_err_unless!(
+                                args.len() == 1,
+                                expr.span,
+                                "expected 1 argument",
+                                &args
+                            );
+                            if let Some(cargs) = wrapper(BuiltinFunctionItem::DeallocatesWhen) {
+                                // `deallocates deallocates_when(d, c)`
+                                let d = expr_to_vir_consume(bctx, &cargs[0])?;
+                                let c = expr_to_vir_consume(bctx, &cargs[1])?;
+                                HeaderExprX::Deallocates(when(d, &c), Some(c))
+                            } else if wrapper(BuiltinFunctionItem::AllocatesWhen).is_some() {
+                                return err_span(
+                                    expr.span,
+                                    "`allocates_when(a, c)` belongs in an `allocates` bound; a `deallocates` bound takes `deallocates_when(d, c)`",
+                                );
+                            } else {
+                                let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
+                                HeaderExprX::Deallocates(arg, None)
+                            }
+                        }
+                        SpecItem::EncapsulatesAlloc => {
+                            internal_err_unless!(
+                                args.len() == 3,
+                                expr.span,
+                                "expected 3 arguments",
+                                &args
+                            );
+                            let a = expr_to_vir_consume(bctx, &args[0])?;
+                            let d = expr_to_vir_consume(bctx, &args[1])?;
+                            let c = expr_to_vir_consume(bctx, &args[2])?;
+                            HeaderExprX::EncapsulatesAlloc(a, d, c)
+                        }
+                        _ => unreachable!(),
+                    };
+                    mk_expr(ExprX::Header(Arc::new(header)))
                 }
                 SpecItem::Admit => {
                     record_spec_fn_pure_args_only(bctx, expr);
@@ -2409,15 +2463,27 @@ fn verus_item_to_vir<'tcx, 'a>(
         VerusItem::BuiltinFunction(BuiltinFunctionItem::DeallocatesWhen) => {
             return err_span(
                 expr.span,
-                "`deallocates_when(n, c)` can only be used as a function's `allocates` bound (`allocates deallocates_when(n, c)`)",
+                "`deallocates_when(d, c)` can only be used as a function's `deallocates` bound (`deallocates deallocates_when(d, c)`)",
             );
         }
-        VerusItem::BuiltinFunction(BuiltinFunctionItem::Allocated) => {
+        VerusItem::BuiltinFunction(BuiltinFunctionItem::AllocatesWhen) => {
+            return err_span(
+                expr.span,
+                "`allocates_when(a, c)` can only be used as a function's `allocates` bound (`allocates allocates_when(a, c)`)",
+            );
+        }
+        VerusItem::BuiltinFunction(
+            item @ (BuiltinFunctionItem::Allocated | BuiltinFunctionItem::Deallocated),
+        ) => {
             record_spec_fn(bctx, expr);
             assert!(args.len() == 0);
             return mk_expr(ExprX::Call {
                 target: CallTarget::BuiltinSpecFun(
-                    BuiltinSpecFun::Allocated,
+                    if matches!(item, BuiltinFunctionItem::Allocated) {
+                        BuiltinSpecFun::Allocated
+                    } else {
+                        BuiltinSpecFun::Deallocated
+                    },
                     Arc::new(vec![]),
                     Arc::new(vec![]),
                 ),
@@ -2473,7 +2539,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                 }
                 BuiltinFunctionItem::ConstrainType => unreachable!(),
                 BuiltinFunctionItem::Allocated => unreachable!(),
+                BuiltinFunctionItem::Deallocated => unreachable!(),
                 BuiltinFunctionItem::DeallocatesWhen => unreachable!(),
+                BuiltinFunctionItem::AllocatesWhen => unreachable!(),
                 BuiltinFunctionItem::GetFutureOutputType => unreachable!(),
                 BuiltinFunctionItem::ProofWithCallee => unreachable!(),
             };

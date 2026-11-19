@@ -120,6 +120,9 @@ pub(crate) struct State<'a> {
 
     /// `-V alloc-check`: the ghost local counting allocation-source calls in this function
     pub(crate) alloc_counter: Option<VarIdent>,
+    /// `-V alloc-check`: the ghost local counting deallocations in this function (one with a
+    /// `deallocates` bound)
+    pub(crate) dealloc_counter: Option<VarIdent>,
     /// The body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`, `grow_zeroed`,
     /// `shrink`): the blocks it hands out (see `AllocHandout`)
     pub(crate) alloc_handout: Option<AllocHandout>,
@@ -279,6 +282,7 @@ impl<'a> State<'a> {
             loop_result_dests: HashMap::new(),
             mask: None,
             alloc_counter: None,
+            dealloc_counter: None,
             alloc_handout: None,
             alloc_reclaim: None,
             fip: false,
@@ -1752,6 +1756,18 @@ fn stm_call(
             )?);
         }
     }
+    if let Some(counter) = state.dealloc_counter.clone() {
+        if fun.x.mode == Mode::Exec {
+            stms.extend(dealloc_count_after_call(
+                ctx,
+                span,
+                &counter,
+                &alloc_target,
+                &small_args,
+                &state.op_markers,
+            )?);
+        }
+    }
     stms.extend(alloc_handout_after_call(
         ctx,
         state,
@@ -2058,13 +2074,26 @@ fn alloc_count_after_call(
     Ok(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum }))
 }
 
-/// `call_allocates(fun, args)` as an SST expression (before poly coercion)
+/// `call_allocations(fun, args)` as an SST expression (before poly coercion)
 fn sst_call_allocates(
     span: &Span,
     fun: &Fun,
     typ_args: &Typs,
     func: &Function,
     args: &Exps,
+) -> Exp {
+    sst_call_count(span, fun, typ_args, func, args, InternalFun::ClosureAlloc)
+}
+
+/// `call_allocations(fun, args)` (`ClosureAlloc`) or `call_deallocations(fun, args)`
+/// (`ClosureDeallocations`) as an SST expression (before poly coercion)
+fn sst_call_count(
+    span: &Span,
+    fun: &Fun,
+    typ_args: &Typs,
+    func: &Function,
+    args: &Exps,
+    internal_fun: InternalFun,
 ) -> Exp {
     let mut typ_substs: HashMap<Ident, Typ> = HashMap::new();
     for (typ_param, arg) in func.x.typ_params.iter().zip(typ_args.iter()) {
@@ -2089,11 +2118,101 @@ fn sst_call_allocates(
         span,
         &Arc::new(TypX::Int(IntRange::Int)),
         ExpX::Call(
-            CallFun::InternalFun(InternalFun::ClosureAlloc),
+            CallFun::InternalFun(internal_fun),
             Arc::new(vec![fndef_typ, tuple_typ]),
             Arc::new(vec![fndef_value, args_tuple]),
         ),
     )
+}
+
+/// `-V alloc-check`, in a function with a `deallocates` bound: add the call's deallocations to
+/// the counter. A `#[verifier::fip]` callee (or an operator call covered by a `Fip..` marker) is
+/// charged 0, a call through a trait method `call_deallocations(T::m, args)` (the FnDef axioms
+/// tie it to the impl's bound, or bound it by the declaration's), and any other callee its
+/// `deallocates` bound; a callee without one cannot be called here.
+fn dealloc_count_after_call(
+    ctx: &Ctx,
+    span: &Span,
+    counter: &VarIdent,
+    (target, target_typs, resolved): &(Fun, Typs, Option<Fun>),
+    args: &Exps,
+    op_markers: &[(Typs, &'static str, crate::alloc_check::OpLevel)],
+) -> Result<Option<Stm>, VirErr> {
+    let target_fun = get_function(ctx, span, target)?;
+    let marker_covered = match &target_fun.x.kind {
+        crate::ast::FunctionKind::TraitMethodDecl { trait_path, .. } => {
+            crate::alloc_check::op_marker_covers_call(
+                op_markers,
+                trait_path,
+                target_typs,
+                crate::alloc_check::OpLevel::Fip,
+            )
+        }
+        _ => false,
+    };
+    if marker_covered || target_fun.x.attrs.fip {
+        return Ok(None);
+    }
+    let no_bound = |f: &Function| f.x.deallocations.is_none() && !f.x.attrs.fip;
+    let err = |name: &Fun| {
+        error(
+            span,
+            format!(
+                "cannot bound the deallocations of this call: `{}` has no `deallocates` specification",
+                crate::ast_util::fun_as_friendly_rust_name(name)
+            ),
+        )
+        .help("give the callee a `deallocates` bound (or make it `#[verifier::fip]`), or call it outside of functions with a `deallocates` bound")
+    };
+    if let Some(resolved) = resolved {
+        let resolved_fun = get_function(ctx, span, resolved)?;
+        if no_bound(&resolved_fun) && no_bound(&target_fun) {
+            return Err(err(&resolved_fun.x.name));
+        }
+    }
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+    let bound = if matches!(target_fun.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. }) {
+        sst_call_count(
+            span,
+            target,
+            target_typs,
+            &target_fun,
+            args,
+            InternalFun::ClosureDeallocations,
+        )
+    } else if target_fun.x.deallocations.is_some() {
+        SpannedTyped::new(
+            span,
+            &int_typ,
+            ExpX::Call(
+                CallFun::InternalFun(InternalFun::DeallocBound(target.clone())),
+                target_typs.clone(),
+                args.clone(),
+            ),
+        )
+    } else {
+        return Err(err(&target_fun.x.name));
+    };
+    // (clamped at 0, as for allocations)
+    let zero = SpannedTyped::new(span, &int_typ, ExpX::Const(Constant::Int(BigInt::zero())));
+    let nonneg = SpannedTyped::new(
+        span,
+        &Arc::new(TypX::Bool),
+        ExpX::Binary(
+            crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+            zero.clone(),
+            bound.clone(),
+        ),
+    );
+    let charged = SpannedTyped::new(span, &int_typ, ExpX::If(nonneg, bound, zero));
+    let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter.clone()));
+    let sum = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, charged),
+    );
+    let lhs = Dest { dest: var_loc_exp(span, &int_typ, counter.clone()), is_init: false };
+    Ok(Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum })))
 }
 
 fn if_to_stm(
@@ -2335,6 +2454,18 @@ pub(crate) fn expr_to_stm_opt(
                 check_stms.extend(stms);
                 arg_exps.push(e);
             }
+            if let BuiltinSpecFun::Deallocated = bsf {
+                return match &state.dealloc_counter {
+                    Some(counter) => Ok((
+                        check_stms,
+                        Maybe::Some(Value::Exp(mk_exp(ExpX::Var(counter.clone())))),
+                    )),
+                    None => Err(error(
+                        &expr.span,
+                        "`deallocated()` can only be used in the body of an exec function with a `deallocates` specification, checked with -V alloc-check",
+                    )),
+                };
+            }
             if let BuiltinSpecFun::Allocated = bsf {
                 return match &state.alloc_counter {
                     Some(counter) => Ok((
@@ -2348,7 +2479,7 @@ pub(crate) fn expr_to_stm_opt(
                 };
             }
             let f = match bsf {
-                BuiltinSpecFun::Allocated => unreachable!(),
+                BuiltinSpecFun::Allocated | BuiltinSpecFun::Deallocated => unreachable!(),
                 BuiltinSpecFun::ClosureReq => InternalFun::ClosureReq,
                 BuiltinSpecFun::ClosureEns => InternalFun::ClosureEns,
                 BuiltinSpecFun::ClosureOpensInvariants => InternalFun::ClosureOpensInvariants,
@@ -2460,12 +2591,14 @@ pub(crate) fn expr_to_stm_opt(
                 }
             }
         }
-        ExprX::Call { target: CallTarget::AssumeExternal, .. } if state.alloc_counter.is_some() => {
+        ExprX::Call { target: CallTarget::AssumeExternal, .. }
+            if state.alloc_counter.is_some() || state.dealloc_counter.is_some() =>
+        {
             // a call allowed by `externals_available_without_declaration` has no specification,
             // so nothing bounds what it allocates
             Err(error(
                 &expr.span,
-                "cannot bound the allocations of this call: the callee has no specification (it is only allowed by `externals_available_without_declaration`)",
+                "cannot bound the allocations or deallocations of this call: the callee has no specification (it is only allowed by `externals_available_without_declaration`)",
             ))
         }
         ExprX::Call { target: CallTarget::AssumeExternal, args, post_args, body } => {
@@ -2749,6 +2882,7 @@ pub(crate) fn expr_to_stm_opt(
             ensures,
             mask_spec,
             allocates,
+            deallocations: _, // (rejected for now: `closure_to_vir`)
             fip,
             unwind_spec,
             ret,
@@ -5380,6 +5514,7 @@ fn exec_closure_body_stms(
     // with an `allocates` bound gets a counter of its own, checked against the bound at every
     // return; a closure without one is not checked.
     let outer_alloc_counter = state.alloc_counter.take();
+    let outer_dealloc_counter = state.dealloc_counter.take();
     // (likewise, the closure body is not part of the enclosing `#[verifier::fip]` function: it is
     // checked as fip only if the closure itself is `#[verifier::fip]`)
     let outer_fip = std::mem::replace(&mut state.fip, fip && ctx.global.alloc_check);
@@ -5402,6 +5537,7 @@ fn exec_closure_body_stms(
         &mut typ_inv_vars,
     );
     state.alloc_counter = outer_alloc_counter;
+    state.dealloc_counter = outer_dealloc_counter;
     state.fip = outer_fip;
     state.alloc_handout = outer_handout;
     state.alloc_reclaim = outer_reclaim;

@@ -955,6 +955,9 @@ pub trait Visit<'ast> {
     fn visit_signature_allocates(&mut self, i: &'ast crate::SignatureAllocates) {
         visit_signature_allocates(self, i);
     }
+    fn visit_signature_deallocates(&mut self, i: &'ast crate::SignatureDeallocates) {
+        visit_signature_deallocates(self, i);
+    }
     fn visit_signature_decreases(&mut self, i: &'ast crate::SignatureDecreases) {
         visit_signature_decreases(self, i);
     }
@@ -1371,6 +1374,9 @@ where
     }
     if let Some(it) = &node.allocates {
         v.visit_signature_allocates(it);
+    }
+    if let Some(it) = &node.deallocates {
+        v.visit_signature_deallocates(it);
     }
     if let Some(it) = &node.encapsulates {
         v.visit_signature_encapsulates(it);
@@ -2185,6 +2191,9 @@ where
     }
     if let Some(it) = &node.allocates {
         v.visit_signature_allocates(&**it);
+    }
+    if let Some(it) = &node.deallocates {
+        v.visit_signature_deallocates(&**it);
     }
     for it in &node.inner_attrs {
         v.visit_attribute(it);
@@ -4636,6 +4645,16 @@ where
     skip!(node.token);
     v.visit_specification(&node.exprs);
 }
+pub fn visit_signature_deallocates<'ast, V>(
+    v: &mut V,
+    node: &'ast crate::SignatureDeallocates,
+)
+where
+    V: Visit<'ast> + ?Sized,
+{
+    skip!(node.token);
+    v.visit_specification(&node.exprs);
+}
 pub fn visit_signature_decreases<'ast, V>(
     v: &mut V,
     node: &'ast crate::SignatureDecreases,
@@ -4710,6 +4729,9 @@ where
     }
     if let Some(it) = &node.allocates {
         v.visit_signature_allocates(it);
+    }
+    if let Some(it) = &node.deallocates {
+        v.visit_signature_deallocates(it);
     }
     if let Some(it) = &node.encapsulates {
         v.visit_signature_encapsulates(it);

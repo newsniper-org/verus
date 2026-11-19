@@ -388,6 +388,8 @@ pub(crate) fn add_param_decls<'tcx>(
         unwind_spec,
         allocates,
         deallocates,
+        allocates_cond,
+        deallocations,
         encapsulates_alloc: _,
         invariant_except_break: _,
         invariant: _,
@@ -417,6 +419,8 @@ pub(crate) fn add_param_decls<'tcx>(
     *decrease_when = decrease_when.as_ref().map(wrap);
     *allocates = allocates.as_ref().map(wrap);
     *deallocates = deallocates.as_ref().map(wrap);
+    *allocates_cond = allocates_cond.as_ref().map(wrap);
+    *deallocations = deallocations.as_ref().map(wrap);
     *invariant_mask = invariant_mask.as_ref().map(|mask| match mask {
         MaskSpec::InvariantOpens(span, es) => MaskSpec::InvariantOpens(span.clone(), wrap_all(es)),
         MaskSpec::InvariantOpensExcept(span, es) => {
@@ -4825,6 +4829,7 @@ pub(crate) fn closure_to_vir<'tcx>(
             ensure_id_typ,
             invariant_mask,
             mut allocates,
+            deallocations,
             unwind_spec,
             ..
         } = header;
@@ -4834,6 +4839,16 @@ pub(crate) fn closure_to_vir<'tcx>(
         // allocates nothing either
         let closure_fip =
             bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(closure_expr.hir_id))?.fip;
+        // -V alloc-check: until implicit drops are counted, a closure's deallocations are
+        // expressed only by `#[verifier::fip]` (none): the drops of a closure body with a
+        // `deallocates` bound could not be checked on the MIR (functions are found there by their
+        // VIR names, closures have none that both compilations share)
+        if deallocations.is_some() {
+            return err_span(
+                closure_expr.span,
+                "a closure cannot have a `deallocates` bound yet; a `#[verifier::fip]` closure deallocates nothing",
+            );
+        }
         if closure_fip.is_some() {
             if !bctx.ctxt.cmd_line_args.alloc_check {
                 return err_span(closure_expr.span, "`#[verifier::fip]` needs -V alloc-check");
@@ -4912,6 +4927,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 ensures: ensure.0,
                 mask_spec: invariant_mask,
                 allocates,
+                deallocations,
                 fip: closure_fip.is_some(),
                 unwind_spec,
                 ret: ret,

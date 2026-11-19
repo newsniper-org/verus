@@ -977,6 +977,16 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 &exprs,
             )
         }
+        ExpX::Call(CallFun::InternalFun(InternalFun::DeallocBound(f)), typs, args) => {
+            let mut exprs: Vec<Expr> = typs.iter().flat_map(typ_to_ids).collect();
+            for arg in args.iter() {
+                exprs.push(exp_to_expr(ctx, arg, expr_ctxt)?);
+            }
+            ident_apply(
+                &crate::def::prefix_dealloc_bound(&fun_to_air_ident(&ctx.name_ctxt, f)),
+                &exprs,
+            )
+        }
         ExpX::Call(CallFun::InternalFun(InternalFun::DeallocCond(f)), typs, args) => {
             let mut exprs: Vec<Expr> = typs.iter().flat_map(typ_to_ids).collect();
             for arg in args.iter() {
@@ -1037,7 +1047,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                     }
                     InternalFun::OpenInvariantMask(..)
                     | InternalFun::AllocBound(..)
-                    | InternalFun::DeallocCond(..) => panic!(),
+                    | InternalFun::DeallocCond(..)
+                    | InternalFun::DeallocBound(..) => panic!(),
                 },
                 Arc::new(exprs),
             ))

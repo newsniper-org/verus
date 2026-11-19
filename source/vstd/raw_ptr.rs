@@ -973,7 +973,9 @@ pub fn allocate(size: usize, align: usize) -> (pt: (
     opens_invariants none
     no_unwind
     allocates
-        deallocates_when(1int, false),
+        1int,
+    deallocates
+        0,
 {
     // SAFETY: valid_layout is a precondition
     let layout = unsafe { alloc::alloc::Layout::from_size_align_unchecked(size, align) };
@@ -1012,6 +1014,8 @@ pub fn deallocate(
     no_unwind
     allocates
         0,
+    deallocates
+        1,
 {
     // SAFETY: ensured by dealloc token
     let layout = unsafe { alloc::alloc::Layout::from_size_align_unchecked(size, align) };

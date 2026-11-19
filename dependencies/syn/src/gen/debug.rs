@@ -132,6 +132,7 @@ impl Debug for crate::AssumeSpecification {
         formatter.field("invariants", &self.invariants);
         formatter.field("unwind", &self.unwind);
         formatter.field("allocates", &self.allocates);
+        formatter.field("deallocates", &self.deallocates);
         formatter.field("encapsulates", &self.encapsulates);
         formatter.field("semi", &self.semi);
         formatter.finish()
@@ -988,6 +989,7 @@ impl crate::ExprClosure {
         formatter.field("invariants", &self.invariants);
         formatter.field("unwind", &self.unwind);
         formatter.field("allocates", &self.allocates);
+        formatter.field("deallocates", &self.deallocates);
         formatter.field("inner_attrs", &self.inner_attrs);
         formatter.field("body", &self.body);
         formatter.finish()
@@ -3623,6 +3625,15 @@ impl Debug for crate::SignatureAllocates {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl Debug for crate::SignatureDeallocates {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let mut formatter = formatter.debug_struct("SignatureDeallocates");
+        formatter.field("token", &self.token);
+        formatter.field("exprs", &self.exprs);
+        formatter.finish()
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl Debug for crate::SignatureDecreases {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         let mut formatter = formatter.debug_struct("SignatureDecreases");
@@ -3666,6 +3677,7 @@ impl Debug for crate::SignatureSpec {
         formatter.field("invariants", &self.invariants);
         formatter.field("unwind", &self.unwind);
         formatter.field("allocates", &self.allocates);
+        formatter.field("deallocates", &self.deallocates);
         formatter.field("encapsulates", &self.encapsulates);
         formatter.field("with", &self.with);
         formatter.finish()

@@ -981,6 +981,7 @@ pub(crate) mod parsing {
                             || input.peek(Token![when])
                             || input.peek(Token![no_unwind])
                             || input.peek(Token![allocates])
+                            || input.peek(Token![deallocates])
                             || input.peek(Token![encapsulates])
                             || input.peek(Token![opens_invariants])
                             || input.peek(Token![,])

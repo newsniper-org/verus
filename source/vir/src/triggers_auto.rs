@@ -360,7 +360,8 @@ fn gather_terms(ctxt: &mut Ctxt, ctx: &Ctx, exp: &Exp, depth: u64) -> (bool, Ter
                     InternalFun::CheckDecreaseHeight
                     | InternalFun::OpenInvariantMask(..)
                     | InternalFun::AllocBound(..)
-                    | InternalFun::DeallocCond(..),
+                    | InternalFun::DeallocCond(..)
+                    | InternalFun::DeallocBound(..),
                 ) => (is_pure, Arc::new(TermX::App(ctxt.other(), Arc::new(all_terms)))),
             }
         }

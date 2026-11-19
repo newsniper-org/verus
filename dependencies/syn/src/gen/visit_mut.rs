@@ -971,6 +971,9 @@ pub trait VisitMut {
     fn visit_signature_allocates_mut(&mut self, i: &mut crate::SignatureAllocates) {
         visit_signature_allocates_mut(self, i);
     }
+    fn visit_signature_deallocates_mut(&mut self, i: &mut crate::SignatureDeallocates) {
+        visit_signature_deallocates_mut(self, i);
+    }
     fn visit_signature_decreases_mut(&mut self, i: &mut crate::SignatureDecreases) {
         visit_signature_decreases_mut(self, i);
     }
@@ -1380,6 +1383,9 @@ where
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(it);
+    }
+    if let Some(it) = &mut node.deallocates {
+        v.visit_signature_deallocates_mut(it);
     }
     if let Some(it) = &mut node.encapsulates {
         v.visit_signature_encapsulates_mut(it);
@@ -2162,6 +2168,9 @@ where
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(&mut **it);
+    }
+    if let Some(it) = &mut node.deallocates {
+        v.visit_signature_deallocates_mut(&mut **it);
     }
     v.visit_attributes_mut(&mut node.inner_attrs);
     v.visit_expr_mut(&mut *node.body);
@@ -4444,6 +4453,16 @@ where
     skip!(node.token);
     v.visit_specification_mut(&mut node.exprs);
 }
+pub fn visit_signature_deallocates_mut<V>(
+    v: &mut V,
+    node: &mut crate::SignatureDeallocates,
+)
+where
+    V: VisitMut + ?Sized,
+{
+    skip!(node.token);
+    v.visit_specification_mut(&mut node.exprs);
+}
 pub fn visit_signature_decreases_mut<V>(v: &mut V, node: &mut crate::SignatureDecreases)
 where
     V: VisitMut + ?Sized,
@@ -4515,6 +4534,9 @@ where
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(it);
+    }
+    if let Some(it) = &mut node.deallocates {
+        v.visit_signature_deallocates_mut(it);
     }
     if let Some(it) = &mut node.encapsulates {
         v.visit_signature_encapsulates_mut(it);

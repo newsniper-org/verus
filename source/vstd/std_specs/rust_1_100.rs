@@ -246,20 +246,26 @@ pub unsafe trait ExAllocator {
         ensures
             allocator_block_fits(r, layout),
         allocates
-            deallocates_when(1int, false),
+            1int,
+        deallocates
+            0,
     ;
 
     fn allocate_zeroed(&self, layout: Layout) -> (r: Result<NonNull<[u8]>, AllocError>)
         ensures
             allocator_block_fits(r, layout),
         allocates
-            deallocates_when(1int, false),
+            1int,
+        deallocates
+            0,
     ;
 
     #[verifier::trusted_only]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout)
         allocates
             0,
+        deallocates
+            1,
     ;
 
     #[verifier::trusted_only]
@@ -271,6 +277,8 @@ pub unsafe trait ExAllocator {
             allocator_block_fits(r, new_layout),
         allocates
             1int,
+        deallocates
+            1,
     ;
 
     #[verifier::trusted_only]
@@ -280,6 +288,8 @@ pub unsafe trait ExAllocator {
             allocator_block_fits(r, new_layout),
         allocates
             1int,
+        deallocates
+            1,
     ;
 
     #[verifier::trusted_only]
@@ -291,6 +301,8 @@ pub unsafe trait ExAllocator {
             allocator_block_fits(r, new_layout),
         allocates
             1int,
+        deallocates
+            1,
     ;
 }
 

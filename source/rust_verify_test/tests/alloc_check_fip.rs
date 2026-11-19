@@ -2899,7 +2899,7 @@ test_verify_one_file_with_options! {
                 n
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "can state `deallocates_when`")
+    } => Err(err) => assert_vir_error_msg(err, "can state `allocates deallocates_when(n, c)`")
 }
 
 // `f.allocations(args)` / `f.deallocates(args)` (`call_allocations`, `call_deallocates`): a
@@ -3351,4 +3351,28 @@ test_verify_one_file_with_options! {
         #[verifier::fip(strict)]
         pub fn s(p: &mut Pool) { p.refill(3) }
     } => Ok(())
+}
+
+// `fip_mir` runs on the compile that erases ghost code, whose `DefId`s differ from the verified
+// one's (ghost items are gone): the functions VIR names are looked up by path there, without the
+// `DefId` cache of the verified compile, or a function next to an `encapsulates` one could be
+// taken for it
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_lookup_after_ghost_items ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub open spec fn s1(x: u64) -> u64 { x }
+        pub open spec fn s2(x: u64) -> u64 { x }
+        pub proof fn p1() { }
+        pub proof fn p2() { }
+
+        #[verifier::fip]
+        pub fn deep(n: u64) -> (r: u64) decreases n { if n == 0 { 0 } else { deep(n - 1) } }
+        pub fn enc() encapsulates alloc(0, 0) { }
+        #[verifier::fip]
+        pub fn deep2(n: u64) -> (r: u64) decreases n { if n == 0 { 0 } else { deep2(n - 1) } }
+
+        #[verifier::fip(strict)]
+        pub fn s(n: u64) -> (r: u64) { enc(); deep(n) }
+    } => Err(err) => assert_vir_error_msg(err, "which is not `#[verifier::fip(strict)]`")
 }

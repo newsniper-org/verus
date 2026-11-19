@@ -425,6 +425,14 @@ pub fn func_decl_to_sst(
         }
         _ => None,
     };
+    let dealloc_bound = match &function.x.deallocations {
+        Some(e) if ctx.global.alloc_check => {
+            let (_pars, exps) = req_ens_to_sst(ctx, diagnostics, function, &vec![e.clone()], true)?;
+            assert!(exps.len() == 1);
+            Some(exps[0].clone())
+        }
+        _ => None,
+    };
 
     let mut fndef_axiom_exps: Vec<Exp> = Vec::new();
     if crate::ast_simplify::need_fndef_axiom(&ctx.fndef_type_set, function) {
@@ -540,6 +548,7 @@ pub fn func_decl_to_sst(
         unwind_condition,
         alloc_bound,
         dealloc_cond,
+        dealloc_bound,
         fndef_axioms: Arc::new(fndef_axiom_exps),
     })
 }
@@ -1132,6 +1141,97 @@ pub fn func_def_to_sst(
         }
     }
 
+    // `-V alloc-check`, `deallocates d`: count the deallocations in a ghost local (as for
+    // `allocates`: from 0, checked against the bound, evaluated in the pre-state, at every normal
+    // return). A `#[verifier::fip]` function is not counted: its calls are checked never to
+    // deallocate (`fip_call_check`). Its implicit drops are checked on the MIR to free nothing.
+    let mut dealloc_init: Option<crate::sst::Stm> = None;
+    let mut dealloc_entry_check: Option<crate::sst::Stm> = None;
+    let own_dbound = function.x.deallocations.clone();
+    let inherited_dbound = match &lo_inheritance {
+        Some(lo) => lo.function.x.deallocations.clone(),
+        None => None,
+    };
+    if ctx.global.alloc_check
+        && function.x.mode == Mode::Exec
+        && !check_api_safety
+        && !runtime
+        && !function.x.attrs.fip
+        && (own_dbound.is_some() || inherited_dbound.is_some())
+    {
+        let span = &own_dbound.as_ref().or(inherited_dbound.as_ref()).unwrap().span;
+        if ctx.global.alloc_check_strict
+            && !matches!(
+                specs_function.x.unwind_spec_or_default(),
+                crate::ast::UnwindSpec::NoUnwind
+            )
+        {
+            return Err(crate::messages::error(
+                span,
+                "with -V alloc-check-strict, a function with a `deallocates` bound must be `no_unwind`",
+            ));
+        }
+        let int_typ = Arc::new(TypX::Int(crate::ast::IntRange::Int));
+        let bool_typ = Arc::new(TypX::Bool);
+        let counter = state.declare_var_stm(
+            &crate::ast_util::air_unique_var(crate::def::DEALLOC_COUNT),
+            &int_typ,
+            PreLocalDeclKind::StmtLet,
+            false,
+        );
+        let zero = SpannedTyped::new(
+            span,
+            &int_typ,
+            crate::sst::ExpX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        dealloc_init = Some(crate::ast_to_sst::init_var(span, &counter, &zero));
+        state.dealloc_counter = Some(counter.clone());
+        let le = |a: Exp, b: Exp| {
+            SpannedTyped::new(
+                &b.span.clone(),
+                &bool_typ,
+                crate::sst::ExpX::Binary(
+                    crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                    a,
+                    b,
+                ),
+            )
+        };
+        let current = SpannedTyped::new(span, &int_typ, crate::sst::ExpX::Var(counter));
+        let own = match &own_dbound {
+            Some(e) => Some(lo_current.lower_pure(ctx, &mut state, e, &mut req_stms)?),
+            None => None,
+        };
+        let inherited = match (&inherited_dbound, &lo_inheritance) {
+            (Some(e), Some(lo)) => Some(lo.lower_pure(ctx, &mut state, e, &mut req_stms)?),
+            _ => None,
+        };
+        if !ctx.checking_spec_preconditions() {
+            if let Some(own) = &own {
+                enss.push(exp_pre(&le(current.clone(), own.clone())));
+            }
+            if let Some(inherited) = &inherited {
+                enss.push(exp_pre(&le(current.clone(), inherited.clone())));
+                if let Some(own) = &own {
+                    // (as for `allocates`: the FnDef axioms state both, so check on entry)
+                    let msg = crate::messages::error(
+                        &own.span,
+                        "this `deallocates` bound may exceed the trait method's `deallocates` bound",
+                    )
+                    .secondary_label(&inherited.span, "the trait method's bound");
+                    dealloc_entry_check = Some(Spanned::new(
+                        own.span.clone(),
+                        StmX::Assert(
+                            state.next_assert_id(),
+                            Some(msg),
+                            le(own.clone(), inherited.clone()),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
     // `encapsulates alloc(a, d)` on a trait method implementation: its body is the runtime's (not
     // checked above), but the FnDef axioms state `call_allocates == a` and `call_deallocates ==
     // (d > 0)` for it, and the declaration's bound and condition for every implementation, so
@@ -1331,6 +1431,12 @@ pub fn func_def_to_sst(
         stm = stms_to_one_stm(&body.span, vec![init, stm]);
     }
     if let Some(check) = alloc_entry_check {
+        stm = stms_to_one_stm(&body.span, vec![check, stm]);
+    }
+    if let Some(init) = dealloc_init {
+        stm = stms_to_one_stm(&body.span, vec![init, stm]);
+    }
+    if let Some(check) = dealloc_entry_check {
         stm = stms_to_one_stm(&body.span, vec![check, stm]);
     }
     if !encapsulates_entry_checks.is_empty() {

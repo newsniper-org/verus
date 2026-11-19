@@ -661,6 +661,7 @@ fn simplify_one_expr(
             ensures,
             mask_spec,
             allocates,
+            deallocations,
             fip,
             unwind_spec,
             ret,
@@ -704,6 +705,7 @@ fn simplify_one_expr(
                     ensures: ensures.clone(),
                     mask_spec: mask_spec.clone(),
                     allocates: allocates.clone(),
+                    deallocations: deallocations.clone(),
                     fip: *fip,
                     unwind_spec: unwind_spec.clone(),
                     ret: ret.clone(),
@@ -1316,7 +1318,35 @@ fn exec_closure_spec_fip(
         Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ }),
         Arc::new(VarBinderX { name: c_ident, a: closure_var.typ.clone() }),
     ]);
-    SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, body))
+    // (and `call_deallocations` of it is 0)
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
+    let count_call = wrap_in_trigger(&SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Call {
+            target: CallTarget::BuiltinSpecFun(
+                BuiltinSpecFun::ClosureDeallocations,
+                closure_trait_call_typ_args(state, &c_var, params),
+                Arc::new(vec![]),
+            ),
+            args: Arc::new(vec![c_var.clone(), tuple_var.clone()]),
+            post_args: None,
+            body: None,
+        },
+    ));
+    let zero = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+    );
+    let count_body = mk_eq(span, &count_call, &zero);
+    conjoin(
+        span,
+        &vec![
+            SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders.clone(), body)),
+            SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, count_body)),
+        ],
+    )
 }
 
 /// `no_unwind` on a closure: `forall c: C, x :: !closure_unwinds(c, x)` (every value of the
@@ -1692,8 +1722,17 @@ fn add_fndef_axioms_to_function(
                     body: None,
                 },
             );
-            let positive =
-                crate::ast_util::mk_ineq(span, &zero, &clamped, crate::ast::InequalityOp::Lt);
+            // (`c` for `allocates allocates_when(a, c)`)
+            let positive = match &function.x.allocates_cond {
+                Some(c) => SpannedTyped::new(
+                    &c.span,
+                    &bool_typ,
+                    ExprX::Block(Arc::new(decls.clone()), Some(c.clone())),
+                ),
+                None => {
+                    crate::ast_util::mk_ineq(span, &zero, &clamped, crate::ast::InequalityOp::Lt)
+                }
+            };
             let rel = crate::ast_util::mk_eq(span, &wrap_in_trigger(&allocates_call), &positive);
             fndef_axioms.push(SpannedTyped::new(
                 span,
@@ -1756,6 +1795,89 @@ fn add_fndef_axioms_to_function(
             crate::ast_util::mk_implies(span, &wrap_in_trigger(&dealloc_call), &cond)
         } else {
             crate::ast_util::mk_eq(span, &wrap_in_trigger(&dealloc_call), &cond)
+        };
+        let forall = Quant { quant: air::ast::Quant::Forall };
+        let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
+    }
+
+    // `call_deallocations(f, args)` (-V alloc-check): 0 for a `#[verifier::fip]` function, and its
+    // `deallocates` bound, clamped at 0, otherwise (for a trait method declaration, an upper
+    // bound for every impl where the declaration's `requires` holds, as for `allocates`)
+    if alloc_check && (function.x.attrs.fip || function.x.deallocations.is_some()) {
+        let span = &function.span;
+        let bool_typ = Arc::new(TypX::Bool);
+        let int_typ = Arc::new(TypX::Int(IntRange::Int));
+        let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
+        let tuple_typ = tuple_var.typ.clone();
+        let mut decls: Vec<Stmt> = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let typ = &p.a;
+            let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+            let tuple_field = tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+            let decl = StmtX::Decl {
+                pattern,
+                mode: None,
+                init: Some(PlaceX::spec_temporary(tuple_field)),
+                els: None,
+                assert_irrefutable: false,
+            };
+            decls.push(Spanned::new(span.clone(), decl));
+        }
+        let zero = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        let count = match (&function.x.deallocations, function.x.attrs.fip) {
+            (Some(d), false) => {
+                let bound = SpannedTyped::new(
+                    &d.span,
+                    &int_typ,
+                    ExprX::Block(Arc::new(decls.clone()), Some(d.clone())),
+                );
+                let nonneg =
+                    crate::ast_util::mk_ineq(span, &zero, &bound, crate::ast::InequalityOp::Le);
+                SpannedTyped::new(span, &int_typ, ExprX::If(nonneg, bound, Some(zero.clone())))
+            }
+            _ => zero.clone(),
+        };
+        let dealloc_call = SpannedTyped::new(
+            span,
+            &int_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::ClosureDeallocations,
+                    closure_trait_call_typ_args(state, &fndef_singleton, &params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![fndef_singleton.clone(), tuple_var.clone()]),
+                post_args: None,
+                body: None,
+            },
+        );
+        let rel = if matches!(function.x.kind, FunctionKind::TraitMethodDecl { .. })
+            && !function.x.attrs.fip
+        {
+            let le = crate::ast_util::mk_ineq(
+                span,
+                &wrap_in_trigger(&dealloc_call),
+                &count,
+                crate::ast::InequalityOp::Le,
+            );
+            if function.x.require.is_empty() {
+                le
+            } else {
+                let reqs = crate::ast_util::conjoin(span, &function.x.require);
+                let reqs = SpannedTyped::new(
+                    span,
+                    &bool_typ,
+                    ExprX::Block(Arc::new(decls.clone()), Some(reqs)),
+                );
+                crate::ast_util::mk_implies(span, &reqs, &le)
+            }
+        } else {
+            crate::ast_util::mk_eq(span, &wrap_in_trigger(&dealloc_call), &count)
         };
         let forall = Quant { quant: air::ast::Quant::Forall };
         let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
@@ -2120,15 +2242,18 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             .filter(|f| matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. }))
             .map(|f| f.x.name.clone())
             .collect();
+        // (`allocates` or `deallocates`: each is charged through `call_allocations` /
+        // `call_deallocations` of the trait method)
         let bounded_decls: HashSet<Fun> = functions
             .iter()
             .filter(|f| {
-                matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. }) && f.x.allocates.is_some()
+                matches!(f.x.kind, FunctionKind::TraitMethodDecl { .. })
+                    && (f.x.allocates.is_some() || f.x.deallocations.is_some())
             })
             .map(|f| f.x.name.clone())
             .collect();
         for f in functions.iter() {
-            if f.x.allocates.is_some() {
+            if f.x.allocates.is_some() || f.x.deallocations.is_some() {
                 state.fndef_typs.insert(f.x.name.clone());
                 if let FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind {
                     state.fndef_typs.insert(method.clone());
@@ -2141,6 +2266,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             if let Some(body) = &f.x.body {
                 // (an impl without its own bound is checked against its declaration's)
                 let mut checked = f.x.allocates.is_some()
+                    || f.x.deallocations.is_some()
                     || matches!(&f.x.kind, FunctionKind::TraitMethodImpl { method, .. }
                         if bounded_decls.contains(method));
                 let mut called: Vec<Fun> = Vec::new();

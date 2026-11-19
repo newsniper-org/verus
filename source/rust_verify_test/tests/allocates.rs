@@ -1747,7 +1747,7 @@ test_verify_one_file_with_options! {
             let c = || -> (r: u8) ensures allocated() == 0 allocates 0 { 0 };
             let _x = c();
         }
-    } => Err(err) => assert_vir_error_msg(err, "`allocated()` cannot be used in a closure's `requires`, `ensures` or `allocates`")
+    } => Err(err) => assert_vir_error_msg(err, "`allocated()` and `deallocated()` cannot be used in a closure")
 }
 
 // A private field in another module is still seen by the drop rule

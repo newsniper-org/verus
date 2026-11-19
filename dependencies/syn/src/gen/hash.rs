@@ -122,6 +122,7 @@ impl Hash for crate::AssumeSpecification {
         self.invariants.hash(state);
         self.unwind.hash(state);
         self.allocates.hash(state);
+        self.deallocates.hash(state);
         self.encapsulates.hash(state);
     }
 }
@@ -967,6 +968,7 @@ impl Hash for crate::ExprClosure {
         self.invariants.hash(state);
         self.unwind.hash(state);
         self.allocates.hash(state);
+        self.deallocates.hash(state);
         self.inner_attrs.hash(state);
         self.body.hash(state);
     }
@@ -3241,6 +3243,15 @@ impl Hash for crate::SignatureAllocates {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl Hash for crate::SignatureDeallocates {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.exprs.hash(state);
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl Hash for crate::SignatureDecreases {
     fn hash<H>(&self, state: &mut H)
     where
@@ -3287,6 +3298,7 @@ impl Hash for crate::SignatureSpec {
         self.invariants.hash(state);
         self.unwind.hash(state);
         self.allocates.hash(state);
+        self.deallocates.hash(state);
         self.encapsulates.hash(state);
         self.with.hash(state);
     }

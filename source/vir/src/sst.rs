@@ -60,6 +60,8 @@ pub enum InternalFun {
     /// The condition under which the given exec function may deallocate (`deallocates_when`),
     /// applied to the call's arguments
     DeallocCond(Fun),
+    /// `dealloc_bound%f(args)`: f's `deallocates` bound at args (-V alloc-check)
+    DeallocBound(Fun),
     /// `call_allocates(f, args)`: the `allocates` bound of a function value
     ClosureAlloc,
     /// `call_deallocates(f, args)`
@@ -418,6 +420,7 @@ pub struct FuncDeclSst {
     pub alloc_bound: Option<Exp>,
     /// `deallocates_when` condition (only generated with `-V alloc-check`)
     pub dealloc_cond: Option<Exp>,
+    pub dealloc_bound: Option<Exp>,
     pub fndef_axioms: Exps,
 }
 

@@ -368,6 +368,11 @@
             "syn": "SignatureAllocates"
           }
         },
+        "deallocates": {
+          "option": {
+            "syn": "SignatureDeallocates"
+          }
+        },
         "encapsulates": {
           "option": {
             "syn": "SignatureEncapsulates"
@@ -1870,6 +1875,13 @@
           "option": {
             "box": {
               "syn": "SignatureAllocates"
+            }
+          }
+        },
+        "deallocates": {
+          "option": {
+            "box": {
+              "syn": "SignatureDeallocates"
             }
           }
         },
@@ -6584,6 +6596,20 @@
       }
     },
     {
+      "ident": "SignatureDeallocates",
+      "features": {
+        "any": []
+      },
+      "fields": {
+        "token": {
+          "token": "Deallocates"
+        },
+        "exprs": {
+          "syn": "Specification"
+        }
+      }
+    },
+    {
       "ident": "SignatureDecreases",
       "features": {
         "any": []
@@ -6710,6 +6736,11 @@
         "allocates": {
           "option": {
             "syn": "SignatureAllocates"
+          }
+        },
+        "deallocates": {
+          "option": {
+            "syn": "SignatureDeallocates"
           }
         },
         "encapsulates": {
@@ -8136,6 +8167,7 @@
     "Const": "const",
     "Continue": "continue",
     "Crate": "crate",
+    "Deallocates": "deallocates",
     "Decreases": "decreases",
     "Default": "default",
     "DefaultEnsures": "default_ensures",

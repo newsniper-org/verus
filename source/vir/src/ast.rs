@@ -860,10 +860,16 @@ pub enum HeaderExprX {
     /// `allocates e`: upper bound on the number of allocations (exec functions)
     /// `allocates n` (with `deallocates_when(n, c)`: and the condition `c` under which the
     /// function may deallocate)
-    Allocates(Expr, Option<Expr>),
-    /// `encapsulates alloc(a, d)`: the bound `a` and the deallocation condition `d > 0` (-V
-    /// alloc-check: the function encapsulates an allocator, and its body is the runtime's)
-    EncapsulatesAlloc(Expr, Expr),
+    /// (the second is the transitional `allocates deallocates_when(n, c)`'s condition, the third
+    /// `allocates allocates_when(a, c)`'s)
+    Allocates(Expr, Option<Expr>, Option<Expr>),
+    /// `deallocates d` (with the condition `c` for `deallocates deallocates_when(d, c)`, whose
+    /// count is `if c { d } else { 0 }`)
+    Deallocates(Expr, Option<Expr>),
+    /// `encapsulates alloc(a, d)`: the bound `a`, the count `d` and the deallocation condition
+    /// `d > 0` (-V alloc-check: the function encapsulates an allocator, and its body is the
+    /// runtime's)
+    EncapsulatesAlloc(Expr, Expr, Expr),
     /// The visibility used in, e.g., `open(crate)`
     OpenVisibilityQualifier(Visibility),
 }
@@ -1010,6 +1016,8 @@ pub enum BuiltinSpecFun {
     DefaultEns,
     /// `allocated()`: allocation-source calls made so far by the enclosing exec function
     Allocated,
+    /// `deallocated()`: deallocations made so far by the enclosing exec function
+    Deallocated,
     /// `call_allocates(f, args)`: the `allocates` bound of a function value at the given args
     ClosureAlloc,
     /// `call_deallocates(f, args)`: may a call of the function value deallocate (-V alloc-check)
@@ -1233,6 +1241,8 @@ pub enum ExprX {
         mask_spec: Option<MaskSpec>,
         /// `-V alloc-check`: upper bound on the closure's allocations per call, over the params
         allocates: Option<Expr>,
+        /// `-V alloc-check`: upper bound on the closure's deallocations per call, over the params
+        deallocations: Option<Expr>,
         /// `-V alloc-check`: `#[verifier::fip]` on the closure: its body never deallocates
         /// (`call_deallocates` of it is `false`)
         fip: bool,
@@ -1850,9 +1860,18 @@ pub struct FunctionX {
     /// `allocates e`: upper bound on the number of allocation-source calls performed by an exec
     /// function on a normal return (checked only when allocation checking is enabled)
     pub allocates: Option<Expr>,
-    /// -V alloc-check: for a function without a verified body, the condition (at entry) under
-    /// which it may deallocate memory on a normal return (`allocates deallocates_when(n, c)`);
-    /// `#[verifier::fip]` callers must show that it is false
+    /// -V alloc-check: the condition (at entry) under which the function may allocate, for
+    /// `allocates allocates_when(a, c)` (`call_allocates` of it is `c`; otherwise it is
+    /// whether the `allocates` bound is positive)
+    pub allocates_cond: Option<Expr>,
+    /// -V alloc-check: `deallocates d`: upper bound on the number of deallocations performed on a
+    /// normal return (`if c { d } else { 0 }` for `deallocates deallocates_when(d, c)`; `d` for
+    /// `encapsulates alloc(a, d)`)
+    pub deallocations: Option<Expr>,
+    /// -V alloc-check: the condition (at entry) under which the function may deallocate memory
+    /// on a normal return; `#[verifier::fip]` callers must show that it is false. It is `c` for
+    /// `deallocates deallocates_when(d, c)` (and the transitional `allocates
+    /// deallocates_when(n, c)`, which has no bound on the number), and `d > 0` for a bound `d`
     pub deallocates: Option<Expr>,
     /// Allows the item to be a const declaration or static
     pub item_kind: ItemKind,

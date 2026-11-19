@@ -178,15 +178,16 @@ fn double<S: Shape>(s: &S) -> (r: u64) {
 }
 ```
 
-A declaration without a default body may instead let its implementations deallocate under a
-condition, with `allocates deallocates_when(n, c)`. Every implementation that Verus checks must
-still be `#[verifier::fip]` (one without a verified body has the declaration's condition), and a
-fip function may make the call where it shows the condition false:
+A declaration without a default body may instead let its implementations deallocate, with a
+bound `deallocates d` or under a condition, `deallocates deallocates_when(d, c)`. Each
+implementation's body is counted against it (one without a verified body has the
+declaration's), and a fip function may make the call where it shows the condition false:
 
 ```rust
 pub trait Pool {
     fn take(&mut self, n: u64) -> (r: u64)
-        allocates deallocates_when(0int, n > 10);
+        allocates 0
+        deallocates deallocates_when(1int, n > 10);
 }
 
 #[verifier::fip]
@@ -235,7 +236,7 @@ A call of a function value in a fip function (a closure, or `f(x)` for `f: F` wi
 `F: Fn(..)`) may free memory unless `f.deallocates(x)` is false. `#[verifier::fip]` on a closure
 expression makes it so: the closure's body is checked like a fip function's, and without an
 `allocates` bound it allocates nothing. A generic function passes the condition on to its caller,
-and its bound with `f.allocates(x)`:
+and its bound with `f.allocations(x)`:
 
 ```rust
 #[verifier::fip]
@@ -244,7 +245,7 @@ fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
         f.requires((x,)),
         !(*f).deallocates(x),
     allocates
-        (*f).allocates(x),
+        (*f).allocations(x),
 {
     f(x)
 }

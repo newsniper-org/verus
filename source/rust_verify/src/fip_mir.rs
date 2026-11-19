@@ -243,12 +243,19 @@ fn check_no_dealloc_drop<'tcx>(
     }
 }
 
-fn report<'tcx>(tcx: TyCtxt<'tcx>, span: Span, what: String) {
+fn report<'tcx>(tcx: TyCtxt<'tcx>, span: Span, fip: bool, what: String) {
+    let who = if fip {
+        "a `#[verifier::fip]` function must not deallocate"
+    } else {
+        // (until implicit drops are counted, a function with a `deallocates` bound may not
+        // deallocate through them)
+        "the implicit drops of a function with a `deallocates` bound must not deallocate (they are not counted)"
+    };
     tcx.dcx().span_err(
         span,
         format!(
-            "-V alloc-check: a `#[verifier::fip]` function must not deallocate, but {} (a value whose drop cannot deallocate may be marked `vstd::alloc_check::NoDeallocDrop`)",
-            what
+            "-V alloc-check: {}, but {} (a value whose drop cannot deallocate may be marked `vstd::alloc_check::NoDeallocDrop`)",
+            who, what
         ),
     );
 }
@@ -314,6 +321,7 @@ fn check_fip_body<'tcx>(
     om: &OpMarkers,
 ) {
     let strict = fip_kind_local(tcx, def_id) == Some(true);
+    let fip = is_fip_local(tcx, def_id);
     let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
     let body = tcx.mir_drops_elaborated_and_const_checked(def_id);
     let body = body.borrow();
@@ -334,7 +342,12 @@ fn check_fip_body<'tcx>(
                     } else {
                         ""
                     };
-                    report(tcx, span, format!("a value of type `{}` is dropped here{}", ty, hint));
+                    report(
+                        tcx,
+                        span,
+                        fip,
+                        format!("a value of type `{}` is dropped here{}", ty, hint),
+                    );
                 }
             }
             TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
@@ -369,6 +382,7 @@ fn check_fip_body<'tcx>(
                         report(
                             tcx,
                             span,
+                            fip,
                             format!(
                                 "a value of type `{}` is dropped here{}",
                                 ty,
@@ -852,28 +866,54 @@ pub(crate) struct ExternalStrict {
     /// the functions of this crate with `encapsulates alloc(a, d)`, as VIR determined them from
     /// their specifications (their VIR paths, `{:?}`)
     local_encapsulates: std::collections::HashSet<String>,
+    /// the functions of this crate whose bodies VIR counts against a `deallocates` bound (their
+    /// own, or their trait method declaration's), which are not `#[verifier::fip]`
+    local_dealloc_bounded: std::collections::HashSet<String>,
 }
 
 impl ExternalStrict {
     fn drops_nothing<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         !def_id.is_local()
             && !self.no_drop.is_empty()
-            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
-                .is_some_and(|p| self.no_drop.contains(&format!("{:?}", p)))
+            && crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+                tcx,
+                &self.verus_items,
+                def_id,
+            )
+            .is_some_and(|p| self.no_drop.contains(&format!("{:?}", p)))
     }
 
     fn encapsulates_alloc<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         def_id.is_local()
             && !self.local_encapsulates.is_empty()
-            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
-                .is_some_and(|p| self.local_encapsulates.contains(&format!("{:?}", p)))
+            && crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+                tcx,
+                &self.verus_items,
+                def_id,
+            )
+            .is_some_and(|p| self.local_encapsulates.contains(&format!("{:?}", p)))
+    }
+
+    fn dealloc_bounded<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+        def_id.is_local()
+            && !self.local_dealloc_bounded.is_empty()
+            && crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+                tcx,
+                &self.verus_items,
+                def_id,
+            )
+            .is_some_and(|p| self.local_dealloc_bounded.contains(&format!("{:?}", p)))
     }
 
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         !def_id.is_local()
             && !self.paths.is_empty()
-            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
-                .is_some_and(|p| self.paths.contains(&format!("{:?}", p)))
+            && crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+                tcx,
+                &self.verus_items,
+                def_id,
+            )
+            .is_some_and(|p| self.paths.contains(&format!("{:?}", p)))
     }
 }
 
@@ -1167,12 +1207,14 @@ pub(crate) fn check_fip_crate<'tcx>(
     strict_fns: &[String],
     no_drop_fns: &[String],
     local_encapsulates_fns: &[String],
+    local_dealloc_bounded_fns: &[String],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
         paths: strict_fns.iter().cloned().collect(),
         no_drop: no_drop_fns.iter().cloned().collect(),
         local_encapsulates: local_encapsulates_fns.iter().cloned().collect(),
+        local_dealloc_bounded: local_dealloc_bounded_fns.iter().cloned().collect(),
     };
     let om = OpMarkers::new(tcx);
     let marker = find_trait(tcx, MARKER);
@@ -1204,7 +1246,10 @@ pub(crate) fn check_fip_crate<'tcx>(
         ) {
             continue;
         }
-        if !is_fip_local(tcx, def_id) || allocator_runtime(tcx, def_id.to_def_id()) {
+        // (and a function with a `deallocates` bound: its implicit drops are checked the same way)
+        if !(is_fip_local(tcx, def_id) || ext.dealloc_bounded(tcx, def_id.to_def_id()))
+            || allocator_runtime(tcx, def_id.to_def_id())
+        {
             continue;
         }
         any = true;

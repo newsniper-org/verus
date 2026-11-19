@@ -99,6 +99,7 @@ impl PartialEq for crate::AssumeSpecification {
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.invariants == other.invariants
             && self.unwind == other.unwind && self.allocates == other.allocates
+            && self.deallocates == other.deallocates
             && self.encapsulates == other.encapsulates
     }
 }
@@ -663,8 +664,8 @@ impl PartialEq for crate::ExprClosure {
             && self.inputs == other.inputs && self.output == other.output
             && self.requires == other.requires && self.ensures == other.ensures
             && self.invariants == other.invariants && self.unwind == other.unwind
-            && self.allocates == other.allocates && self.inner_attrs == other.inner_attrs
-            && self.body == other.body
+            && self.allocates == other.allocates && self.deallocates == other.deallocates
+            && self.inner_attrs == other.inner_attrs && self.body == other.body
     }
 }
 #[cfg(feature = "full")]
@@ -2547,6 +2548,14 @@ impl PartialEq for crate::SignatureAllocates {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl Eq for crate::SignatureDeallocates {}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl PartialEq for crate::SignatureDeallocates {
+    fn eq(&self, other: &Self) -> bool {
+        self.exprs == other.exprs
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl Eq for crate::SignatureDecreases {}
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl PartialEq for crate::SignatureDecreases {
@@ -2582,7 +2591,7 @@ impl PartialEq for crate::SignatureSpec {
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.decreases == other.decreases
             && self.invariants == other.invariants && self.unwind == other.unwind
-            && self.allocates == other.allocates
+            && self.allocates == other.allocates && self.deallocates == other.deallocates
             && self.encapsulates == other.encapsulates && self.with == other.with
     }
 }

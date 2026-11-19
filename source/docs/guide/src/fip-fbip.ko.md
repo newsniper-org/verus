@@ -173,14 +173,15 @@ fn double<S: Shape>(s: &S) -> (r: u64) {
 }
 ```
 
-기본 본문이 없는 선언은 대신 `allocates deallocates_when(n, c)`로 구현이 조건부로 해제하도록 허용할 수 있습니다.
-Verus가 검사하는 구현은 여전히 모두 `#[verifier::fip]`이어야 하고(검증된 본문이 없는 구현은 선언의 조건을
-따릅니다), fip 함수는 그 조건이 거짓임을 보일 수 있는 곳에서 호출할 수 있습니다.
+기본 본문이 없는 선언은 대신 상한 `deallocates d`나 조건 `deallocates deallocates_when(d, c)`로 구현이 해제하도록
+허용할 수 있습니다. 각 구현의 본문은 그것으로 세고(검증된 본문이 없는 구현은 선언의 것을 따릅니다), fip 함수는 그
+조건이 거짓임을 보일 수 있는 곳에서 호출할 수 있습니다.
 
 ```rust
 pub trait Pool {
     fn take(&mut self, n: u64) -> (r: u64)
-        allocates deallocates_when(0int, n > 10);
+        allocates 0
+        deallocates deallocates_when(1int, n > 10);
 }
 
 #[verifier::fip]
@@ -225,7 +226,7 @@ fn larger<'a, T: vstd::alloc_check::FipOrd>(a: &'a T, b: &'a T) -> &'a T {
 fip 함수 안의 함수 값 호출(클로저, 또는 `F: Fn(..)`인 `f: F`에 대한 `f(x)`)은 `f.deallocates(x)`가 거짓이 아니면
 메모리를 해제할 수 있습니다. 클로저 식에 `#[verifier::fip]`을 붙이면 거짓이 됩니다. 그 클로저의 본문은 fip
 함수처럼 검사하고, `allocates` 상한이 없으면 할당도 하지 않습니다. 제네릭 함수는 그 조건을 호출하는 쪽에 넘기고,
-상한도 `f.allocates(x)`로 넘깁니다.
+상한도 `f.allocations(x)`로 넘깁니다.
 
 ```rust
 #[verifier::fip]
@@ -234,7 +235,7 @@ fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
         f.requires((x,)),
         !(*f).deallocates(x),
     allocates
-        (*f).allocates(x),
+        (*f).allocations(x),
 {
     f(x)
 }

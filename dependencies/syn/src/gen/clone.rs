@@ -125,6 +125,7 @@ impl Clone for crate::AssumeSpecification {
             invariants: self.invariants.clone(),
             unwind: self.unwind.clone(),
             allocates: self.allocates.clone(),
+            deallocates: self.deallocates.clone(),
             encapsulates: self.encapsulates.clone(),
             semi: self.semi.clone(),
         }
@@ -660,6 +661,7 @@ impl Clone for crate::ExprClosure {
             invariants: self.invariants.clone(),
             unwind: self.unwind.clone(),
             allocates: self.allocates.clone(),
+            deallocates: self.deallocates.clone(),
             inner_attrs: self.inner_attrs.clone(),
             body: self.body.clone(),
         }
@@ -2619,6 +2621,15 @@ impl Clone for crate::SignatureAllocates {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "clone-impls")))]
+impl Clone for crate::SignatureDeallocates {
+    fn clone(&self) -> Self {
+        crate::SignatureDeallocates {
+            token: self.token.clone(),
+            exprs: self.exprs.clone(),
+        }
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "clone-impls")))]
 impl Clone for crate::SignatureDecreases {
     fn clone(&self) -> Self {
         crate::SignatureDecreases {
@@ -2662,6 +2673,7 @@ impl Clone for crate::SignatureSpec {
             invariants: self.invariants.clone(),
             unwind: self.unwind.clone(),
             allocates: self.allocates.clone(),
+            deallocates: self.deallocates.clone(),
             encapsulates: self.encapsulates.clone(),
             with: self.with.clone(),
         }

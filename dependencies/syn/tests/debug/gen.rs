@@ -341,6 +341,20 @@ impl Debug for Lite<syn::AssumeSpecification> {
             }
             formatter.field("allocates", Print::ref_cast(val));
         }
+        if let Some(val) = &self.value.deallocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureDeallocates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("deallocates", Print::ref_cast(val));
+        }
         if let Some(val) = &self.value.encapsulates {
             #[derive(RefCast)]
             #[repr(transparent)]
@@ -1268,6 +1282,20 @@ impl Debug for Lite<syn::Expr> {
                         }
                     }
                     formatter.field("allocates", Print::ref_cast(val));
+                }
+                if let Some(val) = &_val.deallocates {
+                    #[derive(RefCast)]
+                    #[repr(transparent)]
+                    struct Print(Box<syn::SignatureDeallocates>);
+                    impl Debug for Print {
+                        fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                            formatter.write_str("Some(")?;
+                            Debug::fmt(Lite(&self.0), formatter)?;
+                            formatter.write_str(")")?;
+                            Ok(())
+                        }
+                    }
+                    formatter.field("deallocates", Print::ref_cast(val));
                 }
                 if !_val.inner_attrs.is_empty() {
                     formatter.field("inner_attrs", Lite(&_val.inner_attrs));
@@ -2351,6 +2379,20 @@ impl Debug for Lite<syn::ExprClosure> {
                 }
             }
             formatter.field("allocates", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.deallocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(Box<syn::SignatureDeallocates>);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("deallocates", Print::ref_cast(val));
         }
         if !self.value.inner_attrs.is_empty() {
             formatter.field("inner_attrs", Lite(&self.value.inner_attrs));
@@ -6237,6 +6279,13 @@ impl Debug for Lite<syn::SignatureAllocates> {
         formatter.finish()
     }
 }
+impl Debug for Lite<syn::SignatureDeallocates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let mut formatter = formatter.debug_struct("SignatureDeallocates");
+        formatter.field("exprs", Lite(&self.value.exprs));
+        formatter.finish()
+    }
+}
 impl Debug for Lite<syn::SignatureDecreases> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         let mut formatter = formatter.debug_struct("SignatureDecreases");
@@ -6445,6 +6494,20 @@ impl Debug for Lite<syn::SignatureSpec> {
                 }
             }
             formatter.field("allocates", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.deallocates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureDeallocates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("deallocates", Print::ref_cast(val));
         }
         if let Some(val) = &self.value.encapsulates {
             #[derive(RefCast)]
@@ -7863,6 +7926,11 @@ impl Debug for Lite<syn::token::Continue> {
 impl Debug for Lite<syn::token::Crate> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("Token![crate]")
+    }
+}
+impl Debug for Lite<syn::token::Deallocates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Token![deallocates]")
     }
 }
 impl Debug for Lite<syn::token::Decreases> {

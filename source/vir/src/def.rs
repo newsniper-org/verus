@@ -56,8 +56,10 @@ const PREFIX_OPEN_INV: &str = "openinv%";
 const PREFIX_NO_UNWIND_WHEN: &str = "no_unwind_when%";
 const PREFIX_ALLOC_BOUND: &str = "alloc_bound%";
 const PREFIX_DEALLOC_COND: &str = "dealloc_cond%";
+const PREFIX_DEALLOC_BOUND: &str = "dealloc_bound%";
 /// Ghost local that counts allocations in a function checked with `-V alloc-check`
 pub const ALLOC_COUNT: &str = "alloc%count";
+pub const DEALLOC_COUNT: &str = "dealloc%count";
 /// In the body of a user's `Allocator::allocate` (or `allocate_zeroed`, `grow`, `grow_zeroed`,
 /// `shrink`): whether a block was handed out (`vstd::alloc_check::hand_out`, or got from another
 /// allocator), and the last such block
@@ -756,6 +758,10 @@ pub fn prefix_alloc_bound(ident: &Ident) -> Ident {
 
 pub fn prefix_dealloc_cond(ident: &Ident) -> Ident {
     Arc::new(PREFIX_DEALLOC_COND.to_string() + ident)
+}
+
+pub fn prefix_dealloc_bound(ident: &Ident) -> Ident {
+    Arc::new(PREFIX_DEALLOC_BOUND.to_string() + ident)
 }
 
 fn prefix_path(prefix: String, path: &Path) -> Path {

@@ -413,6 +413,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 ensures,
                 mask_spec,
                 allocates,
+                deallocations,
                 fip,
                 unwind_spec,
                 ret: r,
@@ -429,6 +430,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 let requires = self.visit_exprs(requires)?;
                 let mask_spec = R::map_opt(mask_spec, &mut |ms| self.visit_mask_spec(ms))?;
                 let allocates = R::map_opt(allocates, &mut |e| self.visit_expr(e))?;
+                let deallocations = R::map_opt(deallocations, &mut |e| self.visit_expr(e))?;
                 let unwind_spec = R::map_opt(unwind_spec, &mut |us| self.visit_unwind_spec(us))?;
 
                 self.push_scope();
@@ -457,6 +459,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         ensures: R::get_vec_a(ensures),
                         mask_spec: R::get_opt(mask_spec),
                         allocates: R::get_opt(allocates),
+                        deallocations: R::get_opt(deallocations),
                         fip: *fip,
                         unwind_spec: R::get_opt(unwind_spec),
                         ret: R::get(ret),
@@ -1211,6 +1214,8 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
             atomic_update,
             unwind_spec,
             allocates,
+            allocates_cond,
+            deallocations,
             deallocates,
             item_kind,
             attrs,
@@ -1250,6 +1255,8 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
         let atomic_update = R::map_opt(atomic_update, &mut |exp| self.visit_expr(exp))?;
         let unwind_spec = R::map_opt(unwind_spec, &mut |us| self.visit_unwind_spec(us))?;
         let allocates = self.visit_opt_expr(allocates)?;
+        let allocates_cond = self.visit_opt_expr(allocates_cond)?;
+        let deallocations = self.visit_opt_expr(deallocations)?;
         let deallocates = self.visit_opt_expr(deallocates)?;
         let body = self.visit_opt_expr(body)?;
         let return_opaque_type_eqs =
@@ -1287,6 +1294,8 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 atomic_update: R::get_opt(atomic_update),
                 unwind_spec: R::get_opt(unwind_spec),
                 allocates: R::get_opt(allocates),
+                allocates_cond: R::get_opt(allocates_cond),
+                deallocations: R::get_opt(deallocations),
                 deallocates: R::get_opt(deallocates),
                 item_kind: item_kind.clone(),
                 attrs: attrs.clone(),

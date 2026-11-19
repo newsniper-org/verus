@@ -30,6 +30,7 @@ a.struct[title="struct syn::token::Comma"],
 a.struct[title="struct syn::token::Const"],
 a.struct[title="struct syn::token::Continue"],
 a.struct[title="struct syn::token::Crate"],
+a.struct[title="struct syn::token::Deallocates"],
 a.struct[title="struct syn::token::Decreases"],
 a.struct[title="struct syn::token::Default"],
 a.struct[title="struct syn::token::DefaultEnsures"],
@@ -200,6 +201,7 @@ a.struct[title="struct syn::token::Comma"]::before,
 a.struct[title="struct syn::token::Const"]::before,
 a.struct[title="struct syn::token::Continue"]::before,
 a.struct[title="struct syn::token::Crate"]::before,
+a.struct[title="struct syn::token::Deallocates"]::before,
 a.struct[title="struct syn::token::Decreases"]::before,
 a.struct[title="struct syn::token::Default"]::before,
 a.struct[title="struct syn::token::DefaultEnsures"]::before,
@@ -465,6 +467,10 @@ a.struct[title="struct syn::token::Continue"]::before {
 
 a.struct[title="struct syn::token::Crate"]::before {
 	content: "Token![crate]";
+}
+
+a.struct[title="struct syn::token::Deallocates"]::before {
+	content: "Token![deallocates]";
 }
 
 a.struct[title="struct syn::token::Decreases"]::before {
@@ -1112,6 +1118,7 @@ a.struct[title="struct syn::token::Closed"]::after,
 a.struct[title="struct syn::token::Const"]::after,
 a.struct[title="struct syn::token::Continue"]::after,
 a.struct[title="struct syn::token::Crate"]::after,
+a.struct[title="struct syn::token::Deallocates"]::after,
 a.struct[title="struct syn::token::Decreases"]::after,
 a.struct[title="struct syn::token::Default"]::after,
 a.struct[title="struct syn::token::Do"]::after,

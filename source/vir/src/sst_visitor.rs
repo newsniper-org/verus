@@ -683,6 +683,8 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
             R::map_opt(&func_decl.alloc_bound, &mut |exp| self.visit_exp(exp))?;
         let dealloc_cond: <R as Returner>::Opt<Arc<SpannedTyped<ExpX>>> =
             R::map_opt(&func_decl.dealloc_cond, &mut |exp| self.visit_exp(exp))?;
+        let dealloc_bound: <R as Returner>::Opt<Arc<SpannedTyped<ExpX>>> =
+            R::map_opt(&func_decl.dealloc_bound, &mut |exp| self.visit_exp(exp))?;
 
         R::ret(|| FuncDeclSst {
             req_inv_pars: R::get_vec_a(req_inv_pars),
@@ -693,6 +695,7 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
             unwind_condition: R::get_opt(unwind_condition),
             alloc_bound: R::get_opt(alloc_bound),
             dealloc_cond: R::get_opt(dealloc_cond),
+            dealloc_bound: R::get_opt(dealloc_bound),
             fndef_axioms: R::get_vec_a(fndef_axioms),
         })
     }

@@ -266,10 +266,10 @@ fn two(p: &mut Pool) -> (Slot, Slot)
 }
 ```
 
-* 호출하는 쪽은 `a`만큼 청구되고(함수의 `allocates`가 `a`), 호출은 `d > 0`인 곳에서 메모리를 해제할 수 있습니다(해제
-  조건이 `d > 0`이므로, fip 함수는 `d == 0`을 보일 수 있는 곳에서만 부를 수 있습니다). `call_allocates`/
-  `f.allocates(..)`와 `call_deallocates`/`f.deallocates(..)`는 `a`와 `d > 0`입니다. (Verus는 할당은 세지만 해제는
-  할 수 있는지만 봅니다. `alloc(1, 1)`과 `alloc(1, 3)`은 `.vir`에서만 다르고, `.vir`에는 `d`가 적힌 그대로 남습니다.)
+* 호출하는 쪽은 할당 `a`번, 해제 `d`번으로 청구되고(함수의 `allocates`가 `a`, `deallocates`가 `d`), 호출은 `d > 0`인
+  곳에서 메모리를 해제할 수 있습니다(그래서 fip 함수는 `d == 0`을 보일 수 있는 곳에서만 부를 수 있습니다).
+  `call_allocations`/`f.allocations(..)`와 `call_deallocations`/`f.deallocations(..)`는 `a`와 `d`이고,
+  `call_allocates`/`f.allocates(..)`와 `call_deallocates`/`f.deallocates(..)`는 `a > 0`과 `d > 0`입니다.
 * 본문은 `Allocator`의 본문처럼 런타임의 것입니다. 본문이 할당하거나 해제하거나 스택을 쓰는 것은 검사하지 않으므로,
   전역 할당기로 풀을 다시 채울 수 있습니다. `ensures`는 평소처럼 검증합니다. strict 함수는 이것을 리프로 부를 수
   있습니다.
@@ -282,13 +282,13 @@ fn two(p: &mut Pool) -> (Slot, Slot)
 
 ## 콜백, 클로저, trait
 
-제네릭 함수 값을 통한 호출에는 `call_allocates(f, args)`가 청구됩니다. 이는 `f`가 실제로 무엇이든
+제네릭 함수 값을 통한 호출에는 `call_allocations(f, args)`가 청구됩니다. 이는 `f`가 실제로 무엇이든
 그것의 상한입니다. 호출자의 상한에 이 항을 쓸 수 있습니다.
 
 ```rust
 fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> u64
     requires f.requires((x,)),
-    allocates call_allocates(*f, (x,))
+    allocates call_allocations(*f, (x,))
 {
     f(x)
 }
@@ -301,26 +301,32 @@ fn use_apply() -> u64
 }
 ```
 
-`allocates` 상한이 있는 클로저나 함수에서는 `call_allocates`가 곧 그 상한입니다. 사용자 코드를 부르는
+`allocates` 상한이 있는 클로저나 함수에서는 `call_allocations`가 곧 그 상한입니다. 사용자 코드를 부르는
 std 함수에 대한 vstd 명세도 같은 방식으로 그 호출을 청구합니다. 예를 들어 `Vec::clone`은 원소마다
 `T::clone`을 한 번씩 청구합니다. `HashMap::insert`는 `Hash`/`Eq` 콜백을 `hash_ops_cost(m, k)`로 청구합니다.
 
-`call_deallocates(f, args)`는 같은 방식으로 함수 값의 해제 조건입니다. `#[verifier::fip]` 함수에서는
-`false`이고, `deallocates_when`이 있는 함수에서는 그 조건이며, 선언에 조건이 있는 trait 메서드에서는 (모든
-구현에 대해) 많아야 그 조건입니다. `verus!` 안의 ghost 코드(명세, `assert` 등)에서 `f.allocates(args)`는
-`call_allocates(f, (args,))`이고 `f.deallocates(args)`는 `call_deallocates(f, (args,))`입니다(exec 코드의 같은
-이름 메서드는 그대로 둡니다). 그래서 다른 함수에 넘기는 명세는 둘 다, 일부
-인자에서만 성립하는 조건도 그대로 넘길 수 있습니다.
+`call_allocates(f, args)`(`bool`: 그 호출이 할당할 수 있는가)는 `allocates` 상한이 양수인지입니다
+(`allocates allocates_when(a, c)`이면 `c`). 횟수가 양수이면 이것이 참이므로, `requires !f.allocates(x)`를 요구하는
+제네릭 함수는 그 호출에 0으로 청구됩니다.
+
+해제 쪽도 같습니다("해제 상한" 절 참고). `call_deallocations(f, args)`(횟수)와 `call_deallocates(f, args)`(해제할 수
+있는가)는 `#[verifier::fip]` 함수에서는 0과 `false`이고, 그 밖에는 `deallocates` 상한과 그것이 양수인지(또는
+`deallocates_when(d, c)`의 조건 `c`)이며, 선언에 상한이 있는 trait 메서드에서는 (모든 구현에 대해) 많아야 그것입니다.
+`verus!` 안의 ghost 코드(명세, `assert` 등)에서 `f.allocations(args)`, `f.allocates(args)`, `f.deallocations(args)`,
+`f.deallocates(args)`는 `call_allocations(f, (args,))` 등입니다(exec 코드의 같은 이름 메서드는 그대로 둡니다). 그래서
+다른 함수에 넘기는 명세는 이것들을 모두, 일부 인자에서만 성립하는 조건도 그대로 넘길 수 있습니다.
 
 ```rust
 #[verifier::external_body]
 fn shrink_if_big(x: u64) -> (r: u64)
-    allocates deallocates_when(0int, x > 5)
+    allocates 0
+    deallocates deallocates_when(1int, x > 5)
 { x }
 
 #[verifier::external_body]
 fn outer(x: u64) -> (r: u64)
-    allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+    allocates shrink_if_big.allocations(x)
+    deallocates deallocates_when(shrink_if_big.deallocations(x), shrink_if_big.deallocates(x))
 { shrink_if_big(x) }
 
 #[verifier::fip]
@@ -343,7 +349,7 @@ fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
         f.requires((x,)),
         !(*f).deallocates(x),
     allocates
-        (*f).allocates(x),
+        (*f).allocations(x),
 {
     f(x)
 }
@@ -405,11 +411,44 @@ fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0;
 만족함을 보여야 합니다. 메서드 명세에는 `requires`(impl이 받아들여야 함), `ensures`(impl이 보장해야 함),
 `allocates`를 쓸 수 있습니다. `fn drop allocates 0;`은 `T`를 drop해도 할당하지 않는다는 뜻이고, Verus가
 인스턴스의 drop glue로 확인하므로 `T`를 인스턴스화하는 타입에는 `AllocFreeDrop` impl이 필요 없습니다. 이 블록은
-`requires`(`call_requires`, `call_ensures`, `call_allocates`)로 풀립니다. 함수의 타입 매개변수 말고도
+`requires`(`call_requires`, `call_ensures`, `call_allocations`)로 풀립니다. 함수의 타입 매개변수 말고도
 `where` 절(`where T: Clone with { .. }`, 매개변수가 아닌 타입에도), inherent impl 블록(그 안의 모든 exec·proof
 메서드가 받음), struct의 타입 매개변수(같은 `verus!` 블록에 있는 그 struct의 모든 inherent impl 블록이,
 매개변수를 인스턴스화한 타입에 대해 받음)에 쓸 수 있습니다. trait impl에서는 메서드가 `requires`를 가질 수
 없으므로 거부됩니다.
+
+## 해제 상한: `deallocates`
+
+`deallocates d`는 `allocates`가 할당 횟수를 제한하듯이, exec 함수가 정상적으로 반환할 때까지 하는 해제 횟수를 제한합니다.
+`allocates` 다음에 씁니다.
+
+```rust
+fn drop_two(v: &mut Pool, a: Slot, b: Slot)
+    allocates 0
+    deallocates 2
+{
+    v.free(a);
+    v.free(b);
+}
+```
+
+* 해제 한 번은 프로그램이 블록 하나를 놓는 것입니다. `Allocator::deallocate`는 1, `grow`/`grow_zeroed`/`shrink`는 많아야
+  1(블록을 옮길 수 있음), `vstd::raw_ptr::deallocate`는 1, `encapsulates alloc(a, d)`가 붙은 함수는 `d`입니다.
+  `#[verifier::fip]` 함수는 `deallocates 0`이고 `deallocates`를 적을 수 없습니다. 그 밖의 피호출자는 `deallocates` 상한이
+  있어야 합니다. 상한이 있는 함수는 상한이 없는 함수를 부를 수 없습니다.
+* 본문은 `allocates`처럼 검사합니다. ghost 계수기를 두고, 정상 반환 지점마다 (진입 시점에 평가한) 상한과 비교합니다.
+  `deallocated()`가 그 계수기이며 루프 불변식에 씁니다.
+* `deallocates deallocates_when(d, c)`는 상한 `if c { d } else { 0 }`이고, 그 함수의 `call_deallocates`는 `c`입니다.
+  `allocates allocates_when(a, c)`는 할당 쪽의 같은 형태입니다. 조건 없는 상한 `d`에서는 `call_deallocates`가 `d > 0`입니다.
+* trait 메서드 선언의 상한은 모든 구현의 계약입니다. 구현의 본문은 그 상한으로 세고, 자기 상한을 적은 구현은 그 안에 있어야
+  합니다(진입 시점에 검사).
+* `call_deallocations(f, args)` / `f.deallocations(x)`는 함수 값의 상한입니다("콜백, 클로저, trait" 참고).
+* **지금은 암묵적 drop을 세지 않습니다.** `deallocates` 상한이 있는 함수(자기 것이든 trait 선언에서 물려받은 것이든)는
+  컴파일러가 넣는 drop으로 메모리를 놓으면 안 됩니다. fip 함수처럼 컴파일된 프로그램에서 검사합니다. 클로저에는 아직
+  `deallocates`를 붙일 수 없습니다(`#[verifier::fip]` 클로저는 해제하지 않습니다).
+* (과도기: 이전 형태 `allocates deallocates_when(n, c)`는 검증된 본문이 없는 명세에서 아직 받습니다. `allocates n`에 조건
+  `c`가 붙은 것이고 해제 횟수에는 상한이 없으므로, `deallocates` 상한이 있는 함수는 이것을 부를 수 없습니다. vstd는 위의
+  형태로 옮겨 갑니다.)
 
 ## 완전한 제자리 함수: `#[verifier::fip]`
 
@@ -440,19 +479,18 @@ fn push_spare(v: &mut Vec<u64>)
 두 가지를 검사합니다.
 
 * **호출.** callee가 그 자체로 `#[verifier::fip]`이거나 해제 조건을 가져야 하고, 호출자는 그 조건이
-  거짓임을 보여야 합니다. 검증된 본문이 없는 명세는 이 조건을 `allocates deallocates_when(n, c)`로
-  적습니다. 그 함수는 최대 `n`번 할당하고, `c`가 참일 때만 해제할 수 있습니다(`c`는 진입 시점에
-  평가). 예를 들어 `Vec::push`는 기존 버퍼를 키워야 할 때 해제할 수 있습니다. 키우는 것은
+  거짓임을 보여야 합니다. 조건은 `deallocates d`에서는 `d > 0`, `deallocates deallocates_when(d, c)`에서는 `c`입니다
+  (진입 시점에 평가, "해제 상한" 참고). 예를 들어 `Vec::push`는 기존 버퍼를 키워야 할 때 해제할 수 있습니다. 키우는 것은
   재할당이고, 재할당은 옛 블록을 해제하기 때문입니다. 버퍼가 없는 벡터는 할당기의 `allocate`만 불러서
   키웁니다. 어떤 할당기든 `allocate`는 해제하지 않습니다("사용자 정의 할당기" 참고). 기본 본문이 없는 trait
-  메서드 선언도 이 조건을 적을 수 있고, 그러면 모든 구현이 지켜야 하는 계약이 됩니다. 검증된 본문이 있는 구현은
-  `#[verifier::fip]`여야 합니다(Verus는 본문이 해제하지 않는지를 검사할 뿐, 조건이 참일 때만 해제하는지는
-  검사하지 않습니다). 본문이 없는 구현(`external_body`, `assume_specification`)은 선언의 조건을 따르며 자기
-  조건을 따로 적을 수 없습니다. 할당기 런타임의 코드는 예외입니다(`Allocator::allocate`는
-  `deallocates_when(1, false)`로 선언되어 있습니다). Verus가 검사하지 않는 구현이나 `-V alloc-check`로 검증하지
+  메서드 선언도 상한이나 조건을 적을 수 있고, 그러면 모든 구현이 지켜야 하는 계약이 됩니다. 검증된 본문이 있는 구현은
+  그 상한으로 셉니다. 본문이 없는 구현(`external_body`, `assume_specification`)은 선언의 것을 따르며 자기 것을 따로 적을
+  수 없습니다. 할당기 런타임의 코드는 예외입니다(`Allocator::allocate`는 `deallocates 0`으로 선언되어 있습니다).
+  (횟수가 없는 과도기 형태 `allocates deallocates_when(n, c)`에서는 검증된 본문이 있는 구현이 `#[verifier::fip]`여야
+  합니다.) Verus가 검사하지 않는 구현이나 `-V alloc-check`로 검증하지
   않은 crate의 구현은 거부합니다.
   impl로 해석되지 않는 trait 메서드 호출(제네릭 호출)은 그 메서드의 선언이 `#[verifier::fip]`이거나, 선언의
-  `deallocates_when` 조건이 거짓임을 호출하는 쪽이 보이거나, 연산자 trait의 메서드를 그 표시 trait을 통해 부를
+  조건이 거짓임을 호출하는 쪽이 보이거나, 연산자 trait의 메서드를 그 표시 trait을 통해 부를
   때만 허용합니다(아래 "연산자 trait" 참고). 선언에 붙은 이 속성은
   계약입니다. 그 메서드의 모든 구현도 `#[verifier::fip]`여야 하고(strict 선언이면
   `#[verifier::fip(strict)]`) 그래야 구현의 호출과 drop이 검사됩니다. Verus가 검사하지 않는 구현은
@@ -609,7 +647,7 @@ fn sum(n: u64, acc: u64) -> (r: u64)
 ### 연산자 trait: `FipAdd`, `FipOrd` 등
 
 trait 메서드의 제네릭 호출은 impl을 알 수 없습니다. 그래서 `-V alloc-check`는 호출자 자신의 상한
-(`call_allocates`)으로만 그 호출을 제한할 수 있고, fip 함수는 그 호출을 아예 할 수 없습니다. `core`의
+(`call_allocations`)으로만 그 호출을 제한할 수 있고, fip 함수는 그 호출을 아예 할 수 없습니다. `core`의
 연산자 trait에 대해서는 vstd가 unsafe 표시 trait을 제공합니다. 표시 trait은 어떤 타입의 그 trait impl이
 무엇을 하는지 말합니다. 연산자 trait `Op`마다 셋이 있고, 각각 다음 것의 상위 trait입니다.
 
@@ -671,7 +709,7 @@ impl이 정의하지 않은 메서드는 `core`가 제공하는 본문을 실행
 인자를 비교하는 std 함수는 비교가 해제할 때만 해제하고, 비교가 할당하는 만큼만 할당합니다. vstd는 이것을
 표시 trait의 spec 수준 형태로 적습니다. `partial_eq_is_fip::<T, Rhs>()`, `partial_ord_is_fip::<T, Rhs>()`,
 `ord_is_fip::<T>()`, `ord_is_fbip::<T>()`(각각 표시 trait이 있는 타입에 대해 참)를 `deallocates_when` 조건에
-쓰고, `FbipOp` 타입의 메서드가 할당하지 않는다는 공리(`call_allocates(<T as PartialEq>::eq, ..) == 0`)를
+쓰고, `FbipOp` 타입의 메서드가 할당하지 않는다는 공리(`call_allocations(<T as PartialEq>::eq, ..) == 0`)를
 둡니다. 그래서 fip 함수는 표시 trait이 있는 타입에 대해 이 함수들을 부를 수 있습니다.
 
 ```rust

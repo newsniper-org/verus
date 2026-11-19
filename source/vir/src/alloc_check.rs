@@ -1439,11 +1439,15 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
 /// (`check_unverified_impls_of_bounded_decls`). (An imported implementation has no body here: its
 /// crate checked it, or `check_imported_bounds_were_checked` rejects it.)
 pub(crate) fn check_impls_of_dealloc_decls(krate: &Krate) -> Result<(), VirErr> {
+    // (a declaration with a `deallocates` bound gives its implementations a bound that their
+    // bodies are counted against; only the transitional `allocates deallocates_when(n, c)`, a
+    // condition without a number, needs them to be fip)
     let decl_has_dealloc: HashSet<&crate::ast::Fun> = krate
         .functions
         .iter()
         .filter(|f| {
             f.x.deallocates.is_some()
+                && f.x.deallocations.is_none()
                 && matches!(f.x.kind, crate::ast::FunctionKind::TraitMethodDecl { .. })
         })
         .map(|f| &f.x.name)
@@ -1757,13 +1761,17 @@ pub(crate) fn check_allocated_not_in_closure_specs(function: &Function) -> Resul
         crate::ast_visitor::expr_visitor_check::<VirErr, _>(spec, &mut |_scope, e| {
             if let ExprX::Call {
                 target:
-                    crate::ast::CallTarget::BuiltinSpecFun(crate::ast::BuiltinSpecFun::Allocated, ..),
+                    crate::ast::CallTarget::BuiltinSpecFun(
+                        crate::ast::BuiltinSpecFun::Allocated
+                        | crate::ast::BuiltinSpecFun::Deallocated,
+                        ..,
+                    ),
                 ..
             } = &e.x
             {
                 return Err(error(
                     &e.span,
-                    "`allocated()` cannot be used in a closure's `requires`, `ensures` or `allocates`",
+                    "`allocated()` and `deallocated()` cannot be used in a closure's `requires`, `ensures`, `allocates` or `deallocates`",
                 ));
             }
             Ok(())

@@ -766,6 +766,7 @@ define_keywords! {
     "no_unwind"   pub struct NoUnwind
     "allocates"   pub struct Allocates
     "encapsulates"   pub struct Encapsulates
+    "deallocates"   pub struct Deallocates
     "invariant"   pub struct Invariant
     "invariant_ensures"   pub struct InvariantEnsures
     "assert"      pub struct Assert
@@ -1062,6 +1063,7 @@ macro_rules! Token {
     [no_unwind]   => { $crate::token::NoUnwind };
     [allocates]   => { $crate::token::Allocates };
     [encapsulates] => { $crate::token::Encapsulates };
+    [deallocates] => { $crate::token::Deallocates };
     [invariant]   => { $crate::token::Invariant };
     [invariant_ensures] => { $crate::token::InvariantEnsures };
     [assert]      => { $crate::token::Assert };

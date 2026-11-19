@@ -358,6 +358,10 @@ pub struct Verifier {
     /// -V alloc-check: the functions of this crate with `encapsulates alloc(a, d)` (their VIR
     /// paths, `{:?}`), from their specifications: `fip_mir` treats them as leaves
     pub(crate) alloc_local_encapsulates_fns: Vec<String>,
+    /// -V alloc-check: the functions of this crate whose bodies are counted against a
+    /// `deallocates` bound (own or inherited), and are not `#[verifier::fip]` (their VIR paths):
+    /// `fip_mir` checks that their implicit drops free nothing
+    pub(crate) alloc_local_dealloc_bounded_fns: Vec<String>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -570,6 +574,7 @@ impl Verifier {
             alloc_checked_strict_fns: Vec::new(),
             alloc_no_drop_fns: Vec::new(),
             alloc_local_encapsulates_fns: Vec::new(),
+            alloc_local_dealloc_bounded_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -624,6 +629,7 @@ impl Verifier {
             alloc_checked_strict_fns: self.alloc_checked_strict_fns.clone(),
             alloc_no_drop_fns: self.alloc_no_drop_fns.clone(),
             alloc_local_encapsulates_fns: self.alloc_local_encapsulates_fns.clone(),
+            alloc_local_dealloc_bounded_fns: self.alloc_local_dealloc_bounded_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -2847,6 +2853,27 @@ impl Verifier {
         .map_err(map_err_diagnostics)?;
 
         let merged_crate = query.get_merged_crate().map_err(map_query_err)?;
+        {
+            // (a trait method implementation inherits its declaration's `deallocates` bound)
+            let decl_bounded: std::collections::HashSet<&vir::ast::Fun> = merged_crate
+                .functions
+                .iter()
+                .filter(|f| f.x.deallocations.is_some())
+                .map(|f| &f.x.name)
+                .collect();
+            self.alloc_local_dealloc_bounded_fns = local_crate
+                .functions
+                .iter()
+                .filter(|f| !f.x.attrs.fip && !f.x.attrs.allocator_runtime && f.x.body.is_some())
+                .filter(|f| {
+                    f.x.deallocations.is_some()
+                        || matches!(&f.x.kind,
+                            vir::ast::FunctionKind::TraitMethodImpl { method, .. }
+                                if decl_bounded.contains(method))
+                })
+                .map(|f| format!("{:?}", f.x.name.path))
+                .collect();
+        }
         self.maybe_log_impl_names(&merged_crate).map_err(map_err_diagnostics)?;
         self.maybe_log_vir_crate(&merged_crate).map_err(map_err_diagnostics)?;
 

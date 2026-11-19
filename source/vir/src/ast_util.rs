@@ -1418,6 +1418,7 @@ impl HeaderExprX {
             | HeaderExprX::NoUnwind
             | HeaderExprX::NoUnwindWhen(_)
             | HeaderExprX::Allocates(..)
+            | HeaderExprX::Deallocates(..)
             | HeaderExprX::EncapsulatesAlloc(..) => "beginning of the function body",
 
             HeaderExprX::InvariantExceptBreak(_)

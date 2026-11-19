@@ -1068,6 +1068,12 @@ pub trait Fold {
     ) -> crate::SignatureAllocates {
         fold_signature_allocates(self, i)
     }
+    fn fold_signature_deallocates(
+        &mut self,
+        i: crate::SignatureDeallocates,
+    ) -> crate::SignatureDeallocates {
+        fold_signature_deallocates(self, i)
+    }
     fn fold_signature_decreases(
         &mut self,
         i: crate::SignatureDecreases,
@@ -1492,6 +1498,7 @@ where
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
         allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
+        deallocates: (node.deallocates).map(|it| f.fold_signature_deallocates(it)),
         encapsulates: (node.encapsulates).map(|it| f.fold_signature_encapsulates(it)),
         semi: node.semi,
     }
@@ -2175,6 +2182,8 @@ where
             .map(|it| Box::new(f.fold_signature_invariants(*it))),
         unwind: (node.unwind).map(|it| Box::new(f.fold_signature_unwind(*it))),
         allocates: (node.allocates).map(|it| Box::new(f.fold_signature_allocates(*it))),
+        deallocates: (node.deallocates)
+            .map(|it| Box::new(f.fold_signature_deallocates(*it))),
         inner_attrs: f.fold_attributes(node.inner_attrs),
         body: Box::new(f.fold_expr(*node.body)),
     }
@@ -4599,6 +4608,18 @@ where
         exprs: f.fold_specification(node.exprs),
     }
 }
+pub fn fold_signature_deallocates<F>(
+    f: &mut F,
+    node: crate::SignatureDeallocates,
+) -> crate::SignatureDeallocates
+where
+    F: Fold + ?Sized,
+{
+    crate::SignatureDeallocates {
+        token: node.token,
+        exprs: f.fold_specification(node.exprs),
+    }
+}
 pub fn fold_signature_decreases<F>(
     f: &mut F,
     node: crate::SignatureDecreases,
@@ -4656,6 +4677,7 @@ where
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
         allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
+        deallocates: (node.deallocates).map(|it| f.fold_signature_deallocates(it)),
         encapsulates: (node.encapsulates).map(|it| f.fold_signature_encapsulates(it)),
         with: (node.with).map(|it| f.fold_with_spec_on_fn(it)),
     }

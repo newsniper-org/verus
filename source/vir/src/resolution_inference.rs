@@ -1057,6 +1057,7 @@ impl<'a> Builder<'a> {
                 ensures: _,
                 mask_spec: _,
                 allocates: _,
+                deallocations: _,
                 fip: _,
                 unwind_spec: _,
                 ret: _,

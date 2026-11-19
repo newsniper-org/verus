@@ -131,7 +131,9 @@ fn exec_nonstatic_call<Args: core::marker::Tuple, Output, F>(f: F, args: Args) -
         call_ensures(f, args, output),
     no_unwind when !call_unwinds(f, args)
     allocates
-        deallocates_when(call_allocations(f, args), call_deallocates(f, args)),
+        call_allocations(f, args),
+    deallocates
+        deallocates_when(call_deallocations(f, args), call_deallocates(f, args)),
 {
     unimplemented!();
 }

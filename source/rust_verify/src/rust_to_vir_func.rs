@@ -386,6 +386,8 @@ fn finish_autospec<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        allocates_cond: None,
+        deallocations: None,
         deallocates: None,
         hidden: Arc::new(vec![]),
     };
@@ -2549,13 +2551,13 @@ pub(crate) fn finish_function<'tcx>(
         if vattrs.external_body || vattrs.external_fn_specification {
             return err_span(
                 sig.span,
-                "`#[verifier::fip]` needs a verified body (a specification without one can state `allocates deallocates_when(n, c)`)",
+                "`#[verifier::fip]` needs a verified body (a specification without one can state `deallocates 0`)",
             );
         }
-        if header.deallocates.is_some() {
+        if header.deallocates.is_some() || header.deallocations.is_some() {
             return err_span(
                 sig.span,
-                "a `#[verifier::fip]` function never deallocates, so it cannot state `deallocates_when`",
+                "a `#[verifier::fip]` function never deallocates (it is `deallocates 0`), so it cannot state `deallocates`",
             );
         }
         // (FP² `fip` without a bound: no allocation either)
@@ -2574,9 +2576,12 @@ pub(crate) fn finish_function<'tcx>(
         header.allocates =
             Some(vir::ast_util::mk_int_lit_from_usize(&ctxt.spans.to_air_span(sig.span), 0));
     }
-    // (a trait method declaration without a default body may state one too: a contract of every
-    // implementation, see vir's `well_formed`)
+    // The transitional `allocates deallocates_when(n, c)` gives a condition without a bound on the
+    // number of deallocations, which a verified body cannot be checked against; only a
+    // specification without one may state it. (A trait method declaration without a default body
+    // may state one too: a contract of every implementation, see vir's `alloc_check`.)
     if header.deallocates.is_some()
+        && header.deallocations.is_none()
         && !header.encapsulates_alloc
         && !(vattrs.external_body
             || vattrs.external_fn_specification
@@ -2584,8 +2589,15 @@ pub(crate) fn finish_function<'tcx>(
     {
         return err_span(
             sig.span,
-            "only a specification without a verified body (`assume_specification`, `external_body`, a trait method declaration without a default body) can state `deallocates_when`; a verified function that never deallocates is `#[verifier::fip]`",
+            "only a specification without a verified body (`assume_specification`, `external_body`, a trait method declaration without a default body) can state `allocates deallocates_when(n, c)`; a verified function states `deallocates d` (or `deallocates deallocates_when(d, c)`), or is `#[verifier::fip]` if it never deallocates",
         );
+    }
+    // `deallocates d` without a condition: the function may deallocate where `d > 0`
+    if let (Some(count), None) = (&header.deallocations, &header.deallocates) {
+        let zero = vir::ast_util::mk_int_lit_from_usize(&count.span, 0);
+        let zero = vir::ast::SpannedTyped::new(&count.span, &count.typ, zero.x.clone());
+        header.deallocates =
+            Some(vir::ast_util::mk_ineq(&count.span, &zero, count, vir::ast::InequalityOp::Lt));
     }
 
     let body = if vattrs.external_body || vattrs.external_fn_specification || header.no_method_body
@@ -2730,6 +2742,8 @@ pub(crate) fn finish_function<'tcx>(
         atomic_update: header.atomic_update,
         unwind_spec: header.unwind_spec,
         allocates: header.allocates,
+        allocates_cond: header.allocates_cond,
+        deallocations: header.deallocations,
         deallocates: header.deallocates,
         item_kind,
         attrs,
@@ -2904,6 +2918,8 @@ fn check_external_fn_specification_trait_method_decl_typs(
             atomic_update: _,
             unwind_spec,
             allocates,
+            allocates_cond,
+            deallocations,
             deallocates,
             item_kind: _,
             attrs: _,
@@ -2924,6 +2940,8 @@ fn check_external_fn_specification_trait_method_decl_typs(
         unsupported_err_unless!(matches!(unwind_spec, None), span, "unwind");
         unsupported_err_unless!(allocates.is_none(), span, "`allocates` clauses");
         unsupported_err_unless!(deallocates.is_none(), span, "`deallocates_when` conditions");
+        unsupported_err_unless!(allocates_cond.is_none(), span, "`allocates_when` conditions");
+        unsupported_err_unless!(deallocations.is_none(), span, "`deallocates` clauses");
         unsupported_err_unless!(body.is_none(), span, "opens_invariants");
     }
     Ok(())
@@ -3751,6 +3769,8 @@ pub(crate) fn finish_const_or_static<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        allocates_cond: None,
+        deallocations: None,
         deallocates: None,
         item_kind,
         attrs,
@@ -3875,6 +3895,8 @@ pub(crate) fn check_foreign_item_fn<'tcx>(
         atomic_update: None,
         unwind_spec: None,
         allocates: None,
+        allocates_cond: None,
+        deallocations: None,
         deallocates: None,
         item_kind: ItemKind::Function,
         attrs: Default::default(),
