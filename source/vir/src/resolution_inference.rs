@@ -1058,6 +1058,7 @@ impl<'a> Builder<'a> {
                 mask_spec: _,
                 allocates: _,
                 fip: _,
+                unwind_spec: _,
                 ret: _,
                 external_spec: _,
             } => {

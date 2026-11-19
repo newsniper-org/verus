@@ -407,6 +407,7 @@ ast_struct! {
         pub requires: Option<Requires>,
         pub ensures: Option<Ensures>,
         pub invariants: Option<Box<crate::verus::SignatureInvariants>>,
+        pub unwind: Option<Box<crate::verus::SignatureUnwind>>,
         pub allocates: Option<Box<crate::verus::SignatureAllocates>>,
         pub inner_attrs: Vec<Attribute>,
         pub body: Box<Expr>,
@@ -1276,7 +1277,7 @@ pub(crate) mod parsing {
     use crate::verbatim;
     use crate::verus::{
         ClosureArg, Context, Decreases, Ensures, ExprGetField, ExprHas, ExprHasNot, ExprIs,
-        ExprIsNot, Requires, SignatureAllocates, SignatureInvariants, View,
+        ExprIsNot, Requires, SignatureAllocates, SignatureInvariants, SignatureUnwind, View,
     };
     use alloc::boxed::Box;
     use alloc::format;
@@ -2858,42 +2859,47 @@ pub(crate) mod parsing {
         let needs_block = input.peek(Token![->])
             || input.peek(Token![requires])
             || input.peek(Token![ensures])
+            || input.peek(Token![no_unwind])
             || input.peek(Token![allocates]);
-        let (output, requires, ensures, invariants, allocates, inner_attrs, body) = if needs_block {
-            let output = input.parse()?;
-            let requires: Option<Requires> = Requires::parse_optional_in(Context::Expr, input)?;
-            let ensures: Option<Ensures> = Ensures::parse_optional_in(Context::Expr, input)?;
-            let invariants: Option<SignatureInvariants> = input.parse()?;
-            let allocates: Option<SignatureAllocates> = input.parse()?;
-            let body: Block = input.parse()?;
-            let inner_attrs = input.call(Attribute::parse_inner)?;
-            let block = Expr::Block(ExprBlock {
-                attrs: Vec::new(),
-                label: None,
-                block: body,
-            });
-            (
-                output,
-                requires,
-                ensures,
-                invariants,
-                allocates,
-                inner_attrs,
-                block,
-            )
-        } else {
-            let inner_attrs = input.call(Attribute::parse_inner)?;
-            let body = ambiguous_expr(input, allow_struct)?;
-            (
-                ReturnType::Default,
-                None,
-                None,
-                None,
-                None,
-                inner_attrs,
-                body,
-            )
-        };
+        let (output, requires, ensures, invariants, unwind, allocates, inner_attrs, body) =
+            if needs_block {
+                let output = input.parse()?;
+                let requires: Option<Requires> = Requires::parse_optional_in(Context::Expr, input)?;
+                let ensures: Option<Ensures> = Ensures::parse_optional_in(Context::Expr, input)?;
+                let invariants: Option<SignatureInvariants> = input.parse()?;
+                let unwind: Option<SignatureUnwind> = input.parse()?;
+                let allocates: Option<SignatureAllocates> = input.parse()?;
+                let body: Block = input.parse()?;
+                let inner_attrs = input.call(Attribute::parse_inner)?;
+                let block = Expr::Block(ExprBlock {
+                    attrs: Vec::new(),
+                    label: None,
+                    block: body,
+                });
+                (
+                    output,
+                    requires,
+                    ensures,
+                    invariants,
+                    unwind,
+                    allocates,
+                    inner_attrs,
+                    block,
+                )
+            } else {
+                let inner_attrs = input.call(Attribute::parse_inner)?;
+                let body = ambiguous_expr(input, allow_struct)?;
+                (
+                    ReturnType::Default,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    inner_attrs,
+                    body,
+                )
+            };
 
         Ok(ExprClosure {
             attrs: Vec::new(),
@@ -2911,6 +2917,7 @@ pub(crate) mod parsing {
             requires,
             ensures,
             invariants: invariants.map(Box::new),
+            unwind: unwind.map(Box::new),
             allocates: allocates.map(Box::new),
             inner_attrs,
             body: Box::new(body),
@@ -3932,6 +3939,7 @@ pub(crate) mod printing {
         e.requires.to_tokens(tokens);
         e.ensures.to_tokens(tokens);
         e.invariants.to_tokens(tokens);
+        e.unwind.to_tokens(tokens);
         e.allocates.to_tokens(tokens);
         inner_attrs_to_tokens(&e.inner_attrs, tokens);
         if matches!(e.output, ReturnType::Default)

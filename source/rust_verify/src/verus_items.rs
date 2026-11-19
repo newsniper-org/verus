@@ -113,6 +113,7 @@ pub(crate) enum SpecItem {
     NoUnwind,
     NoUnwindWhen,
     Allocates,
+    EncapsulatesAlloc,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -425,6 +426,7 @@ pub(crate) enum BuiltinFunctionItem {
     CallOpensInvariants,
     CallAllocates,
     CallDeallocates,
+    CallUnwinds,
     DeallocatesWhen,
     Allocated,
     ConstrainType,
@@ -535,6 +537,7 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::no_unwind",               VerusItem::Spec(SpecItem::NoUnwind)),
         ("verus::verus_builtin::no_unwind_when",          VerusItem::Spec(SpecItem::NoUnwindWhen)),
         ("verus::verus_builtin::allocates",               VerusItem::Spec(SpecItem::Allocates)),
+        ("verus::verus_builtin::encapsulates_alloc",      VerusItem::Spec(SpecItem::EncapsulatesAlloc)),
 
         ("verus::verus_builtin::forall",                  VerusItem::Quant(QuantItem::Forall)),
         ("verus::verus_builtin::exists",                  VerusItem::Quant(QuantItem::Exists)),
@@ -793,6 +796,7 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::allocated",               VerusItem::BuiltinFunction(BuiltinFunctionItem::Allocated)),
         ("verus::verus_builtin::call_allocates",          VerusItem::BuiltinFunction(BuiltinFunctionItem::CallAllocates)),
         ("verus::verus_builtin::call_deallocates",        VerusItem::BuiltinFunction(BuiltinFunctionItem::CallDeallocates)),
+        ("verus::verus_builtin::call_unwinds",            VerusItem::BuiltinFunction(BuiltinFunctionItem::CallUnwinds)),
         ("verus::verus_builtin::deallocates_when",        VerusItem::BuiltinFunction(BuiltinFunctionItem::DeallocatesWhen)),
         ("verus::verus_builtin::call_opens_invariants",   VerusItem::BuiltinFunction(BuiltinFunctionItem::CallOpensInvariants)),
         ("verus::verus_builtin::constrain_type",          VerusItem::BuiltinFunction(BuiltinFunctionItem::ConstrainType)),

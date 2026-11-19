@@ -170,6 +170,16 @@ pub fn allocates<A: Integer>(_a: A) {
     unimplemented!();
 }
 
+/// `encapsulates alloc(a, d)` (the macro gives the condition `d > 0` too): the function
+/// encapsulates an allocator; each call counts as `a` allocations and `d` deallocations (both
+/// `nat`), and its body is the runtime's (-V alloc-check)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::encapsulates_alloc"]
+#[verifier::proof]
+pub fn encapsulates_alloc(_a: nat, _d: nat, _deallocates: bool) {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::reveal_hide"]
 #[verifier::proof]
@@ -2179,6 +2189,16 @@ pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: 
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_deallocates"]
 pub fn call_deallocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {
+    unimplemented!();
+}
+
+/// May a call of the function value `f` with `args` unwind? (`false` for a `no_unwind` function
+/// or closure; for one with `no_unwind when c`, `false` where `c` holds; for a trait method whose
+/// declaration has `no_unwind` (or `no_unwind when c`), the same for every implementation.
+/// Inside `verus!`, `f.unwinds(args)` is `call_unwinds(f, (args,))`.)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::call_unwinds"]
+pub fn call_unwinds<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {
     unimplemented!();
 }
 

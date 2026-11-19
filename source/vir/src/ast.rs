@@ -861,6 +861,9 @@ pub enum HeaderExprX {
     /// `allocates n` (with `deallocates_when(n, c)`: and the condition `c` under which the
     /// function may deallocate)
     Allocates(Expr, Option<Expr>),
+    /// `encapsulates alloc(a, d)`: the bound `a` and the deallocation condition `d > 0` (-V
+    /// alloc-check: the function encapsulates an allocator, and its body is the runtime's)
+    EncapsulatesAlloc(Expr, Expr),
     /// The visibility used in, e.g., `open(crate)`
     OpenVisibilityQualifier(Visibility),
 }
@@ -1011,6 +1014,8 @@ pub enum BuiltinSpecFun {
     ClosureAlloc,
     /// `call_deallocates(f, args)`: may a call of the function value deallocate (-V alloc-check)
     ClosureDealloc,
+    /// `call_unwinds(f, args)`: may a call of the function value unwind
+    ClosureUnwinds,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, ToDebugSNode, PartialEq, Eq)]
@@ -1227,6 +1232,9 @@ pub enum ExprX {
         /// `-V alloc-check`: `#[verifier::fip]` on the closure: its body never deallocates
         /// (`call_deallocates` of it is `false`)
         fip: bool,
+        /// `no_unwind` (or `no_unwind when c`) on the closure (`call_unwinds` of it is then
+        /// `false`, where `c` holds)
+        unwind_spec: Option<UnwindSpec>,
         ret: VarBinder<Typ>,
         /// The 'external spec' is an Option because it gets filled in during
         /// ast_simplify. It contains the assumptions that surrounding context
@@ -1664,6 +1672,11 @@ pub struct FunctionAttrsX {
     /// rust_verify's `fip_mir::allocator_runtime`). Only the program's calls to an allocator are
     /// counted, so its body is not checked against `allocates`, fip or the drop rule.
     pub allocator_runtime: bool,
+    /// `-V alloc-check`: `encapsulates alloc(a, d)`: the function encapsulates an allocator. Each
+    /// call counts as `a` allocations (its `allocates`) and may deallocate where `d > 0` (its
+    /// `deallocates`, `d > 0` as written); like the allocator runtime's code (`allocator_runtime`,
+    /// also set), its body is not checked against `allocates`, fip, the drop rule or the stack.
+    pub encapsulates_alloc: bool,
     /// `#[verifier::trusted_only]`: std's (or the author's) conditions for calling the function
     /// safely cannot be written as a precondition, so verified code may call it (or an
     /// implementation of it, if it is a trait method) only inside a `#[verifier::trusted_call]`

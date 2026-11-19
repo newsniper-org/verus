@@ -32,6 +32,46 @@ This effectively says:
  * If `i < self.len()`, then the function will not unwind.
  * If the function returns normally, then `i < self.len()` (equivalently, if `i >= self.len()`, then the function must unwind).
 
+## Closures
+
+An `exec` closure can have the same signature, after its `opens_invariants` and before its
+`allocates`:
+
+```rust
+let half = |y: u64| -> (r: u64) no_unwind { y / 2 };
+let get = |i: usize| -> (r: u64) no_unwind when i < v.len() { v[i] };
+```
+
+Its body is checked like a function's (a `no_unwind when` condition is taken on entry, before the
+body can change the parameters). Without a signature, a closure may unwind.
+
+## Function values: `call_unwinds`
+
+`call_unwinds(f, args)` says whether a call of the function value `f` with `args` may unwind. In
+ghost code inside `verus!`, `f.unwinds(args)` is `call_unwinds(f, (args,))` (the arguments are
+written unpacked, unlike `f.requires((args,))`). It is `false` for a `no_unwind` function or
+closure, and where the condition holds for one with `no_unwind when`; for a trait method, the
+declaration's signature applies to every implementation. A call `f(x)` of a function value is
+`no_unwind when !f.unwinds(x)`, so a `no_unwind` function can call a function value it is given
+by requiring it:
+
+```rust
+fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+    requires
+        f.requires((x,)),
+        !f.unwinds(x),
+    no_unwind
+{
+    f(x)
+}
+
+fn use_it() -> (r: u64)
+    no_unwind
+{
+    apply(&|y: u64| -> (r: u64) no_unwind { y / 2 }, 7)
+}
+```
+
 ## Restrictions with invariants
 
 You cannot unwind when an [invariant](https://verus-lang.github.io/verus/verusdoc/vstd/macro.open_local_invariant.html) is open.

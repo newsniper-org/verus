@@ -1132,6 +1132,76 @@ pub fn func_def_to_sst(
         }
     }
 
+    // `encapsulates alloc(a, d)` on a trait method implementation: its body is the runtime's (not
+    // checked above), but the FnDef axioms state `call_allocates == a` and `call_deallocates ==
+    // (d > 0)` for it, and the declaration's bound and condition for every implementation, so
+    // `a <= bound` and `d > 0 ==> condition` (`d == 0` for a fip declaration) must hold for every
+    // input satisfying the requires: checked on entry
+    let mut encapsulates_entry_checks: Vec<Stm> = Vec::new();
+    if ctx.global.alloc_check
+        && function.x.attrs.encapsulates_alloc
+        && !check_api_safety
+        && !ctx.checking_spec_preconditions()
+    {
+        if let Some(lo) = &lo_inheritance {
+            let bool_typ = Arc::new(TypX::Bool);
+            let decl = &lo.function;
+            if let (Some(own), Some(inh)) = (&function.x.allocates, &decl.x.allocates) {
+                let own = lo_current.lower_pure(ctx, &mut state, own, &mut req_stms)?;
+                let inh = lo.lower_pure(ctx, &mut state, inh, &mut req_stms)?;
+                let msg = crate::messages::error(
+                    &own.span,
+                    "this `encapsulates alloc(a, d)` may count more allocations than the trait method's `allocates` bound",
+                )
+                .secondary_label(&inh.span, "the trait method's bound");
+                let le = SpannedTyped::new(
+                    &own.span,
+                    &bool_typ,
+                    crate::sst::ExpX::Binary(
+                        crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                        own.clone(),
+                        inh,
+                    ),
+                );
+                encapsulates_entry_checks.push(Spanned::new(
+                    own.span.clone(),
+                    StmX::Assert(state.next_assert_id(), Some(msg), le),
+                ));
+            }
+            let decl_cond =
+                if decl.x.attrs.fip { Some(None) } else { decl.x.deallocates.as_ref().map(Some) };
+            if let (Some(own), Some(decl_cond)) = (&function.x.deallocates, decl_cond) {
+                let own = lo_current.lower_pure(ctx, &mut state, own, &mut req_stms)?;
+                let not_own = SpannedTyped::new(
+                    &own.span,
+                    &bool_typ,
+                    crate::sst::ExpX::Unary(crate::ast::UnaryOp::Not, own.clone()),
+                );
+                let (check, label) = match decl_cond {
+                    None => (not_own, "the trait method is `#[verifier::fip]`".to_string()),
+                    Some(c) => {
+                        let c = lo.lower_pure(ctx, &mut state, c, &mut req_stms)?;
+                        let or = SpannedTyped::new(
+                            &own.span,
+                            &bool_typ,
+                            crate::sst::ExpX::Binary(crate::sst::BinaryOp::Or, not_own, c),
+                        );
+                        (or, "the trait method's `deallocates_when` condition".to_string())
+                    }
+                };
+                let msg = crate::messages::error(
+                    &own.span,
+                    "this `encapsulates alloc(a, d)` may deallocate where the trait method may not",
+                )
+                .secondary_label(&decl.span, label);
+                encapsulates_entry_checks.push(Spanned::new(
+                    own.span.clone(),
+                    StmX::Assert(state.next_assert_id(), Some(msg), check),
+                ));
+            }
+        }
+    }
+
     // A user's `Allocator` impl: the block that `allocate` (and the like) returns must be one whose
     // permission it gave up (`vstd::alloc_check::hand_out`) or got from another allocator, and
     // `deallocate` (and the like) may reclaim the freed block's permission once
@@ -1262,6 +1332,10 @@ pub fn func_def_to_sst(
     }
     if let Some(check) = alloc_entry_check {
         stm = stms_to_one_stm(&body.span, vec![check, stm]);
+    }
+    if !encapsulates_entry_checks.is_empty() {
+        encapsulates_entry_checks.push(stm);
+        stm = stms_to_one_stm(&body.span, encapsulates_entry_checks);
     }
     // Opaque types whose `Copy`-ness depends on trait bounds of their arguments (drop rule): show
     // those bounds on entry

@@ -254,6 +254,48 @@ So an allocator that frees:
 The test `one_slot_allocator_frees_no_cheating` (`rust_verify_test/tests/alloc_check_custom_allocator.rs`)
 is such an allocator, for one block at a time.
 
+### Allocators of their own API: `encapsulates alloc(a, d)`
+
+An allocator that does not implement `core::alloc::Allocator` (a pool or a slab with its own
+`alloc` and `free`) is code that Verus checks like any other: `allocates 0` holds for a body that
+only bumps a counter, although the program counts the call as an allocation. Such a function is
+marked with `encapsulates alloc(a, d)`: each call counts as `a` allocations and `d`
+deallocations (`a` and `d` are `nat`; they may depend on the arguments):
+
+```rust
+pub struct Pool { /* .. */ }
+
+impl Pool {
+    fn alloc(&mut self) -> (r: Slot) encapsulates alloc(1, 0) { /* .. */ }
+    fn free(&mut self, s: Slot) encapsulates alloc(0, 1) { /* .. */ }
+    fn release_many(&mut self, k: u64) encapsulates alloc(0, if k > 0 { 1 } else { 0 }) { /* .. */ }
+}
+
+fn two(p: &mut Pool) -> (Slot, Slot)
+    allocates 2
+{
+    (p.alloc(), p.alloc())
+}
+```
+
+* A caller is charged `a` (the function's `allocates` is `a`), and the call may free memory where
+  `d > 0` (its `deallocates_when` condition is `d > 0`, so a fip function may make the call only
+  where it shows `d == 0`). `call_allocates`/`f.allocates(..)` and `call_deallocates`/
+  `f.deallocates(..)` are `a` and `d > 0`. (Verus counts allocations, and only whether a call may
+  free: `alloc(1, 1)` and `alloc(1, 3)` differ only in the `.vir`, which keeps `d` as written.)
+* The body is the runtime's, as an `Allocator`'s is: what it allocates, frees or uses of the stack
+  is not checked, so it may refill the pool from the global allocator. Its `ensures` are verified
+  as usual. A strict function may call it as a leaf.
+* It cannot be combined with `allocates` or `#[verifier::fip]`, and it is not allowed on spec and
+  proof functions or on a trait method declaration. On an implementation of a trait method with a
+  bound or a condition, `a` must stay within the bound and `d > 0` within the condition (checked
+  on entry, for every input satisfying the `requires`; `d` must be 0 for a `#[verifier::fip]`
+  declaration, whose implementations must be fip).
+* It also works on `assume_specification`, for an allocator in another language:
+  `pub assume_specification[ ffi_alloc ](n: usize) -> *mut u8 encapsulates alloc(1, 0);`.
+* It is trusted like an `Allocator` impl: a function that claims `alloc(0, 0)` but allocates
+  hides those allocations (see "Trust and limitations").
+
 ## Callbacks, closures and traits
 
 A call through a generic function value is charged `call_allocates(f, args)`, the bound of
@@ -283,8 +325,9 @@ example `Vec::clone` charges `T::clone` once per element, and `HashMap::insert` 
 `call_deallocates(f, args)` is the deallocation condition of a function value in the same way: it
 is `false` for a `#[verifier::fip]` function, the condition of one with `deallocates_when`, and,
 for a trait method whose declaration has a condition, at most that condition (for every
-implementation). Inside `verus!`, `f.allocates(args)` is `call_allocates(f, (args,))` and
-`f.deallocates(args)` is `call_deallocates(f, (args,))`. So a specification that forwards to
+implementation). In ghost code inside `verus!` (specifications, `assert`, ...),
+`f.allocates(args)` is `call_allocates(f, (args,))` and `f.deallocates(args)` is
+`call_deallocates(f, (args,))` (exec code keeps methods of those names). So a specification that forwards to
 another function can pass on both, also a condition that holds only for some arguments:
 
 ```rust
@@ -792,11 +835,11 @@ completely (not with `--no-verify` or a `--verify-*` filter), and successfully:
 ## `-V alloc-check-strict`
 
 `-V alloc-check-strict` does what `-V alloc-check` does. In addition, every function with an
-`allocates` bound must be `no_unwind`, so that no panic path exists, and closures cannot have
-bounds (nor be `#[verifier::fip]`, which gives a closure `allocates 0`). vstd's specifications
-of allocating std functions (`Box::new`, `Vec::push`, ...) are not `no_unwind`: capacity
-overflow is a `panic!` that can unwind. So in practice, a function that allocates cannot pass
-the strict mode yet.
+`allocates` bound must be `no_unwind`, so that no panic path exists; so must every closure with a
+bound (or `#[verifier::fip]`, which gives a closure `allocates 0`). vstd's specifications of
+allocating std functions (`Box::new`, `Vec::push`, ...) are not `no_unwind`: capacity overflow
+is a `panic!` that can unwind. So in practice, a function that allocates cannot pass the strict
+mode yet.
 
 ## Trust and limitations
 
@@ -813,6 +856,8 @@ What `-V alloc-check` trusts:
 * that an allocator's own code is the runtime: a bound counts the program's calls to allocators
   (one each), not what the allocators do (their `Allocator`, `Clone` and `Drop` impls are not
   checked for allocations, deallocations or stack; see "Custom allocators");
+* the counts of `encapsulates alloc(a, d)` (the function's body is the runtime's and is not
+  checked for allocations, deallocations or stack);
 * calls inside `#[verifier::trusted_call]` blocks (such as an allocator's forwarding
   `deallocate`). `--no-cheating` applies only to the crate being verified: the blocks (and the
   `external_body` functions) of a dependency verified without it are trusted all the same, and a

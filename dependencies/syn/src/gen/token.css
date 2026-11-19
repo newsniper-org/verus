@@ -41,6 +41,7 @@ a.struct[title="struct syn::token::DotDotDot"],
 a.struct[title="struct syn::token::DotDotEq"],
 a.struct[title="struct syn::token::Dyn"],
 a.struct[title="struct syn::token::Else"],
+a.struct[title="struct syn::token::Encapsulates"],
 a.struct[title="struct syn::token::Ensures"],
 a.struct[title="struct syn::token::Enum"],
 a.struct[title="struct syn::token::Eq"],
@@ -210,6 +211,7 @@ a.struct[title="struct syn::token::DotDotDot"]::before,
 a.struct[title="struct syn::token::DotDotEq"]::before,
 a.struct[title="struct syn::token::Dyn"]::before,
 a.struct[title="struct syn::token::Else"]::before,
+a.struct[title="struct syn::token::Encapsulates"]::before,
 a.struct[title="struct syn::token::Ensures"]::before,
 a.struct[title="struct syn::token::Enum"]::before,
 a.struct[title="struct syn::token::Eq"]::before,
@@ -507,6 +509,10 @@ a.struct[title="struct syn::token::Dyn"]::before {
 
 a.struct[title="struct syn::token::Else"]::before {
 	content: "Token![else]";
+}
+
+a.struct[title="struct syn::token::Encapsulates"]::before {
+	content: "Token![encapsulates]";
 }
 
 a.struct[title="struct syn::token::Ensures"]::before {
@@ -1111,6 +1117,7 @@ a.struct[title="struct syn::token::Default"]::after,
 a.struct[title="struct syn::token::Do"]::after,
 a.struct[title="struct syn::token::Dyn"]::after,
 a.struct[title="struct syn::token::Else"]::after,
+a.struct[title="struct syn::token::Encapsulates"]::after,
 a.struct[title="struct syn::token::Ensures"]::after,
 a.struct[title="struct syn::token::Enum"]::after,
 a.struct[title="struct syn::token::Exec"]::after,

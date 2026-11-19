@@ -3245,7 +3245,11 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                             .alloc_checked_deps
                             .push((tcx.crate_name(*cnum).to_string(), hash));
                         for f in krate.functions.iter() {
-                            if f.x.attrs.fip_strict && f.x.attrs.alloc_checked_crate {
+                            // (and the functions that encapsulate an allocator: a leaf, as the
+                            // allocator runtime's code is)
+                            if (f.x.attrs.fip_strict || f.x.attrs.encapsulates_alloc)
+                                && f.x.attrs.alloc_checked_crate
+                            {
                                 self.verifier
                                     .alloc_checked_strict_fns
                                     .push(format!("{:?}", f.x.name.path));

@@ -1417,7 +1417,8 @@ impl HeaderExprX {
             | HeaderExprX::OpenVisibilityQualifier(_)
             | HeaderExprX::NoUnwind
             | HeaderExprX::NoUnwindWhen(_)
-            | HeaderExprX::Allocates(..) => "beginning of the function body",
+            | HeaderExprX::Allocates(..)
+            | HeaderExprX::EncapsulatesAlloc(..) => "beginning of the function body",
 
             HeaderExprX::InvariantExceptBreak(_)
             | HeaderExprX::Invariant(_)

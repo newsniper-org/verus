@@ -662,6 +662,7 @@ fn simplify_one_expr(
             mask_spec,
             allocates,
             fip,
+            unwind_spec,
             ret,
             external_spec,
         } => {
@@ -687,6 +688,7 @@ fn simplify_one_expr(
                 mask_spec,
                 &checked_allocates,
                 ctx.alloc_check && *fip,
+                unwind_spec,
                 proof_fn_modes.is_some(),
             )?;
             let external_spec = Some((closure_var_ident, external_spec_expr));
@@ -703,6 +705,7 @@ fn simplify_one_expr(
                     mask_spec: mask_spec.clone(),
                     allocates: allocates.clone(),
                     fip: *fip,
+                    unwind_spec: unwind_spec.clone(),
                     ret: ret.clone(),
                     external_spec,
                 },
@@ -1284,6 +1287,78 @@ fn exec_closure_spec_fip(
     SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, body))
 }
 
+/// `no_unwind` on a closure: `forall c: C, x :: !closure_unwinds(c, x)` (every value of the
+/// closure's type comes from this expression, whose body is checked not to unwind). With
+/// `no_unwind when cond`: `forall x :: cond(x) ==> !closure_unwinds(closure, x)` for this value
+/// (the condition may mention its captures).
+fn exec_closure_spec_unwind(
+    state: &mut State,
+    span: &Span,
+    closure_var: &Expr,
+    params: &VarBinders<Typ>,
+    cond: Option<&Expr>,
+) -> Expr {
+    let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, params);
+    let tuple_typ = tuple_var.typ.clone();
+    let bool_typ = Arc::new(TypX::Bool);
+    let mk_not_unwinds = |state: &mut State, c: &Expr| {
+        let call = wrap_in_trigger(&SpannedTyped::new(
+            span,
+            &bool_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::ClosureUnwinds,
+                    closure_trait_call_typ_args(state, c, params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![c.clone(), tuple_var.clone()]),
+                post_args: None,
+                body: None,
+            },
+        ));
+        SpannedTyped::new(span, &bool_typ, ExprX::Unary(crate::ast::UnaryOp::Not, call))
+    };
+    let forall = Quant { quant: air::ast::Quant::Forall };
+    match cond {
+        None => {
+            let c_ident = state.next_temp();
+            let c_var = SpannedTyped::new(span, &closure_var.typ, ExprX::Var(c_ident.clone()));
+            let body = mk_not_unwinds(state, &c_var);
+            let binders = Arc::new(vec![
+                Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ }),
+                Arc::new(VarBinderX { name: c_ident, a: closure_var.typ.clone() }),
+            ]);
+            SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, body))
+        }
+        Some(cond) => {
+            let mut decls: Vec<Stmt> = Vec::new();
+            for (i, p) in params.iter().enumerate() {
+                let typ = &p.a;
+                let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+                let tuple_field =
+                    tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+                let decl = StmtX::Decl {
+                    pattern,
+                    mode: None,
+                    init: Some(PlaceX::spec_temporary(tuple_field)),
+                    els: None,
+                    assert_irrefutable: false,
+                };
+                decls.push(Spanned::new(span.clone(), decl));
+            }
+            let cond = SpannedTyped::new(
+                &cond.span,
+                &bool_typ,
+                ExprX::Block(Arc::new(decls), Some(cond.clone())),
+            );
+            let not_unwinds = mk_not_unwinds(state, closure_var);
+            let body = crate::ast_util::mk_implies(span, &cond, &not_unwinds);
+            let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
+            SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, body))
+        }
+    }
+}
+
 fn exec_closure_spec(
     state: &mut State,
     span: &Span,
@@ -1295,6 +1370,7 @@ fn exec_closure_spec(
     mask_spec: &Option<crate::ast::MaskSpec>,
     allocates: &Option<Expr>,
     fip: bool,
+    unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
 ) -> Result<Expr, VirErr> {
     let req_forall = exec_closure_spec_requires(state, span, closure_var, params, requires)?;
@@ -1318,6 +1394,15 @@ fn exec_closure_spec(
     }
     if fip {
         exprs.push(exec_closure_spec_fip(state, span, closure_var, params));
+    }
+    match unwind_spec {
+        None | Some(crate::ast::UnwindSpec::MayUnwind) => {}
+        Some(crate::ast::UnwindSpec::NoUnwind) => {
+            exprs.push(exec_closure_spec_unwind(state, span, closure_var, params, None));
+        }
+        Some(crate::ast::UnwindSpec::NoUnwindWhen(c)) => {
+            exprs.push(exec_closure_spec_unwind(state, span, closure_var, params, Some(c)));
+        }
     }
     Ok(conjoin(span, &exprs))
 }
@@ -1610,6 +1695,71 @@ fn add_fndef_axioms_to_function(
             crate::ast_util::mk_implies(span, &wrap_in_trigger(&dealloc_call), &cond)
         } else {
             crate::ast_util::mk_eq(span, &wrap_in_trigger(&dealloc_call), &cond)
+        };
+        let forall = Quant { quant: air::ast::Quant::Forall };
+        let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
+    }
+
+    // `call_unwinds(f, args)`: a `no_unwind` function does not unwind, and one with
+    // `no_unwind when c` does not where `c` holds (an implication: where `c` fails it still may
+    // not). A trait method implementation inherits the declaration's specification, whose axiom
+    // (over the declaration's function value) covers it. Not tied to -V alloc-check.
+    let unwind_cond = match (&function.x.kind, &function.x.unwind_spec) {
+        (FunctionKind::TraitMethodImpl { .. }, _)
+        | (_, None | Some(crate::ast::UnwindSpec::MayUnwind)) => None,
+        (_, Some(crate::ast::UnwindSpec::NoUnwind)) => Some(None),
+        (_, Some(crate::ast::UnwindSpec::NoUnwindWhen(c))) => Some(Some(c.clone())),
+    };
+    if let Some(unwind_cond) = unwind_cond {
+        let span = &function.span;
+        let bool_typ = Arc::new(TypX::Bool);
+        let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, &params);
+        let tuple_typ = tuple_var.typ.clone();
+        let unwinds_call = SpannedTyped::new(
+            span,
+            &bool_typ,
+            ExprX::Call {
+                target: CallTarget::BuiltinSpecFun(
+                    BuiltinSpecFun::ClosureUnwinds,
+                    closure_trait_call_typ_args(state, &fndef_singleton, &params),
+                    Arc::new(vec![]),
+                ),
+                args: Arc::new(vec![fndef_singleton.clone(), tuple_var.clone()]),
+                post_args: None,
+                body: None,
+            },
+        );
+        let not_unwinds = SpannedTyped::new(
+            span,
+            &bool_typ,
+            ExprX::Unary(UnaryOp::Not, wrap_in_trigger(&unwinds_call)),
+        );
+        let rel = match unwind_cond {
+            None => not_unwinds,
+            Some(c) => {
+                let mut decls: Vec<Stmt> = Vec::new();
+                for (i, p) in params.iter().enumerate() {
+                    let typ = &p.a;
+                    let pattern = PatternX::simple_var(p.name.clone(), span, typ);
+                    let tuple_field =
+                        tuple_get_field_expr(state, span, typ, &tuple_var, params.len(), i);
+                    let decl = StmtX::Decl {
+                        pattern,
+                        mode: None,
+                        init: Some(PlaceX::spec_temporary(tuple_field)),
+                        els: None,
+                        assert_irrefutable: false,
+                    };
+                    decls.push(Spanned::new(span.clone(), decl));
+                }
+                let cond = SpannedTyped::new(
+                    &c.span,
+                    &bool_typ,
+                    ExprX::Block(Arc::new(decls), Some(c.clone())),
+                );
+                crate::ast_util::mk_implies(span, &cond, &not_unwinds)
+            }
         };
         let forall = Quant { quant: air::ast::Quant::Forall };
         let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);

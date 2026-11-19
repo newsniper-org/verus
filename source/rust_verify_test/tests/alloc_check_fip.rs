@@ -3101,5 +3101,219 @@ test_verify_one_file_with_options! {
             let half = #[verifier::fip] |y: u64| -> (r: u64) { y / 2 };
             half(4)
         }
-    } => Err(err) => assert_vir_error_msg(err, "a closure cannot be `#[verifier::fip]`")
+    } => Err(err) => assert_vir_error_msg(err, "a `#[verifier::fip]` closure must be `no_unwind`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_strict_mode_no_unwind ["vstd", "-V alloc-check-strict"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn f() -> (r: u64)
+            no_unwind
+            allocates 0
+        {
+            let half = #[verifier::fip] |y: u64| -> (r: u64) no_unwind { y / 2 };
+            half(4)
+        }
+    } => Ok(())
+}
+
+// `encapsulates alloc(a, d)`: a function that encapsulates an allocator of its own API (a pool,
+// a slab): each call counts as `a` allocations and may deallocate where `d > 0`; its body is the
+// runtime's
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_calls ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct Pool { pub n: u64 }
+
+        impl Pool {
+            fn alloc(&mut self) -> (r: u64) encapsulates alloc(1, 0) {
+                self.n = self.n.wrapping_add(1);
+                self.n
+            }
+            fn free(&mut self, x: u64) encapsulates alloc(0, 1) { }
+            // (the body is the runtime's: what it allocates is not counted)
+            fn refill(&mut self) encapsulates alloc(0, 0) { let _b = Box::new(3u8); }
+            fn grow(&mut self) encapsulates alloc(1, 1) { }
+            fn two(&mut self) encapsulates alloc(2, 0) { }
+            fn cond(&mut self, k: u64) encapsulates alloc(0, if k > 10 { 1 } else { 0 }) { }
+        }
+
+        fn many(p: &mut Pool) -> (r: u64) allocates 2 { p.alloc(); p.alloc() }
+        fn with_two(p: &mut Pool) allocates 3 { p.two(); p.grow(); }
+        #[verifier::fip] fn fip_alloc(p: &mut Pool) -> (r: u64) allocates 1 { p.alloc() }
+        #[verifier::fip] fn fip_cond(p: &mut Pool) { p.cond(3) }
+        #[verifier::fip] fn fip_refill(p: &mut Pool) { p.refill() }
+        #[verifier::fip(strict)] fn strict_alloc(p: &mut Pool) -> (r: u64) allocates 1 { p.alloc() }
+
+        proof fn t() {
+            assert(forall|p: &mut Pool| #[trigger] Pool::two.allocates(p) == 2);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_calls_fail ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct Pool { pub n: u64 }
+
+        impl Pool {
+            fn alloc(&mut self) -> (r: u64) encapsulates alloc(1, 0) { self.n }
+            fn free(&mut self, x: u64) encapsulates alloc(0, 1) { }
+            fn grow(&mut self) encapsulates alloc(1, 1) { }
+            fn cond(&mut self, k: u64) encapsulates alloc(0, if k > 10 { 1 } else { 0 }) { }
+        }
+
+        fn too_many(p: &mut Pool) allocates 1 { p.alloc(); p.alloc(); } // FAILS
+        #[verifier::fip] fn fip_free(p: &mut Pool) { p.free(3) } // FAILS
+        #[verifier::fip] fn fip_grow(p: &mut Pool) allocates 1 { p.grow() } // FAILS
+        #[verifier::fip] fn fip_cond_bad(p: &mut Pool) { p.cond(30) } // FAILS
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 4)
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_assume_specification ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        pub fn ext_alloc() -> u64 { 0 }
+        pub fn ext_free(x: u64) { }
+        verus! {
+            pub assume_specification[ ext_alloc ]() -> u64 encapsulates alloc(1, 0);
+            pub assume_specification[ ext_free ](x: u64) encapsulates alloc(0, 1);
+            fn g() allocates 2 { ext_alloc(); ext_alloc(); }
+            #[verifier::fip] fn h() allocates 1 { ext_alloc(); }
+            #[verifier::fip] fn bad() { ext_free(1); } // FAILS
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the `deallocates_when` condition of")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_counts_are_nat ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn f(x: i64) encapsulates alloc(x, 0) { }
+    } => Err(err) => assert_rust_error_msg(err, "mismatched types")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_not_with_allocates ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn f() allocates 1 encapsulates alloc(1, 0) { }
+    } => Err(err) => assert_vir_error_msg(err, "cannot also have `allocates`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_not_fip ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        #[verifier::fip] fn f() encapsulates alloc(1, 0) { }
+    } => Err(err) => assert_vir_error_msg(err, "cannot be `#[verifier::fip]`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_form ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn f() encapsulates foo(1, 0) { }
+    } => Err(err) => assert_vir_error_msg(err, "encapsulates takes `alloc(a, d)`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_not_on_trait_decl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        trait T { fn m(&self) encapsulates alloc(1, 0); }
+    } => Err(err) => assert_vir_error_msg(err, "cannot be used on a trait method declaration")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_impls ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        trait T {
+            fn m(&self) allocates 1;
+            fn n(&self, k: u64) allocates deallocates_when(0int, k > 5);
+        }
+        struct S;
+        impl T for S {
+            fn m(&self) encapsulates alloc(1, 0) { }
+            fn n(&self, k: u64) encapsulates alloc(0, if k > 7 { 1 } else { 0 }) { }
+        }
+        fn g<X: T>(x: &X) allocates 1 { x.m() }
+        #[verifier::fip] fn h<X: T>(x: &X) { x.n(3) }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_impl_exceeds_bound ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        trait T { fn m(&self) allocates 1; }
+        struct S;
+        impl T for S { fn m(&self) encapsulates alloc(2, 0) { } }
+    } => Err(err) => assert_vir_error_msg(err, "may count more allocations than the trait method's")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_impl_exceeds_condition ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        trait T { fn n(&self, k: u64) allocates deallocates_when(0int, k > 5); }
+        struct S;
+        impl T for S { fn n(&self, k: u64) encapsulates alloc(0, if k > 2 { 1 } else { 0 }) { } }
+    } => Err(err) => assert_vir_error_msg(err, "may deallocate where the trait method may not")
+}
+
+// across crates: the clause is in the `.vir`, and a strict function may call such a function as a
+// leaf
+#[test]
+fn encapsulates_alloc_across_crates() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("pool.rs"),
+        format!(
+            "{pre}verus!{{ pub struct Pool {{ pub n: u64 }} impl Pool {{ pub fn alloc(&mut self) -> (r: u64) encapsulates alloc(1, 0) {{ let _b = Box::new(1u8); self.n }} }} }}\n"
+        ),
+    )
+    .expect("write");
+    let pool = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "--crate-name",
+            "pool",
+            "-V",
+            "alloc-check",
+            "--export",
+            "pool.vir",
+            "--compile",
+            "pool.rs",
+            "-o",
+            "libpool.rlib",
+        ],
+        dir,
+    );
+    assert!(pool.status.success(), "pool failed:\n{}", String::from_utf8_lossy(&pool.stderr));
+    let user = |name: &str, code: &str| {
+        std::fs::write(dir.join(name), format!("{pre}verus!{{ {code} }}\n")).expect("write");
+        run_verus_raw(
+            &[
+                "--crate-type=lib",
+                name,
+                "-V",
+                "alloc-check",
+                "--import",
+                "pool=pool.vir",
+                "--extern",
+                "pool=libpool.rlib",
+            ],
+            dir,
+        )
+    };
+    let pos = user(
+        "pos.rs",
+        "#[verifier::fip(strict)] fn s(p: &mut pool::Pool) -> (r: u64) allocates 1 { p.alloc() }",
+    );
+    assert!(pos.status.success(), "pos failed:\n{}", String::from_utf8_lossy(&pos.stderr));
+    let neg = user("neg.rs", "fn s(p: &mut pool::Pool) allocates 1 { p.alloc(); p.alloc(); }");
+    let stderr = String::from_utf8_lossy(&neg.stderr);
+    assert!(!neg.status.success(), "neg should be rejected:\n{}", stderr);
+    assert!(stderr.contains("postcondition not satisfied"), "unexpected:\n{}", stderr);
 }

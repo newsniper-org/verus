@@ -565,7 +565,7 @@ pub use crate::verus::{
     InvariantNameSetSet, ItemBroadcastGroup, LoopSpec, MatchesOpExpr, MatchesOpToken, Mode,
     ModeExec, ModeGhost, ModeProof, ModeProofAxiom, ModeSpec, ModeSpecChecked, ModeTracked, Open,
     OpenRestricted, OuterMask, PermClause, PermTuple, PermTupleField, PredTypeClause, Prover,
-    Publish, Recommends, Requires, ReturnPat, ReturnValue, Returns, RevealHide, SignatureAllocates,
+    Publish, Recommends, Requires, ReturnPat, ReturnValue, Returns, RevealHide, SignatureAllocates, SignatureEncapsulates,
     SignatureDecreases, SignatureInvariants, SignatureSpec, SignatureSpecAttr, SignatureUnwind,
     Specification, TypeFnProof, TypeFnSpec, Uninterp, View, WithSpecOnExpr, WithSpecOnFn,
 };

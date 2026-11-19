@@ -39,10 +39,10 @@ use verus_syn::{
     ItemConst, ItemEnum, ItemFn, ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemUnion,
     Lit, Local, MatchesOpExpr, MatchesOpToken, Meta, MetaList, ModeSpec, ModeSpecChecked, Pat,
     PatIdent, PatType, Path, PathArguments, Publish, Receiver, Recommends, Requires, ReturnType,
-    Returns, Signature, SignatureAllocates, SignatureDecreases, SignatureInvariants, SignatureSpec,
-    SignatureSpecAttr, SignatureUnwind, Stmt, Token, TraitItem, TraitItemFn, Type, TypeFnProof,
-    TypeFnSpec, TypePath, TypeReference, UnOp, Visibility, braced, bracketed, parenthesized,
-    parse_macro_input,
+    Returns, Signature, SignatureAllocates, SignatureDecreases, SignatureEncapsulates,
+    SignatureInvariants, SignatureSpec, SignatureSpecAttr, SignatureUnwind, Stmt, Token, TraitItem,
+    TraitItemFn, Type, TypeFnProof, TypeFnSpec, TypePath, TypeReference, UnOp, Visibility, braced,
+    bracketed, parenthesized, parse_macro_input,
 };
 
 pub(crate) const VERUS_SPEC: &str = "VERUS_SPEC__";
@@ -996,6 +996,7 @@ impl Visitor {
         let opens_invariants = self.take_ghost(&mut spec.invariants);
         let unwind = self.take_ghost(&mut spec.unwind);
         let allocates = self.take_ghost(&mut spec.allocates);
+        let encapsulates = self.take_ghost(&mut spec.encapsulates);
         debug_assert!(spec.atomic_spec.is_none());
 
         let (self_token_op, args) = inputs;
@@ -1310,6 +1311,42 @@ impl Visitor {
             }
         }
 
+        // `encapsulates alloc(a, d)`: `encapsulates_alloc(a, d, d > 0)` (`alloc` is only syntax
+        // here, not a function)
+        if let Some(SignatureEncapsulates { token, exprs }) = encapsulates {
+            let args = match exprs.exprs.iter().collect::<Vec<_>>().as_slice() {
+                [Expr::Call(call)]
+                    if call.args.len() == 2
+                        && matches!(&*call.func, Expr::Path(p)
+                            if p.qself.is_none() && p.path.is_ident("alloc")) =>
+                {
+                    Some((call.args[0].clone(), call.args[1].clone()))
+                }
+                _ => None,
+            };
+            if let Some((mut a, mut d)) = args {
+                let span = token.span;
+                // (from `d` as written: `d` itself is visited below)
+                let mut cond: Expr =
+                    parse_quote_spanned!(span => { let verus_tmp_d: nat = #d; verus_tmp_d > 0 });
+                // (`a` and `d` are `nat`, which their literals take by inference)
+                self.visit_expr_mut(&mut a);
+                self.visit_expr_mut(&mut d);
+                self.visit_expr_mut(&mut cond);
+                spec_stmts.push(Stmt::Expr(
+                    Expr::Verbatim(
+                        quote_spanned_builtin!(verus_builtin, span => #verus_builtin::encapsulates_alloc(#a, #d, #cond)),
+                    ),
+                    Some(Semi { spans: [span] }),
+                ));
+            } else {
+                let err = "encapsulates takes `alloc(a, d)`: each call counts as `a` allocations and `d` deallocations";
+                let expr =
+                    Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err)));
+                spec_stmts.push(Stmt::Expr(expr, Some(Semi { spans: [token.span] })));
+            }
+        }
+
         spec_stmts
     }
 
@@ -1365,6 +1402,13 @@ impl Visitor {
         // attrs.push(mk_verus_attr(sig.fn_token.span, quote! { verus_macro }));
         if self.erase_ghost.keep() {
             attrs.push(mk_verus_attr(sig.fn_token.span, quote! { verus_macro }));
+        }
+        // (for the MIR checks, which do not see the specification, and may run on the compile
+        // that erases ghost code: `fip_mir`)
+        if !self.erase_ghost.erase_all() {
+            if let Some(e) = &sig.spec.encapsulates {
+                attrs.push(mk_verus_attr(e.token.span, quote! { encapsulates_alloc }));
+            }
         }
 
         for arg in &mut sig.inputs {
@@ -2267,6 +2311,7 @@ impl Visitor {
             invariants,
             unwind,
             allocates,
+            encapsulates,
             semi,
         } = assume_specification.clone();
         let ex_ident = get_ex_ident_mangle_path(&qself, &path);
@@ -2303,6 +2348,7 @@ impl Visitor {
                 invariants: invariants,
                 unwind: unwind,
                 allocates: allocates,
+                encapsulates: encapsulates,
                 with: None,
             },
         };
@@ -2744,6 +2790,7 @@ impl Visitor {
             Expr::Closure(closure) => {
                 if closure.requires.is_some()
                     || closure.ensures.is_some()
+                    || closure.unwind.is_some()
                     || closure.allocates.is_some()
                 {
                     let err = "quantifiers cannot have requires/ensures";
@@ -2873,13 +2920,15 @@ impl Visitor {
         true
     }
 
-    /// `f.allocates(a, b)` is `call_allocates(f, (a, b))`, and `f.deallocates(a, b)` is
-    /// `call_deallocates(f, (a, b))` (-V alloc-check: the `allocates` bound and the deallocation
-    /// condition of the function value `f` at those arguments)
+    /// In ghost code, `f.allocates(a, b)` is `call_allocates(f, (a, b))`, `f.deallocates(a, b)`
+    /// is `call_deallocates(f, (a, b))` and `f.unwinds(a, b)` is `call_unwinds(f, (a, b))` (the
+    /// `allocates` bound, the deallocation condition (-V alloc-check) and whether a call may
+    /// unwind, of the function value `f` at those arguments). Exec code keeps such method calls.
     fn handle_call_bound_methods(&mut self, expr: &mut Expr) -> bool {
         let Expr::MethodCall(m) = &*expr else { return false };
         let name = m.method.to_string();
-        if !(name == "allocates" || name == "deallocates")
+        if !(name == "allocates" || name == "deallocates" || name == "unwinds")
+            || self.inside_ghost == 0
             || m.turbofish.is_some()
             || m.atomically.is_some()
         {
@@ -2896,10 +2945,9 @@ impl Visitor {
         } else {
             quote_spanned!(span => (#(#args),*))
         };
-        let f = format_ident!(
-            "{}",
-            if name == "allocates" { "call_allocates" } else { "call_deallocates" }
-        );
+        // (with the call's span: `format_ident!` otherwise gives the macro's, and then errors
+        // about the whole call point at `verus!`)
+        let f = format_ident!("call_{}", name, span = span);
         *expr = Expr::Verbatim(
             quote_spanned_builtin!(verus_builtin, span => #verus_builtin::#f(#receiver, #tuple)),
         );
@@ -3778,6 +3826,11 @@ impl Visitor {
             Expr::Closure(c) => self.take_ghost(&mut c.allocates),
             _ => unreachable!(),
         };
+        // (the same for `no_unwind when c`, whose condition is ghost code)
+        let unwind = match expr {
+            Expr::Closure(c) => self.take_ghost(&mut c.unwind),
+            _ => unreachable!(),
+        };
 
         self.visit_expr_with_arith(expr, InsideArith::None);
 
@@ -3790,8 +3843,12 @@ impl Visitor {
         assert!(is_proof_fn || clos.options.is_none());
         if is_spec_fn {
             let span = clos.span();
-            if clos.requires.is_some() || clos.ensures.is_some() || allocates.is_some() {
-                let err = "ghost closures cannot have requires/ensures/allocates";
+            if clos.requires.is_some()
+                || clos.ensures.is_some()
+                || allocates.is_some()
+                || unwind.is_some()
+            {
+                let err = "ghost closures cannot have requires/ensures/no_unwind/allocates";
                 *expr = Expr::Verbatim(quote_spanned!(span => ::core::compile_error!(#err)));
             } else {
                 *expr = Expr::Verbatim(quote_spanned_builtin!(verus_builtin, span =>
@@ -3915,6 +3972,31 @@ impl Visitor {
                     )),
                     Some(Semi { spans: [full_span] }),
                 ));
+            }
+            if let Some(unwind) = unwind {
+                let SignatureUnwind { token, when } = *unwind;
+                if is_proof_fn {
+                    let err = "proof_fn closures cannot have no_unwind";
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(quote_spanned!(token.span => ::core::compile_error!(#err))),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                } else if let Some((when_token, mut when_expr)) = when {
+                    self.visit_expr_mut(&mut when_expr);
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(
+                            quote_spanned_builtin!(verus_builtin, when_expr.span() => #verus_builtin::no_unwind_when(#when_expr)),
+                        ),
+                        Some(Semi { spans: [when_token.span] }),
+                    ));
+                } else {
+                    stmts.push(Stmt::Expr(
+                        Expr::Verbatim(
+                            quote_spanned_builtin!(verus_builtin, token.span() => #verus_builtin::no_unwind()),
+                        ),
+                        Some(Semi { spans: [token.span] }),
+                    ));
+                }
             }
             if let Some(allocates) = allocates {
                 let SignatureAllocates { token, mut exprs } = *allocates;

@@ -765,6 +765,7 @@ define_keywords! {
     "invariant_except_break"   pub struct InvariantExceptBreak
     "no_unwind"   pub struct NoUnwind
     "allocates"   pub struct Allocates
+    "encapsulates"   pub struct Encapsulates
     "invariant"   pub struct Invariant
     "invariant_ensures"   pub struct InvariantEnsures
     "assert"      pub struct Assert
@@ -1060,6 +1061,7 @@ macro_rules! Token {
     [invariant_except_break] => { $crate::token::InvariantExceptBreak };
     [no_unwind]   => { $crate::token::NoUnwind };
     [allocates]   => { $crate::token::Allocates };
+    [encapsulates] => { $crate::token::Encapsulates };
     [invariant]   => { $crate::token::Invariant };
     [invariant_ensures] => { $crate::token::InvariantEnsures };
     [assert]      => { $crate::token::Assert };

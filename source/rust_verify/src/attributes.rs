@@ -403,6 +403,9 @@ pub(crate) enum Attr {
     // -V alloc-check: fully in-place (FP²): never deallocates (on a normal return); `strict`
     // also requires constant stack space
     Fip(bool),
+    // -V alloc-check: `encapsulates alloc(a, d)` (internal, from the macro): the function
+    // encapsulates an allocator, and its body is the runtime's
+    EncapsulatesAlloc,
     // Assume that external items can be used without a Verus declaration (unsound)
     ExternalsAvailableWithoutDeclaration(bool),
     // Prohibit impls from adding ensures clauses (to enable exec nontermination)
@@ -852,6 +855,9 @@ pub(crate) fn parse_attrs(
                         v.push(Attr::AllTriggers)
                     }
                     AttrTree::Fun(_, arg, None) if arg == "verus_macro" => v.push(Attr::VerusMacro),
+                    AttrTree::Fun(_, arg, None) if arg == "encapsulates_alloc" => {
+                        v.push(Attr::EncapsulatesAlloc)
+                    }
                     AttrTree::Fun(_, arg, None) if arg == "verify" => v.push(Attr::Verify),
                     AttrTree::Fun(_, arg, None) if arg == "proof_block" => {
                         v.push(Attr::GhostBlock(GhostBlockAttr::Proof))

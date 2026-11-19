@@ -974,6 +974,12 @@ pub trait VisitMut {
     fn visit_signature_decreases_mut(&mut self, i: &mut crate::SignatureDecreases) {
         visit_signature_decreases_mut(self, i);
     }
+    fn visit_signature_encapsulates_mut(
+        &mut self,
+        i: &mut crate::SignatureEncapsulates,
+    ) {
+        visit_signature_encapsulates_mut(self, i);
+    }
     fn visit_signature_invariants_mut(&mut self, i: &mut crate::SignatureInvariants) {
         visit_signature_invariants_mut(self, i);
     }
@@ -1374,6 +1380,9 @@ where
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(it);
+    }
+    if let Some(it) = &mut node.encapsulates {
+        v.visit_signature_encapsulates_mut(it);
     }
     skip!(node.semi);
 }
@@ -2147,6 +2156,9 @@ where
     }
     if let Some(it) = &mut node.invariants {
         v.visit_signature_invariants_mut(&mut **it);
+    }
+    if let Some(it) = &mut node.unwind {
+        v.visit_signature_unwind_mut(&mut **it);
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(&mut **it);
@@ -4446,6 +4458,16 @@ where
         v.visit_expr_mut(&mut (it).1);
     }
 }
+pub fn visit_signature_encapsulates_mut<V>(
+    v: &mut V,
+    node: &mut crate::SignatureEncapsulates,
+)
+where
+    V: VisitMut + ?Sized,
+{
+    skip!(node.token);
+    v.visit_specification_mut(&mut node.exprs);
+}
 pub fn visit_signature_invariants_mut<V>(
     v: &mut V,
     node: &mut crate::SignatureInvariants,
@@ -4493,6 +4515,9 @@ where
     }
     if let Some(it) = &mut node.allocates {
         v.visit_signature_allocates_mut(it);
+    }
+    if let Some(it) = &mut node.encapsulates {
+        v.visit_signature_encapsulates_mut(it);
     }
     if let Some(it) = &mut node.with {
         v.visit_with_spec_on_fn_mut(it);

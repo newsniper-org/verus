@@ -1074,6 +1074,12 @@ pub trait Fold {
     ) -> crate::SignatureDecreases {
         fold_signature_decreases(self, i)
     }
+    fn fold_signature_encapsulates(
+        &mut self,
+        i: crate::SignatureEncapsulates,
+    ) -> crate::SignatureEncapsulates {
+        fold_signature_encapsulates(self, i)
+    }
     fn fold_signature_invariants(
         &mut self,
         i: crate::SignatureInvariants,
@@ -1486,6 +1492,7 @@ where
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
         allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
+        encapsulates: (node.encapsulates).map(|it| f.fold_signature_encapsulates(it)),
         semi: node.semi,
     }
 }
@@ -2166,6 +2173,7 @@ where
         ensures: (node.ensures).map(|it| f.fold_ensures(it)),
         invariants: (node.invariants)
             .map(|it| Box::new(f.fold_signature_invariants(*it))),
+        unwind: (node.unwind).map(|it| Box::new(f.fold_signature_unwind(*it))),
         allocates: (node.allocates).map(|it| Box::new(f.fold_signature_allocates(*it))),
         inner_attrs: f.fold_attributes(node.inner_attrs),
         body: Box::new(f.fold_expr(*node.body)),
@@ -4604,6 +4612,18 @@ where
         via: (node.via).map(|it| ((it).0, f.fold_expr((it).1))),
     }
 }
+pub fn fold_signature_encapsulates<F>(
+    f: &mut F,
+    node: crate::SignatureEncapsulates,
+) -> crate::SignatureEncapsulates
+where
+    F: Fold + ?Sized,
+{
+    crate::SignatureEncapsulates {
+        token: node.token,
+        exprs: f.fold_specification(node.exprs),
+    }
+}
 pub fn fold_signature_invariants<F>(
     f: &mut F,
     node: crate::SignatureInvariants,
@@ -4636,6 +4656,7 @@ where
         invariants: (node.invariants).map(|it| f.fold_signature_invariants(it)),
         unwind: (node.unwind).map(|it| f.fold_signature_unwind(it)),
         allocates: (node.allocates).map(|it| f.fold_signature_allocates(it)),
+        encapsulates: (node.encapsulates).map(|it| f.fold_signature_encapsulates(it)),
         with: (node.with).map(|it| f.fold_with_spec_on_fn(it)),
     }
 }

@@ -1133,7 +1133,7 @@ fn collect_expr_typs_in(
 
 /// A closure with an `allocates` bound is checked like a function with one: drops it may run
 /// must be allocation-free (and, in strict mode, the bound is only a claim about normal returns,
-/// which a closure cannot back with `no_unwind`, so strict mode rejects it).
+/// so the closure must be `no_unwind`, as a function must).
 pub(crate) fn check_closures_with_bounds(
     ctx: &Ctx,
     function: &Function,
@@ -1155,14 +1155,21 @@ pub(crate) fn check_closures_with_bounds(
         Ok(())
     })?;
     for (span, closure) in closures {
-        if ctx.global.alloc_check_strict {
+        // (as for a function: a bound is only about normal returns, so strict mode needs a
+        // `no_unwind` closure, with no panic path)
+        if ctx.global.alloc_check_strict
+            && !matches!(
+                &closure.x,
+                ExprX::NonSpecClosure { unwind_spec: Some(crate::ast::UnwindSpec::NoUnwind), .. }
+            )
+        {
             let fip = matches!(&closure.x, ExprX::NonSpecClosure { fip: true, .. });
             return Err(error(
                 &span,
                 if fip {
-                    "with -V alloc-check-strict, a closure cannot be `#[verifier::fip]` (it would be `allocates 0`, and a closure cannot be `no_unwind`)"
+                    "with -V alloc-check-strict, a `#[verifier::fip]` closure must be `no_unwind` (it has the bound `allocates 0`)"
                 } else {
-                    "with -V alloc-check-strict, a closure cannot have an `allocates` bound (it cannot be `no_unwind`)"
+                    "with -V alloc-check-strict, a closure with an `allocates` bound must be `no_unwind`"
                 },
             ));
         }

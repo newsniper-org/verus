@@ -99,6 +99,7 @@ impl PartialEq for crate::AssumeSpecification {
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.invariants == other.invariants
             && self.unwind == other.unwind && self.allocates == other.allocates
+            && self.encapsulates == other.encapsulates
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
@@ -661,8 +662,9 @@ impl PartialEq for crate::ExprClosure {
             && self.proof_fn == other.proof_fn && self.options == other.options
             && self.inputs == other.inputs && self.output == other.output
             && self.requires == other.requires && self.ensures == other.ensures
-            && self.invariants == other.invariants && self.allocates == other.allocates
-            && self.inner_attrs == other.inner_attrs && self.body == other.body
+            && self.invariants == other.invariants && self.unwind == other.unwind
+            && self.allocates == other.allocates && self.inner_attrs == other.inner_attrs
+            && self.body == other.body
     }
 }
 #[cfg(feature = "full")]
@@ -2554,6 +2556,14 @@ impl PartialEq for crate::SignatureDecreases {
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl Eq for crate::SignatureEncapsulates {}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
+impl PartialEq for crate::SignatureEncapsulates {
+    fn eq(&self, other: &Self) -> bool {
+        self.exprs == other.exprs
+    }
+}
+#[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl Eq for crate::SignatureInvariants {}
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]
 impl PartialEq for crate::SignatureInvariants {
@@ -2572,7 +2582,8 @@ impl PartialEq for crate::SignatureSpec {
             && self.default_ensures == other.default_ensures
             && self.returns == other.returns && self.decreases == other.decreases
             && self.invariants == other.invariants && self.unwind == other.unwind
-            && self.allocates == other.allocates && self.with == other.with
+            && self.allocates == other.allocates
+            && self.encapsulates == other.encapsulates && self.with == other.with
     }
 }
 #[cfg_attr(docsrs, doc(cfg(feature = "extra-traits")))]

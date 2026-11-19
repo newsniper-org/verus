@@ -23,7 +23,7 @@ use crate::messages::{
 use crate::sst;
 use crate::sst::{
     Bnd, BndX, CallFun, Dest, Exp, ExpX, Exps, InternalFun, LocalDecl, LocalDeclKind, LocalDeclX,
-    Pars, Stm, StmX, Stms, UniqueIdent,
+    Pars, Stm, StmX, Stms, UniqueIdent, UnwindSst,
 };
 use crate::sst_util::{
     exp_with_vars_at_pre_state, sst_bitwidth, sst_conjoin, sst_disjoin, sst_equal,
@@ -2355,6 +2355,7 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::DefaultEns => InternalFun::DefaultEns,
                 BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,
                 BuiltinSpecFun::ClosureDealloc => InternalFun::ClosureDealloc,
+                BuiltinSpecFun::ClosureUnwinds => InternalFun::ClosureUnwinds,
             };
             Ok((
                 check_stms,
@@ -2747,6 +2748,7 @@ pub(crate) fn expr_to_stm_opt(
             mask_spec,
             allocates,
             fip,
+            unwind_spec,
             ret,
             external_spec,
         } => {
@@ -2755,7 +2757,7 @@ pub(crate) fn expr_to_stm_opt(
             // Emit the internals of the closure (ClosureInner behaves like a dead-end)
             // This includes assuming the requires, asserting the ensures, everything else
 
-            let (inner_stms, typ_inv_vars) = exec_closure_body_stms(
+            let (inner_stms, typ_inv_vars, unwind) = exec_closure_body_stms(
                 ctx,
                 state,
                 params,
@@ -2766,11 +2768,14 @@ pub(crate) fn expr_to_stm_opt(
                 mask_spec,
                 allocates,
                 *fip,
+                unwind_spec,
                 proof_fn_modes.is_some(),
             )?;
             let block = Spanned::new(expr.span.clone(), StmX::Block(Arc::new(inner_stms)));
-            let clos =
-                Spanned::new(expr.span.clone(), StmX::ClosureInner { body: block, typ_inv_vars });
+            let clos = Spanned::new(
+                expr.span.clone(),
+                StmX::ClosureInner { body: block, typ_inv_vars, unwind },
+            );
             all_stms.push(clos);
 
             // Create the closure object and assume all the information given in its
@@ -5363,8 +5368,9 @@ fn exec_closure_body_stms(
     mask_spec: &Option<MaskSpec>,
     allocates: &Option<Expr>,
     fip: bool,
+    unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
-) -> Result<(Vec<Stm>, Arc<Vec<(UniqueIdent, Typ)>>), VirErr> {
+) -> Result<(Vec<Stm>, Arc<Vec<(UniqueIdent, Typ)>>, UnwindSst), VirErr> {
     let mut typ_inv_vars = vec![];
 
     // `-V alloc-check`: the closure body runs when the closure is called, not where it is
@@ -5389,6 +5395,7 @@ fn exec_closure_body_stms(
         ensures,
         mask_spec,
         allocates,
+        unwind_spec,
         is_proof,
         &mut typ_inv_vars,
     );
@@ -5396,7 +5403,7 @@ fn exec_closure_body_stms(
     state.fip = outer_fip;
     state.alloc_handout = outer_handout;
     state.alloc_reclaim = outer_reclaim;
-    result.map(|stms| (stms, Arc::new(typ_inv_vars)))
+    result.map(|(stms, unwind)| (stms, Arc::new(typ_inv_vars), unwind))
 }
 
 fn exec_closure_body_stms_inner(
@@ -5409,9 +5416,10 @@ fn exec_closure_body_stms_inner(
     ensures: &Exprs,
     mask_spec: &Option<MaskSpec>,
     allocates: &Option<Expr>,
+    unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
     typ_inv_vars: &mut Vec<(UniqueIdent, Typ)>,
-) -> Result<Vec<Stm>, VirErr> {
+) -> Result<(Vec<Stm>, UnwindSst), VirErr> {
     state.push_scope();
     let mut param_set = HashSet::<VarIdent>::new();
 
@@ -5431,6 +5439,24 @@ fn exec_closure_body_stms_inner(
         let stm = Spanned::new(req.span.clone(), StmX::Assume(exp));
         stms.push(stm);
     }
+
+    // `no_unwind` (`no_unwind when c`: `c` is evaluated on entry, before the body can change the
+    // parameters, into a local)
+    let unwind = match unwind_spec {
+        _ if is_proof => UnwindSst::MayUnwind,
+        None | Some(crate::ast::UnwindSpec::MayUnwind) => UnwindSst::MayUnwind,
+        Some(crate::ast::UnwindSpec::NoUnwind) => UnwindSst::NoUnwind,
+        Some(crate::ast::UnwindSpec::NoUnwindWhen(c)) => {
+            let (check_stms, cond_exp) = expr_to_pure_exp_check(ctx, state, c)?;
+            stms.extend(check_stms);
+            let bool_typ = Arc::new(TypX::Bool);
+            let (cond_name, _) = state.next_temp(&c.span, &bool_typ);
+            let cond_var =
+                state.declare_var_stm(&cond_name, &bool_typ, PreLocalDeclKind::StmtLet, false);
+            stms.push(init_var(&c.span, &cond_var, &cond_exp));
+            UnwindSst::NoUnwindWhen(SpannedTyped::new(&c.span, &bool_typ, ExpX::Var(cond_var)))
+        }
+    };
 
     // `-V alloc-check`: counter and bound
     let mut alloc_ens: Option<Exp> = None;
@@ -5521,7 +5547,7 @@ fn exec_closure_body_stms_inner(
     std::mem::swap(&mut state.mask, &mut mask);
     state.pop_scope();
 
-    Ok(stms)
+    Ok((stms, unwind))
 }
 
 fn closure_emit_postconditions(

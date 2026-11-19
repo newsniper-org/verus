@@ -69,6 +69,26 @@ pub(crate) fn allocator_runtime(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     implements(tcx, typing_env, alloc, self_ty)
 }
 
+/// -V alloc-check: is `def_id` a function of this crate with `encapsulates alloc(a, d)`? It
+/// encapsulates an allocator: like the allocator runtime's code (`allocator_runtime`), it is a
+/// leaf for every check here, and its body is not checked.
+pub(crate) fn encapsulates_alloc(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let Some(local) = def_id.as_local() else { return false };
+    if !matches!(
+        tcx.def_kind(def_id),
+        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+    ) {
+        return false;
+    }
+    let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(local));
+    parse_attrs_opt(attrs, None).iter().any(|a| matches!(a, Attr::EncapsulatesAlloc))
+}
+
+/// The allocator runtime's code, or a function that encapsulates an allocator: a leaf
+fn runtime_leaf(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    allocator_runtime(tcx, def_id) || encapsulates_alloc(tcx, def_id)
+}
+
 /// The path where `d` is defined (`vstd::alloc_check::NoDeallocDrop`). Unlike `def_path_str`,
 /// which prints a path that the user could write and may go through a re-export of a loaded
 /// crate (`y4_fip_core::NoDeallocDrop`), it depends only on `d`.
@@ -623,7 +643,7 @@ fn callbacks<'tcx>(
                 if u.impl_def_id.is_local() {
                     // (an allocator's `Clone` and `Drop` are the runtime's: `allocator_runtime`)
                     for f in impl_fns(u.impl_def_id) {
-                        if !allocator_runtime(tcx, f) {
+                        if !runtime_leaf(tcx, f) {
                             out.local.push((f, what.clone()));
                         }
                     }
@@ -873,8 +893,9 @@ fn strict_edges<'tcx>(
     let add = |callee: DefId, tail: bool, span: Span, edges: &mut Vec<StrictEdge>| match callee
         .as_local()
     {
-        // (the allocator runtime's code is a leaf: `allocator_runtime`)
-        Some(local) if allocator_runtime(tcx, local.to_def_id()) => {}
+        // (the allocator runtime's code is a leaf, and so is a function that encapsulates an
+        // allocator: `runtime_leaf`)
+        Some(local) if runtime_leaf(tcx, local.to_def_id()) => {}
         Some(local) => {
             if fip_kind_local(tcx, local) == Some(true) {
                 edges.push(StrictEdge { callee: local, tail, span });

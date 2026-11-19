@@ -414,6 +414,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 mask_spec,
                 allocates,
                 fip,
+                unwind_spec,
                 ret: r,
                 external_spec,
             } => {
@@ -428,6 +429,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 let requires = self.visit_exprs(requires)?;
                 let mask_spec = R::map_opt(mask_spec, &mut |ms| self.visit_mask_spec(ms))?;
                 let allocates = R::map_opt(allocates, &mut |e| self.visit_expr(e))?;
+                let unwind_spec = R::map_opt(unwind_spec, &mut |us| self.visit_unwind_spec(us))?;
 
                 self.push_scope();
                 let b = R::get_or(&ret, r);
@@ -456,6 +458,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         mask_spec: R::get_opt(mask_spec),
                         allocates: R::get_opt(allocates),
                         fip: *fip,
+                        unwind_spec: R::get_opt(unwind_spec),
                         ret: R::get(ret),
                         external_spec: R::get_opt(external_spec),
                     })

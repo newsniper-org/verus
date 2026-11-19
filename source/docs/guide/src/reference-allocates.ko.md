@@ -243,6 +243,43 @@ fn push_one(v: &mut Vec<u64, Twice>, x: u64)
 테스트 `one_slot_allocator_frees_no_cheating`(`rust_verify_test/tests/alloc_check_custom_allocator.rs`)이
 한 번에 블록 하나를 다루는 이런 할당기입니다.
 
+### 자체 API의 할당기: `encapsulates alloc(a, d)`
+
+`core::alloc::Allocator`를 구현하지 않는 할당기(자체 `alloc`과 `free`를 가진 풀이나 slab)는 Verus가 다른 코드와
+똑같이 검사합니다. 카운터만 올리는 본문이면 `allocates 0`이 성립하지만, 프로그램의 관점에서는 그 호출이 할당입니다.
+이런 함수에는 `encapsulates alloc(a, d)`를 붙입니다. 호출 한 번이 할당 `a`번, 해제 `d`번으로 셉니다(`a`와 `d`는
+`nat`이고 인자에 기댈 수 있습니다).
+
+```rust
+pub struct Pool { /* .. */ }
+
+impl Pool {
+    fn alloc(&mut self) -> (r: Slot) encapsulates alloc(1, 0) { /* .. */ }
+    fn free(&mut self, s: Slot) encapsulates alloc(0, 1) { /* .. */ }
+    fn release_many(&mut self, k: u64) encapsulates alloc(0, if k > 0 { 1 } else { 0 }) { /* .. */ }
+}
+
+fn two(p: &mut Pool) -> (Slot, Slot)
+    allocates 2
+{
+    (p.alloc(), p.alloc())
+}
+```
+
+* 호출하는 쪽은 `a`만큼 청구되고(함수의 `allocates`가 `a`), 호출은 `d > 0`인 곳에서 메모리를 해제할 수 있습니다(해제
+  조건이 `d > 0`이므로, fip 함수는 `d == 0`을 보일 수 있는 곳에서만 부를 수 있습니다). `call_allocates`/
+  `f.allocates(..)`와 `call_deallocates`/`f.deallocates(..)`는 `a`와 `d > 0`입니다. (Verus는 할당은 세지만 해제는
+  할 수 있는지만 봅니다. `alloc(1, 1)`과 `alloc(1, 3)`은 `.vir`에서만 다르고, `.vir`에는 `d`가 적힌 그대로 남습니다.)
+* 본문은 `Allocator`의 본문처럼 런타임의 것입니다. 본문이 할당하거나 해제하거나 스택을 쓰는 것은 검사하지 않으므로,
+  전역 할당기로 풀을 다시 채울 수 있습니다. `ensures`는 평소처럼 검증합니다. strict 함수는 이것을 리프로 부를 수
+  있습니다.
+* `allocates`나 `#[verifier::fip]`과 함께 쓸 수 없고, spec·proof 함수와 trait 메서드 선언에는 쓸 수 없습니다. 상한이나
+  조건이 있는 trait 메서드의 구현에서는 `a`가 상한 안에, `d > 0`이 조건 안에 있어야 합니다(진입 시점에, `requires`를
+  만족하는 모든 입력에 대해 검사합니다. `#[verifier::fip]` 선언의 구현은 fip여야 하므로 쓸 수 없습니다).
+* `assume_specification`에도 쓸 수 있습니다. 다른 언어로 된 할당기라면
+  `pub assume_specification[ ffi_alloc ](n: usize) -> *mut u8 encapsulates alloc(1, 0);`처럼 씁니다.
+* `Allocator` impl처럼 신뢰합니다. `alloc(0, 0)`이라고 적고 할당하는 함수는 그 할당을 숨깁니다("신뢰 기반과 한계" 참고).
+
 ## 콜백, 클로저, trait
 
 제네릭 함수 값을 통한 호출에는 `call_allocates(f, args)`가 청구됩니다. 이는 `f`가 실제로 무엇이든
@@ -270,8 +307,9 @@ std 함수에 대한 vstd 명세도 같은 방식으로 그 호출을 청구합�
 
 `call_deallocates(f, args)`는 같은 방식으로 함수 값의 해제 조건입니다. `#[verifier::fip]` 함수에서는
 `false`이고, `deallocates_when`이 있는 함수에서는 그 조건이며, 선언에 조건이 있는 trait 메서드에서는 (모든
-구현에 대해) 많아야 그 조건입니다. `verus!` 안에서 `f.allocates(args)`는 `call_allocates(f, (args,))`이고
-`f.deallocates(args)`는 `call_deallocates(f, (args,))`입니다. 그래서 다른 함수에 넘기는 명세는 둘 다, 일부
+구현에 대해) 많아야 그 조건입니다. `verus!` 안의 ghost 코드(명세, `assert` 등)에서 `f.allocates(args)`는
+`call_allocates(f, (args,))`이고 `f.deallocates(args)`는 `call_deallocates(f, (args,))`입니다(exec 코드의 같은
+이름 메서드는 그대로 둡니다). 그래서 다른 함수에 넘기는 명세는 둘 다, 일부
 인자에서만 성립하는 조건도 그대로 넘길 수 있습니다.
 
 ```rust
@@ -744,7 +782,7 @@ import한 crate의 상한은 그 crate가 다음 조건으로 검증되었을 �
 ## `-V alloc-check-strict`
 
 `-V alloc-check-strict`는 `-V alloc-check`가 하는 일에 더해, `allocates` 상한이 있는 모든 함수가 `no_unwind`일
-것을 요구합니다. 그래서 panic 경로가 존재하지 않습니다. 또 클로저에는 상한을 붙일 수 없습니다(클로저에 `allocates 0`을 주는 `#[verifier::fip]`도 붙일 수 없습니다).
+것을 요구합니다. 그래서 panic 경로가 존재하지 않습니다. 상한이 있는 클로저(클로저에 `allocates 0`을 주는 `#[verifier::fip]` 클로저 포함)도 `no_unwind`여야 합니다.
 할당하는 std 함수(`Box::new`, `Vec::push`, ...)에 대한 vstd 명세는 `no_unwind`가 아닙니다. capacity
 overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실제로는 할당하는 함수가 아직 strict 모드를
 통과할 수 없습니다.
@@ -762,6 +800,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 * 할당기 자신의 코드는 런타임이라는 점: 상한은 프로그램이 할당기를 부르는 호출(한 번에 1)을 세고, 할당기가
   하는 일은 세지 않습니다(그 `Allocator`, `Clone`, `Drop` impl은 할당, 해제, 스택을 검사하지 않음. "사용자
   정의 할당기" 참고)
+* `encapsulates alloc(a, d)`의 횟수(그 함수의 본문은 런타임의 것이라 할당, 해제, 스택을 검사하지 않습니다)
 * `#[verifier::trusted_call]` 블록 안의 호출(할당기의 전달용 `deallocate` 등). `--no-cheating`은 지금
   검증하는 crate에만 적용됩니다. 그것 없이 검증된 의존 crate의 블록(과 `external_body` 함수)은 그대로
   신뢰되고, `.vir`에는 `--no-cheating` 여부가 기록되지 않습니다

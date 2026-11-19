@@ -86,6 +86,8 @@ pub struct Header {
     pub unwind_spec: Option<UnwindSpec>,
     pub allocates: Option<Expr>,
     pub deallocates: Option<Expr>,
+    /// `encapsulates alloc(a, d)` (which also gives `allocates` and `deallocates`)
+    pub encapsulates_alloc: bool,
     pub extra_dependencies: Vec<Fun>,
     pub open_visibility_qualifier: Option<Visibility>,
 }
@@ -109,6 +111,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
     let mut unwind_spec: Option<UnwindSpec> = None;
     let mut allocates: Option<Expr> = None;
     let mut deallocates: Option<Expr> = None;
+    let mut encapsulates_alloc = false;
     let mut open_visibility_qualifier: Option<Visibility> = None;
     let mut n = 0;
     let mut unwrap_parameter_allowed = true;
@@ -245,6 +248,8 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                         allowed = allows.loops();
                     }
                     HeaderExprX::NoUnwind | HeaderExprX::NoUnwindWhen(_) => {
+                        // (functions and exec closures)
+                        allowed = matches!(allows, HeaderAllows::All | HeaderAllows::Closure);
                         match unwind_spec {
                             None => {}
                             _ => {
@@ -272,6 +277,23 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
                         }
                         allocates = Some(expr.clone());
                         deallocates = dealloc.clone();
+                    }
+                    HeaderExprX::EncapsulatesAlloc(a, cond) => {
+                        if !matches!(allows, HeaderAllows::All) {
+                            return Err(error(
+                                &stmt.span,
+                                "`encapsulates` can only be used on functions",
+                            ));
+                        }
+                        if allocates.is_some() {
+                            return Err(error(
+                                &stmt.span,
+                                "a function with `encapsulates alloc(a, d)` cannot also have `allocates` (each call counts as `a` allocations)",
+                            ));
+                        }
+                        allocates = Some(a.clone());
+                        deallocates = Some(cond.clone());
+                        encapsulates_alloc = true;
                     }
                     HeaderExprX::OpenVisibilityQualifier(v) => {
                         match open_visibility_qualifier {
@@ -328,6 +350,7 @@ pub fn read_header_block(block: &mut Vec<Stmt>, allows: &HeaderAllows) -> Result
         unwind_spec,
         allocates,
         deallocates,
+        encapsulates_alloc,
         extra_dependencies,
         open_visibility_qualifier,
     })

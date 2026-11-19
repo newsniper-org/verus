@@ -723,3 +723,155 @@ test_verify_one_file! {
         }
     } => Err(err) => assert_fails(err, 4)
 }
+
+// `call_unwinds(f, args)` (`f.unwinds(args)` in ghost code), and `no_unwind` on closures
+test_verify_one_file! {
+    #[test] call_unwinds_fn_items verus_code! {
+        use vstd::prelude::*;
+
+        fn g(x: u64) -> u64 no_unwind { x }
+        fn h(x: u64) -> u64 no_unwind when x < 10 { x }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.unwinds(x),
+            no_unwind
+        {
+            f(x)
+        }
+
+        fn use_it() -> (r: u64) no_unwind {
+            let a = apply(&g, 3);
+            let b = apply(&h, 3);
+            a.wrapping_add(b)
+        }
+
+        proof fn t() {
+            assert(!call_unwinds(g, (3u64,)));
+            assert(!h.unwinds(3));
+        }
+
+        // (exec code keeps a method of this name)
+        struct S;
+        impl S { fn unwinds(&self) -> bool { false } }
+        fn exec_method() { let _b = S.unwinds(); }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] call_unwinds_fn_items_fail verus_code! {
+        use vstd::prelude::*;
+
+        fn h(x: u64) -> u64 no_unwind when x < 10 { x }
+        fn m(x: u64) -> u64 { x }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.unwinds(x),
+            no_unwind
+        {
+            f(x)
+        }
+
+        fn bad1() -> (r: u64) no_unwind { apply(&h, 20) } // FAILS
+        fn bad2() -> (r: u64) no_unwind { apply(&m, 2) } // FAILS
+        proof fn bad3() { assert(!h.unwinds(20)); } // FAILS
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file! {
+    #[test] call_unwinds_generic_needs_condition verus_code! {
+        use vstd::prelude::*;
+
+        fn call_it<F: Fn(u64) -> u64>(f: &F) -> (r: u64)
+            requires f.requires((1u64,)),
+            no_unwind
+        {
+            f(1)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "cannot show this call will not unwind")
+}
+
+test_verify_one_file! {
+    #[test] closure_no_unwind verus_code! {
+        use vstd::prelude::*;
+
+        fn may(x: u64) -> u64 { x }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.unwinds(x),
+            no_unwind
+        {
+            f(x)
+        }
+
+        fn ok1() -> (r: u64) no_unwind {
+            let half = |y: u64| -> (r: u64) no_unwind { y / 2 };
+            apply(&half, 7)
+        }
+
+        fn ok2() -> (r: u64) no_unwind {
+            let lim = 10u64;
+            let c = |y: u64| -> (r: u64) no_unwind when y < lim { if y < lim { y } else { may(y) } };
+            apply(&c, 3)
+        }
+
+        fn ok3() -> (r: u64) no_unwind {
+            let half = |y: u64| -> (r: u64) no_unwind { y / 2 };
+            half(4)
+        }
+
+        // (the condition is taken on entry, before the body changes a parameter's copy)
+        fn ok4() -> (r: u64) no_unwind {
+            let c = |y: u64| -> (r: u64) no_unwind when y < 10 {
+                let mut z = y;
+                z = 100;
+                if y < 10 { z } else { may(z) }
+            };
+            apply(&c, 3)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] closure_no_unwind_fail verus_code! {
+        use vstd::prelude::*;
+
+        fn may(x: u64) -> u64 { x }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.unwinds(x),
+            no_unwind
+        {
+            f(x)
+        }
+
+        fn bad_when() -> (r: u64) no_unwind {
+            let c = |y: u64| -> (r: u64) no_unwind when y < 10 { y };
+            apply(&c, 30) // FAILS
+        }
+
+        fn bad_plain() -> (r: u64) no_unwind {
+            let c = |y: u64| -> (r: u64) { y };
+            apply(&c, 3) // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file! {
+    #[test] closure_no_unwind_body_checked verus_code! {
+        fn may(x: u64) -> u64 { x }
+
+        fn f() {
+            let c = |y: u64| -> (r: u64) no_unwind { may(y) };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "cannot show this call will not unwind")
+}

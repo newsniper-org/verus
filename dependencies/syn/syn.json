@@ -368,6 +368,11 @@
             "syn": "SignatureAllocates"
           }
         },
+        "encapsulates": {
+          "option": {
+            "syn": "SignatureEncapsulates"
+          }
+        },
         "semi": {
           "token": "Semi"
         }
@@ -1851,6 +1856,13 @@
           "option": {
             "box": {
               "syn": "SignatureInvariants"
+            }
+          }
+        },
+        "unwind": {
+          "option": {
+            "box": {
+              "syn": "SignatureUnwind"
             }
           }
         },
@@ -6607,6 +6619,20 @@
       }
     },
     {
+      "ident": "SignatureEncapsulates",
+      "features": {
+        "any": []
+      },
+      "fields": {
+        "token": {
+          "token": "Encapsulates"
+        },
+        "exprs": {
+          "syn": "Specification"
+        }
+      }
+    },
+    {
       "ident": "SignatureInvariants",
       "features": {
         "any": []
@@ -6684,6 +6710,11 @@
         "allocates": {
           "option": {
             "syn": "SignatureAllocates"
+          }
+        },
+        "encapsulates": {
+          "option": {
+            "syn": "SignatureEncapsulates"
           }
         },
         "with": {
@@ -8116,6 +8147,7 @@
     "DotDotEq": "..=",
     "Dyn": "dyn",
     "Else": "else",
+    "Encapsulates": "encapsulates",
     "Ensures": "ensures",
     "Enum": "enum",
     "Eq": "=",

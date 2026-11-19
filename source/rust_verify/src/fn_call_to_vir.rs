@@ -71,6 +71,7 @@ pub(crate) fn fn_call_to_vir<'tcx>(
                         | SpecItem::NoUnwind
                         | SpecItem::NoUnwindWhen
                         | SpecItem::Allocates
+                        | SpecItem::EncapsulatesAlloc
                         | SpecItem::Decreases
                 ) | VerusItem::Directive(DirectiveItem::ExtraDependency)
             )
@@ -725,7 +726,8 @@ fn verus_item_to_vir<'tcx, 'a>(
                     | SpecItem::InvMaskSet
                     | SpecItem::NoUnwind
                     | SpecItem::NoUnwindWhen
-                    | SpecItem::Allocates => (true, false),
+                    | SpecItem::Allocates
+                    | SpecItem::EncapsulatesAlloc => (true, false),
 
                     SpecItem::Ensures | SpecItem::Returns => (true, true),
 
@@ -1020,6 +1022,15 @@ fn verus_item_to_vir<'tcx, 'a>(
                         Arc::new(HeaderExprX::Allocates(arg, None))
                     };
                     mk_expr(ExprX::Header(header))
+                }
+                SpecItem::EncapsulatesAlloc => {
+                    record_spec_fn_pure_args_only(bctx, expr);
+                    let bctx = &BodyCtxt { external_body: false, in_ghost: true, ..bctx.clone() };
+                    internal_err_unless!(args.len() == 3, expr.span, "expected 3 arguments", &args);
+                    // (the count `d` is in the condition `d > 0`)
+                    let a = expr_to_vir_consume(bctx, &args[0])?;
+                    let c = expr_to_vir_consume(bctx, &args[2])?;
+                    mk_expr(ExprX::Header(Arc::new(HeaderExprX::EncapsulatesAlloc(a, c))))
                 }
                 SpecItem::Admit => {
                     record_spec_fn_pure_args_only(bctx, expr);
@@ -2420,7 +2431,8 @@ fn verus_item_to_vir<'tcx, 'a>(
             | BuiltinFunctionItem::CallEnsures
             | BuiltinFunctionItem::CallOpensInvariants
             | BuiltinFunctionItem::CallAllocates
-            | BuiltinFunctionItem::CallDeallocates),
+            | BuiltinFunctionItem::CallDeallocates
+            | BuiltinFunctionItem::CallUnwinds),
         ) => {
             record_spec_fn(bctx, expr);
 
@@ -2444,6 +2456,10 @@ fn verus_item_to_vir<'tcx, 'a>(
                 BuiltinFunctionItem::CallDeallocates => {
                     assert!(args.len() == 2);
                     BuiltinSpecFun::ClosureDealloc
+                }
+                BuiltinFunctionItem::CallUnwinds => {
+                    assert!(args.len() == 2);
+                    BuiltinSpecFun::ClosureUnwinds
                 }
                 BuiltinFunctionItem::ConstrainType => unreachable!(),
                 BuiltinFunctionItem::Allocated => unreachable!(),

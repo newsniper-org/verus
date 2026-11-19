@@ -62,6 +62,7 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let closure_opens_invariants = str_to_node(CLOSURE_OPENS_INVARIANTS);
     let closure_alloc = str_to_node(CLOSURE_ALLOC);
     let closure_dealloc = str_to_node(CLOSURE_DEALLOC);
+    let closure_unwinds = str_to_node(CLOSURE_UNWINDS);
     let default_ens = str_to_node(DEFAULT_ENS);
     #[allow(non_snake_case)]
     let Poly = str_to_node(POLY);
@@ -1049,6 +1050,8 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         )))
         // call_deallocates (-V alloc-check): may a call of a function value deallocate
         (declare-fun [closure_dealloc] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Bool)
+        // call_unwinds: may a call of a function value unwind
+        (declare-fun [closure_unwinds] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Bool)
 
         // Decreases
         (declare-fun [height] ([Poly]) [Height])

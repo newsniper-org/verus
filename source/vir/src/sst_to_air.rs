@@ -1003,7 +1003,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 | InternalFun::ClosureOpensInvariants
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc
-                | InternalFun::ClosureDealloc => true,
+                | InternalFun::ClosureDealloc
+                | InternalFun::ClosureUnwinds => true,
                 _ => false,
             };
 
@@ -1024,6 +1025,7 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                     InternalFun::DefaultEns => str_ident(crate::def::DEFAULT_ENS),
                     InternalFun::ClosureAlloc => str_ident(crate::def::CLOSURE_ALLOC),
                     InternalFun::ClosureDealloc => str_ident(crate::def::CLOSURE_DEALLOC),
+                    InternalFun::ClosureUnwinds => str_ident(crate::def::CLOSURE_UNWINDS),
                     InternalFun::CheckDecreaseHeight => {
                         str_ident(crate::def::CHECK_DECREASE_HEIGHT)
                     }
@@ -2428,7 +2430,7 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             }
             stmts
         }
-        StmX::ClosureInner { body, typ_inv_vars } => {
+        StmX::ClosureInner { body, typ_inv_vars, unwind: closure_unwind } => {
             let mut stmts = vec![];
             for (x, typ) in typ_inv_vars.iter() {
                 let typ_inv = typ_invariant(ctx, typ, &ident_var(&suffix_local_unique_id(x)));
@@ -2437,8 +2439,15 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                 }
             }
 
-            // Right now all closures are assumed to unwind
-            let mut unwind = UnwindAir::MayUnwind;
+            // a closure without `no_unwind` may unwind
+            let mut unwind = match closure_unwind {
+                UnwindSst::MayUnwind => UnwindAir::MayUnwind,
+                UnwindSst::NoUnwind => UnwindAir::NoUnwind(ReasonForNoUnwind::Function),
+                UnwindSst::NoUnwindWhen(exp) => {
+                    let expr_ctxt = &ExprCtxt::new_mode(ExprMode::Body);
+                    UnwindAir::NoUnwindWhen(exp_to_expr(ctx, exp, expr_ctxt)?)
+                }
+            };
             std::mem::swap(&mut state.unwind, &mut unwind);
 
             let mut body_stmts = stm_to_stmts(ctx, state, body)?;

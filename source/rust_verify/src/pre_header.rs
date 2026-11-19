@@ -181,7 +181,8 @@ fn is_header_verus_item(verus_item: &VerusItem) -> bool {
             | SpecItem::OpensInvariantMask
             | SpecItem::NoUnwind
             | SpecItem::NoUnwindWhen
-            | SpecItem::Allocates => true,
+            | SpecItem::Allocates
+            | SpecItem::EncapsulatesAlloc => true,
         },
         VerusItem::Directive(dir_item) => match dir_item {
             crate::verus_items::DirectiveItem::ExtraDependency => true,

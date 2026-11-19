@@ -341,6 +341,20 @@ impl Debug for Lite<syn::AssumeSpecification> {
             }
             formatter.field("allocates", Print::ref_cast(val));
         }
+        if let Some(val) = &self.value.encapsulates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureEncapsulates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("encapsulates", Print::ref_cast(val));
+        }
         formatter.finish()
     }
 }
@@ -1226,6 +1240,20 @@ impl Debug for Lite<syn::Expr> {
                         }
                     }
                     formatter.field("invariants", Print::ref_cast(val));
+                }
+                if let Some(val) = &_val.unwind {
+                    #[derive(RefCast)]
+                    #[repr(transparent)]
+                    struct Print(Box<syn::SignatureUnwind>);
+                    impl Debug for Print {
+                        fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                            formatter.write_str("Some(")?;
+                            Debug::fmt(Lite(&self.0), formatter)?;
+                            formatter.write_str(")")?;
+                            Ok(())
+                        }
+                    }
+                    formatter.field("unwind", Print::ref_cast(val));
                 }
                 if let Some(val) = &_val.allocates {
                     #[derive(RefCast)]
@@ -2295,6 +2323,20 @@ impl Debug for Lite<syn::ExprClosure> {
                 }
             }
             formatter.field("invariants", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.unwind {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(Box<syn::SignatureUnwind>);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("unwind", Print::ref_cast(val));
         }
         if let Some(val) = &self.value.allocates {
             #[derive(RefCast)]
@@ -6230,6 +6272,13 @@ impl Debug for Lite<syn::SignatureDecreases> {
         formatter.finish()
     }
 }
+impl Debug for Lite<syn::SignatureEncapsulates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let mut formatter = formatter.debug_struct("SignatureEncapsulates");
+        formatter.field("exprs", Lite(&self.value.exprs));
+        formatter.finish()
+    }
+}
 impl Debug for Lite<syn::SignatureInvariants> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         let mut formatter = formatter.debug_struct("SignatureInvariants");
@@ -6396,6 +6445,20 @@ impl Debug for Lite<syn::SignatureSpec> {
                 }
             }
             formatter.field("allocates", Print::ref_cast(val));
+        }
+        if let Some(val) = &self.value.encapsulates {
+            #[derive(RefCast)]
+            #[repr(transparent)]
+            struct Print(syn::SignatureEncapsulates);
+            impl Debug for Print {
+                fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("Some(")?;
+                    Debug::fmt(Lite(&self.0), formatter)?;
+                    formatter.write_str(")")?;
+                    Ok(())
+                }
+            }
+            formatter.field("encapsulates", Print::ref_cast(val));
         }
         if let Some(val) = &self.value.with {
             #[derive(RefCast)]
@@ -7855,6 +7918,11 @@ impl Debug for Lite<syn::token::Dyn> {
 impl Debug for Lite<syn::token::Else> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("Token![else]")
+    }
+}
+impl Debug for Lite<syn::token::Encapsulates> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Token![encapsulates]")
     }
 }
 impl Debug for Lite<syn::token::Ensures> {

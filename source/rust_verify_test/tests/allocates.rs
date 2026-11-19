@@ -1251,7 +1251,21 @@ test_verify_one_file_with_options! {
             let c = |y: u8| -> (r: u8) allocates 0 { y };
             c(1)
         }
-    } => Err(err) => assert_vir_error_msg(err, "a closure cannot have an `allocates` bound")
+    } => Err(err) => assert_vir_error_msg(err, "a closure with an `allocates` bound must be `no_unwind`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_closure_strict_no_unwind ["vstd", "-V alloc-check-strict"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn f() -> u8
+            no_unwind
+            allocates 0
+        {
+            let c = |y: u8| -> (r: u8) no_unwind allocates 0 { y };
+            c(1)
+        }
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {

@@ -388,6 +388,7 @@ pub(crate) fn add_param_decls<'tcx>(
         unwind_spec,
         allocates,
         deallocates,
+        encapsulates_alloc: _,
         invariant_except_break: _,
         invariant: _,
         atomic_call_loop: _,
@@ -4824,6 +4825,7 @@ pub(crate) fn closure_to_vir<'tcx>(
             ensure_id_typ,
             invariant_mask,
             mut allocates,
+            unwind_spec,
             ..
         } = header;
         assert!(ensure.1.len() == 0);
@@ -4911,6 +4913,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 mask_spec: invariant_mask,
                 allocates,
                 fip: closure_fip.is_some(),
+                unwind_spec,
                 ret: ret,
                 external_spec: None, // filled in by ast_simplify
             }

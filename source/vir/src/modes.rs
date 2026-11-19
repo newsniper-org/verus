@@ -2381,6 +2381,7 @@ fn check_expr(
             mask_spec,
             allocates,
             fip: _,
+            unwind_spec,
             body,
             external_spec,
         } => {
@@ -2447,6 +2448,17 @@ fn check_expr(
                         &mut ghost_typing,
                         Mode::Spec,
                         allocates,
+                        Mode::Spec,
+                        &Proph::No,
+                    )?;
+                }
+                if let Some(crate::ast::UnwindSpec::NoUnwindWhen(cond)) = &unwind_spec {
+                    check_expr_has_mode(
+                        ctxt,
+                        record,
+                        &mut ghost_typing,
+                        Mode::Spec,
+                        cond,
                         Mode::Spec,
                         &Proph::No,
                     )?;

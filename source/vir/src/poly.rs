@@ -540,7 +540,8 @@ fn visit_exp(ctx: &Ctx, state: &mut State, exp: &Exp) -> Exp {
                 | InternalFun::ClosureEns
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc
-                | InternalFun::ClosureDealloc,
+                | InternalFun::ClosureDealloc
+                | InternalFun::ClosureUnwinds,
             ) => {
                 let exps = visit_exps_poly(ctx, state, exps);
                 mk_exp(ExpX::Call(call_fun.clone(), typs.clone(), exps))
@@ -1064,7 +1065,7 @@ fn visit_stm(ctx: &Ctx, state: &mut State, stm: &Stm) -> Stm {
             let s = visit_stm(ctx, state, s);
             mk_stm(StmX::OpenInvariant(s))
         }
-        StmX::ClosureInner { body, typ_inv_vars } => {
+        StmX::ClosureInner { body, typ_inv_vars, unwind } => {
             let typ_inv_vars = Arc::new(
                 typ_inv_vars
                     .iter()
@@ -1078,7 +1079,8 @@ fn visit_stm(ctx: &Ctx, state: &mut State, stm: &Stm) -> Stm {
             }
             let body = visit_stm(ctx, state, body);
             state.types.pop_scope();
-            mk_stm(StmX::ClosureInner { body, typ_inv_vars: typ_inv_vars })
+            // (a `no_unwind when` condition is a native `bool` local)
+            mk_stm(StmX::ClosureInner { body, typ_inv_vars: typ_inv_vars, unwind: unwind.clone() })
         }
         StmX::Air(_) => stm.clone(),
         StmX::Block(stms) => mk_stm(StmX::Block(visit_stms(ctx, state, stms))),

@@ -64,6 +64,8 @@ pub enum InternalFun {
     ClosureAlloc,
     /// `call_deallocates(f, args)`
     ClosureDealloc,
+    /// `call_unwinds(f, args)`
+    ClosureUnwinds,
 }
 
 #[derive(Debug, Clone, Hash, ToDebugSNode)]
@@ -329,7 +331,9 @@ pub enum StmX {
     /// Atomic invariant opening for concurrent verification
     OpenInvariant(Stm),
     /// Body of an exec closure, with associated type invariants
-    ClosureInner { body: Stm, typ_inv_vars: Arc<Vec<(UniqueIdent, Typ)>> },
+    /// `unwind`: the closure's `no_unwind` (a `no_unwind when c` condition is a `bool` local of
+    /// the body, set from `c` on entry)
+    ClosureInner { body: Stm, typ_inv_vars: Arc<Vec<(UniqueIdent, Typ)>>, unwind: UnwindSst },
     /// Raw AIR code injection (for internal use only)
     Air(Arc<String>),
     /// Sequential composition of statements

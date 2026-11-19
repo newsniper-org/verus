@@ -306,6 +306,7 @@ fn handle_autospec<'tcx>(
                     fip: false,
                     fip_strict: false,
                     allocator_runtime: false,
+                    encapsulates_alloc: false,
                     trusted_only: false,
                     alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
                     alloc_unmodeled_bounds: false,
@@ -1615,6 +1616,7 @@ fn make_attributes<'tcx>(
         fip: vattrs.fip.is_some() || runtime_clone_drop,
         fip_strict: vattrs.fip == Some(true) || runtime_clone_drop,
         allocator_runtime,
+        encapsulates_alloc: false, // (set from the header, `finish_function`)
         trusted_only: vattrs.trusted_only,
         alloc_checked_crate: ctxt.cmd_line_args.alloc_check,
         alloc_unmodeled_bounds: has_auto_trait_bounds(ctxt.tcx, def_id),
@@ -2512,6 +2514,31 @@ pub(crate) fn finish_function<'tcx>(
 
     // -V alloc-check: `#[verifier::fip]` (fully in-place) and `deallocates_when`
     let mut header = header;
+    // `encapsulates alloc(a, d)`: the function encapsulates an allocator (its `allocates` and
+    // `deallocates` come from `a` and `d`); its body is the runtime's, as an allocator's is
+    let attrs = if header.encapsulates_alloc {
+        if mode != Mode::Exec {
+            return err_span(sig.span, "`encapsulates` can only be used on exec functions");
+        }
+        if vattrs.fip.is_some() {
+            return err_span(
+                sig.span,
+                "a function with `encapsulates alloc(a, d)` cannot be `#[verifier::fip]` (it may deallocate where `d > 0`; its body is the runtime's)",
+            );
+        }
+        if matches!(kind, FunctionKind::TraitMethodDecl { .. }) {
+            return err_span(
+                sig.span,
+                "`encapsulates` cannot be used on a trait method declaration (use it on the implementations)",
+            );
+        }
+        let mut a = (*attrs).clone();
+        a.encapsulates_alloc = true;
+        a.allocator_runtime = ctxt.cmd_line_args.alloc_check;
+        Arc::new(a)
+    } else {
+        attrs
+    };
     if vattrs.fip.is_some() {
         if !ctxt.cmd_line_args.alloc_check {
             return err_span(sig.span, "`#[verifier::fip]` needs -V alloc-check");
@@ -2550,6 +2577,7 @@ pub(crate) fn finish_function<'tcx>(
     // (a trait method declaration without a default body may state one too: a contract of every
     // implementation, see vir's `well_formed`)
     if header.deallocates.is_some()
+        && !header.encapsulates_alloc
         && !(vattrs.external_body
             || vattrs.external_fn_specification
             || (matches!(kind, FunctionKind::TraitMethodDecl { .. }) && header.no_method_body))
