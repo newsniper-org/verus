@@ -1403,14 +1403,6 @@ impl Visitor {
         if self.erase_ghost.keep() {
             attrs.push(mk_verus_attr(sig.fn_token.span, quote! { verus_macro }));
         }
-        // (for the MIR checks, which do not see the specification, and may run on the compile
-        // that erases ghost code: `fip_mir`)
-        if !self.erase_ghost.erase_all() {
-            if let Some(e) = &sig.spec.encapsulates {
-                attrs.push(mk_verus_attr(e.token.span, quote! { encapsulates_alloc }));
-            }
-        }
-
         for arg in &mut sig.inputs {
             match (arg.tracked, &mut arg.kind) {
                 _ if self.erase_ghost.erase_all() => {}

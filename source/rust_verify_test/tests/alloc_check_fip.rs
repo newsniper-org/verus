@@ -3317,3 +3317,38 @@ fn encapsulates_alloc_across_crates() {
     assert!(!neg.status.success(), "neg should be rejected:\n{}", stderr);
     assert!(stderr.contains("postcondition not satisfied"), "unexpected:\n{}", stderr);
 }
+
+// `fip_mir` learns which functions encapsulate an allocator from VIR (the clause in their
+// specification), not from an attribute the program could write: a hand-written internal
+// attribute used to make a recursive function a leaf for a strict caller (portable-fip,
+// 2026-11-19)
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_internal_attr_not_trusted ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        #[verus::internal(encapsulates_alloc)]
+        pub fn deep(n: u64) -> (r: u64) decreases n { if n == 0 { 0 } else { deep(n - 1) } }
+
+        #[verifier::fip(strict)]
+        pub fn s(n: u64) -> (r: u64) { deep(n) }
+    } => Err(err) => assert_any_vir_error_msg(err, "unrecognized internal attribute")
+}
+
+test_verify_one_file_with_options! {
+    #[test] encapsulates_alloc_strict_leaf_recursive_body ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct Pool { pub n: u64 }
+
+        impl Pool {
+            // (the body is the runtime's: its recursion is not the strict caller's)
+            pub fn refill(&mut self, k: u64) decreases k encapsulates alloc(0, 0) {
+                if k > 0 { self.refill(k - 1) }
+            }
+        }
+
+        #[verifier::fip(strict)]
+        pub fn s(p: &mut Pool) { p.refill(3) }
+    } => Ok(())
+}

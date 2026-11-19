@@ -69,24 +69,13 @@ pub(crate) fn allocator_runtime(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     implements(tcx, typing_env, alloc, self_ty)
 }
 
-/// -V alloc-check: is `def_id` a function of this crate with `encapsulates alloc(a, d)`? It
-/// encapsulates an allocator: like the allocator runtime's code (`allocator_runtime`), it is a
-/// leaf for every check here, and its body is not checked.
-pub(crate) fn encapsulates_alloc(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    let Some(local) = def_id.as_local() else { return false };
-    if !matches!(
-        tcx.def_kind(def_id),
-        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
-    ) {
-        return false;
-    }
-    let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(local));
-    parse_attrs_opt(attrs, None).iter().any(|a| matches!(a, Attr::EncapsulatesAlloc))
-}
-
-/// The allocator runtime's code, or a function that encapsulates an allocator: a leaf
-fn runtime_leaf(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    allocator_runtime(tcx, def_id) || encapsulates_alloc(tcx, def_id)
+/// The allocator runtime's code, or a function of this crate with `encapsulates alloc(a, d)`
+/// (it encapsulates an allocator, so like the runtime's code it is a leaf for every check here,
+/// and its body is not checked). Which functions those are comes from VIR, where the clause is
+/// read from the function's specification (`ExternalStrict::local_encapsulates`), not from an
+/// attribute that the program could write by hand.
+fn runtime_leaf(tcx: TyCtxt<'_>, ext: &ExternalStrict, def_id: DefId) -> bool {
+    allocator_runtime(tcx, def_id) || ext.encapsulates_alloc(tcx, def_id)
 }
 
 /// The path where `d` is defined (`vstd::alloc_check::NoDeallocDrop`). Unlike `def_path_str`,
@@ -275,7 +264,7 @@ fn check_callbacks<'tcx>(
     targs: ty::GenericArgsRef<'tcx>,
     span: Span,
 ) {
-    let cb = callbacks(tcx, typing_env, target, targs);
+    let cb = callbacks(tcx, typing_env, ext, target, targs);
     let err = |what: String| {
         tcx.dcx().span_err(
             span,
@@ -527,6 +516,7 @@ fn implements_args<'tcx>(
 fn callbacks<'tcx>(
     tcx: TyCtxt<'tcx>,
     typing_env: TypingEnv<'tcx>,
+    ext: &ExternalStrict,
     def_id: DefId,
     args: ty::GenericArgsRef<'tcx>,
 ) -> Callbacks<'tcx> {
@@ -643,7 +633,7 @@ fn callbacks<'tcx>(
                 if u.impl_def_id.is_local() {
                     // (an allocator's `Clone` and `Drop` are the runtime's: `allocator_runtime`)
                     for f in impl_fns(u.impl_def_id) {
-                        if !runtime_leaf(tcx, f) {
+                        if !runtime_leaf(tcx, ext, f) {
                             out.local.push((f, what.clone()));
                         }
                     }
@@ -859,6 +849,9 @@ pub(crate) struct ExternalStrict {
     /// the std functions (and vstd's) that vstd marks `#[verifier::alloc_check_skip_drops]`: they
     /// drop no value of their type arguments (`mem::swap`, `<[T]>::split_at_mut`)
     no_drop: std::collections::HashSet<String>,
+    /// the functions of this crate with `encapsulates alloc(a, d)`, as VIR determined them from
+    /// their specifications (their VIR paths, `{:?}`)
+    local_encapsulates: std::collections::HashSet<String>,
 }
 
 impl ExternalStrict {
@@ -867,6 +860,13 @@ impl ExternalStrict {
             && !self.no_drop.is_empty()
             && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
                 .is_some_and(|p| self.no_drop.contains(&format!("{:?}", p)))
+    }
+
+    fn encapsulates_alloc<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+        def_id.is_local()
+            && !self.local_encapsulates.is_empty()
+            && crate::rust_to_vir_path::def_id_to_vir_path_option(tcx, &self.verus_items, def_id)
+                .is_some_and(|p| self.local_encapsulates.contains(&format!("{:?}", p)))
     }
 
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
@@ -895,7 +895,7 @@ fn strict_edges<'tcx>(
     {
         // (the allocator runtime's code is a leaf, and so is a function that encapsulates an
         // allocator: `runtime_leaf`)
-        Some(local) if runtime_leaf(tcx, local.to_def_id()) => {}
+        Some(local) if runtime_leaf(tcx, ext, local.to_def_id()) => {}
         Some(local) => {
             if fip_kind_local(tcx, local) == Some(true) {
                 edges.push(StrictEdge { callee: local, tail, span });
@@ -991,7 +991,7 @@ fn strict_edges<'tcx>(
                                 && tcx.trait_of_assoc(c) == tcx.lang_items().drop_trait())
                     });
                     if !target.is_local() && !is_drop {
-                        let cb = callbacks(tcx, typing_env, target, targs);
+                        let cb = callbacks(tcx, typing_env, ext, target, targs);
                         for (d, why) in cb.local.iter() {
                             match d.as_local() {
                                 Some(l) if fip_kind_local(tcx, l) == Some(true) => {
@@ -1166,11 +1166,13 @@ pub(crate) fn check_fip_crate<'tcx>(
     checked: &[(String, u128)],
     strict_fns: &[String],
     no_drop_fns: &[String],
+    local_encapsulates_fns: &[String],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
         paths: strict_fns.iter().cloned().collect(),
         no_drop: no_drop_fns.iter().cloned().collect(),
+        local_encapsulates: local_encapsulates_fns.iter().cloned().collect(),
     };
     let om = OpMarkers::new(tcx);
     let marker = find_trait(tcx, MARKER);

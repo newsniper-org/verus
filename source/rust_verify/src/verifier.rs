@@ -355,6 +355,9 @@ pub struct Verifier {
     /// `#[verifier::alloc_check_skip_drops]` (their VIR paths, `{:?}`): they drop no value of
     /// their type arguments, so a call of one runs none of their destructors
     pub(crate) alloc_no_drop_fns: Vec<String>,
+    /// -V alloc-check: the functions of this crate with `encapsulates alloc(a, d)` (their VIR
+    /// paths, `{:?}`), from their specifications: `fip_mir` treats them as leaves
+    pub(crate) alloc_local_encapsulates_fns: Vec<String>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -566,6 +569,7 @@ impl Verifier {
             alloc_checked_deps: Vec::new(),
             alloc_checked_strict_fns: Vec::new(),
             alloc_no_drop_fns: Vec::new(),
+            alloc_local_encapsulates_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -619,6 +623,7 @@ impl Verifier {
             alloc_checked_deps: self.alloc_checked_deps.clone(),
             alloc_checked_strict_fns: self.alloc_checked_strict_fns.clone(),
             alloc_no_drop_fns: self.alloc_no_drop_fns.clone(),
+            alloc_local_encapsulates_fns: self.alloc_local_encapsulates_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -2823,6 +2828,12 @@ impl Verifier {
             crate_hash: None,
         };
         let alloc_checked = crate::rust_to_vir_func::alloc_checked_whole_crate(&self.args);
+        self.alloc_local_encapsulates_fns = local_crate
+            .functions
+            .iter()
+            .filter(|f| f.x.attrs.encapsulates_alloc)
+            .map(|f| format!("{:?}", f.x.name.path))
+            .collect();
         if alloc_checked {
             self.alloc_checked_export = Some((crate_metadata.clone(), local_crate.clone()));
         }
