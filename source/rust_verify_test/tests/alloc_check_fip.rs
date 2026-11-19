@@ -2902,7 +2902,7 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "can state `deallocates_when`")
 }
 
-// `f.allocates(args)` / `f.deallocates(args)` (`call_allocates`, `call_deallocates`): a
+// `f.allocations(args)` / `f.deallocates(args)` (`call_allocations`, `call_deallocates`): a
 // specification that forwards to another function can pass on its bound and its deallocation
 // condition, also a conditional one
 test_verify_one_file_with_options! {
@@ -2923,14 +2923,14 @@ test_verify_one_file_with_options! {
 
         #[verifier::external_body]
         fn outer(x: u64) -> (r: u64)
-            allocates deallocates_when(inner.allocates(x), inner.deallocates(x))
+            allocates deallocates_when(inner.allocations(x), inner.deallocates(x))
         {
             inner(x)
         }
 
         #[verifier::external_body]
         fn outer2(x: u64) -> (r: u64)
-            allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+            allocates deallocates_when(shrink_if_big.allocations(x), shrink_if_big.deallocates(x))
         {
             shrink_if_big(x)
         }
@@ -2948,7 +2948,7 @@ test_verify_one_file_with_options! {
         // the builtins themselves, as the sugar rewrites to
         proof fn facts(x: u64) {
             assert(call_deallocates(inner, (x,)) == false);
-            assert(call_allocates(inner, (x,)) == 0);
+            assert(call_allocations(inner, (x,)) == 0);
             assert(shrink_if_big.deallocates(x) == (x > 5));
         }
     } => Ok(())
@@ -2967,7 +2967,7 @@ test_verify_one_file_with_options! {
 
         #[verifier::external_body]
         fn outer2(x: u64) -> (r: u64)
-            allocates deallocates_when(shrink_if_big.allocates(x), shrink_if_big.deallocates(x))
+            allocates deallocates_when(shrink_if_big.allocations(x), shrink_if_big.deallocates(x))
         {
             shrink_if_big(x)
         }
@@ -3010,7 +3010,7 @@ test_verify_one_file_with_options! {
                 f.requires((x,)),
                 !(*f).deallocates(x),
             allocates
-                (*f).allocates(x),
+                (*f).allocations(x),
         {
             f(x)
         }
@@ -3022,9 +3022,9 @@ test_verify_one_file_with_options! {
                 forall|y: u64| g.requires((y,)),
                 !(*f).deallocates(x),
                 forall|y: u64| !(*g).deallocates(y),
-                forall|y: u64| (*g).allocates(y) == 0,
+                forall|y: u64| (*g).allocations(y) == 0,
             allocates
-                (*f).allocates(x),
+                (*f).allocations(x),
         {
             let y = f(x);
             g(y)
@@ -3148,7 +3148,7 @@ test_verify_one_file_with_options! {
         #[verifier::fip(strict)] fn strict_alloc(p: &mut Pool) -> (r: u64) allocates 1 { p.alloc() }
 
         proof fn t() {
-            assert(forall|p: &mut Pool| #[trigger] Pool::two.allocates(p) == 2);
+            assert(forall|p: &mut Pool| #[trigger] Pool::two.allocations(p) == 2);
         }
     } => Ok(())
 }

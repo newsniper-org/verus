@@ -64,6 +64,10 @@ pub enum InternalFun {
     ClosureAlloc,
     /// `call_deallocates(f, args)`
     ClosureDealloc,
+    /// `call_allocates(f, args)`
+    ClosureAllocates,
+    /// `call_deallocations(f, args)`
+    ClosureDeallocations,
     /// `call_unwinds(f, args)`
     ClosureUnwinds,
 }

@@ -147,7 +147,7 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ Range::<Idx>::contains ](
 
     allocates
         deallocates_when(
-            call_allocates(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocates(
+            call_allocations(<Idx as PartialOrd<U>>::le, (&r.start, i)) + call_allocations(
                 <U as PartialOrd<Idx>>::lt,
                 (i, &r.end),
             ),
@@ -171,10 +171,10 @@ pub assume_specification<Idx: PartialOrd<Idx>, U>[ RangeInclusive::<Idx>::contai
 
     allocates
         deallocates_when(
-            call_allocates(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
-                call_allocates(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
+            call_allocations(<Idx as PartialOrd<U>>::le, (&r@.start, i)) + if r@.exhausted {
+                call_allocations(<U as PartialOrd<Idx>>::lt, (i, &r@.start))
             } else {
-                call_allocates(<U as PartialOrd<Idx>>::le, (i, &r@.end))
+                call_allocations(<U as PartialOrd<Idx>>::le, (i, &r@.end))
             },
             !(super::super::alloc_check::partial_ord_is_fip::<Idx, U>()
                 && super::super::alloc_check::partial_ord_is_fip::<U, Idx>()),
@@ -192,7 +192,7 @@ pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty 
 // `self.exhausted || !(self.start <= self.end)`
 
     allocates
-        call_allocates(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end)),
+        call_allocations(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end)),
 ;
 
 pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx) -> (ret:

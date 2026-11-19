@@ -2176,16 +2176,37 @@ pub fn deallocates_when<A: Integer>(_allocates: A, _deallocates: bool) -> A {
     unimplemented!();
 }
 
+/// -V alloc-check: how many allocations a call of the function value `f` with `args` is charged
+/// (its `allocates` bound). In ghost code inside `verus!`, `f.allocations(args)` is
+/// `call_allocations(f, (args,))`.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::call_allocations"]
+pub fn call_allocations<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> nat {
+    unimplemented!();
+}
+
+/// -V alloc-check: may a call of the function value `f` with `args` allocate? (`false` where its
+/// `allocates` bound is 0; the condition `c` for `allocates allocates_when(a, c)`.)
+/// `f.allocates(args)` is this; `call_allocations(f, args) > 0` implies it.
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_allocates"]
-pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> int {
+pub fn call_allocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {
+    unimplemented!();
+}
+
+/// -V alloc-check: how many deallocations a call of the function value `f` with `args` is charged
+/// (its `deallocates` bound). In ghost code inside `verus!`, `f.deallocations(args)` is
+/// `call_deallocations(f, (args,))`.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::call_deallocations"]
+pub fn call_deallocations<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> nat {
     unimplemented!();
 }
 
 /// -V alloc-check: may a call of the function value `f` with `args` deallocate? (`false` for a
 /// `#[verifier::fip]` function; its condition for one with `deallocates_when`; for a trait method
-/// whose declaration has a condition, at most the declaration's. Inside `verus!`,
-/// `f.deallocates(args)` is this, and `f.allocates(args)` is `call_allocates(f, (args,))`.)
+/// whose declaration has a condition, at most the declaration's.) `f.deallocates(args)` is this;
+/// `call_deallocations(f, args) > 0` implies it.
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::call_deallocates"]
 pub fn call_deallocates<Args: core::marker::Tuple, F: FnOnce<Args>>(_f: F, _args: Args) -> bool {

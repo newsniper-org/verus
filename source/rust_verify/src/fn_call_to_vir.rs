@@ -2432,6 +2432,8 @@ fn verus_item_to_vir<'tcx, 'a>(
             | BuiltinFunctionItem::CallOpensInvariants
             | BuiltinFunctionItem::CallAllocates
             | BuiltinFunctionItem::CallDeallocates
+            | BuiltinFunctionItem::CallAllocations
+            | BuiltinFunctionItem::CallDeallocations
             | BuiltinFunctionItem::CallUnwinds),
         ) => {
             record_spec_fn(bctx, expr);
@@ -2449,9 +2451,17 @@ fn verus_item_to_vir<'tcx, 'a>(
                     assert!(args.len() == 2);
                     BuiltinSpecFun::ClosureOpensInvariants
                 }
-                BuiltinFunctionItem::CallAllocates => {
+                BuiltinFunctionItem::CallAllocations => {
                     assert!(args.len() == 2);
                     BuiltinSpecFun::ClosureAlloc
+                }
+                BuiltinFunctionItem::CallAllocates => {
+                    assert!(args.len() == 2);
+                    BuiltinSpecFun::ClosureAllocates
+                }
+                BuiltinFunctionItem::CallDeallocations => {
+                    assert!(args.len() == 2);
+                    BuiltinSpecFun::ClosureDeallocations
                 }
                 BuiltinFunctionItem::CallDeallocates => {
                     assert!(args.len() == 2);

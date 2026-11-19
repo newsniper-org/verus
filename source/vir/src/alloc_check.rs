@@ -1698,13 +1698,19 @@ mod tests {
     }
 }
 
-/// Does `expr` mention `call_allocates` (the `ClosureAlloc` builtin)?
+/// Does `expr` mention `call_allocations` or `call_allocates` (the `ClosureAlloc` and
+/// `ClosureAllocates` builtins)? (Both come from a function's `allocates` bound, so an axiom
+/// about either is guarded, or dropped, together.)
 pub(crate) fn mentions_call_allocates(expr: &crate::ast::Expr) -> bool {
     let mut found = false;
     let _ = crate::ast_visitor::expr_visitor_check::<VirErr, _>(expr, &mut |_scope, e| {
         if let ExprX::Call {
             target:
-                crate::ast::CallTarget::BuiltinSpecFun(crate::ast::BuiltinSpecFun::ClosureAlloc, ..),
+                crate::ast::CallTarget::BuiltinSpecFun(
+                    crate::ast::BuiltinSpecFun::ClosureAlloc
+                    | crate::ast::BuiltinSpecFun::ClosureAllocates,
+                    ..,
+                ),
             ..
         } = &e.x
         {

@@ -150,7 +150,7 @@ macro_rules! def_fmt_trait {
                 requires
                     forall|f: &Formatter<'a>| x.fmt_req(f),
                 ensures
-                    fmt_arg_allocates(arg) == call_allocates(<T as $trait>::fmt, (x, fmt_witness_formatter())),
+                    fmt_arg_allocates(arg) == call_allocations(<T as $trait>::fmt, (x, fmt_witness_formatter())),
                 allocates 0
             ;
         }
@@ -182,7 +182,7 @@ pub assume_specification<'a, 'b, T: core::fmt::Debug>[ rt::Argument::<'a>::new_d
     requires
         forall|f: &Formatter<'a>| x.fmt_req(f),
     ensures
-        fmt_arg_allocates(arg) == call_allocates(
+        fmt_arg_allocates(arg) == call_allocations(
             <T as core::fmt::Debug>::fmt,
             (x, fmt_witness_formatter()),
         ),
@@ -365,8 +365,8 @@ macro_rules! def_fmt_alloc_axiom {
         $crate::vstd::prelude::verus! {
             pub broadcast axiom fn $name<A: $trait + ?Sized>(a: &A, f: &mut Formatter<'_>)
                 ensures
-                    #[trigger] call_allocates(<A as $trait>::fmt, (a, f))
-                        == call_allocates(<A as $trait>::fmt, (a, fmt_witness_formatter())),
+                    #[trigger] call_allocations(<A as $trait>::fmt, (a, f))
+                        == call_allocations(<A as $trait>::fmt, (a, fmt_witness_formatter())),
             ;
         }
 };

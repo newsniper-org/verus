@@ -229,7 +229,7 @@ pub assume_specification<T, U, F: FnOnce(T) -> U>[ Option::<T>::map ](a: Option<
         ret.is_some() ==> f.ensures((a.unwrap(),), ret.unwrap()),
     allocates
         if a.is_some() {
-            call_allocates(f, (a.unwrap(),))
+            call_allocations(f, (a.unwrap(),))
         } else {
             0
         },
@@ -243,7 +243,7 @@ pub assume_specification<'a, T: Clone>[ Option::<&'a T>::cloned ](opt: Option<&'
         opt.is_some() ==> res.is_some() && cloned::<T>(*opt.unwrap(), res.unwrap()),
     allocates
         if opt.is_some() {
-            call_allocates(T::clone, (opt.unwrap(),))
+            call_allocations(T::clone, (opt.unwrap(),))
         } else {
             0
         },
@@ -273,7 +273,7 @@ pub assume_specification<T, U, F: FnOnce(T) -> Option<U>>[ Option::<T>::and_then
         option.is_some() ==> f.ensures((option.unwrap(),), res),
     allocates
         if option.is_some() {
-            call_allocates(f, (option.unwrap(),))
+            call_allocations(f, (option.unwrap(),))
         } else {
             0
         },
@@ -294,7 +294,7 @@ pub assume_specification<T, E, F: FnOnce() -> E>[ Option::<T>::ok_or_else ](
         },
     allocates
         if option.is_none() {
-            call_allocates(err, ())
+            call_allocations(err, ())
         } else {
             0
         },
@@ -309,7 +309,7 @@ pub assume_specification<T: core::default::Default>[ Option::<T>::unwrap_or_defa
         option.is_none() ==> T::default.ensures((), res),
     allocates
         if option.is_none() {
-            call_allocates(T::default, ())
+            call_allocations(T::default, ())
         } else {
             0
         },
@@ -327,7 +327,7 @@ pub assume_specification<T, F: FnOnce() -> T>[ Option::<T>::unwrap_or_else ](
         option.is_none() ==> f.ensures((), res),
     allocates
         if option.is_none() {
-            call_allocates(f, ())
+            call_allocations(f, ())
         } else {
             0
         },
@@ -342,7 +342,7 @@ pub assume_specification<T: Clone>[ <Option<T> as Clone>::clone ](opt: &Option<T
         opt.is_some() ==> res.is_some() && cloned::<T>(opt.unwrap(), res.unwrap()),
     allocates
         if opt.is_some() {
-            call_allocates(T::clone, (&opt.unwrap(),))
+            call_allocations(T::clone, (&opt.unwrap(),))
         } else {
             0
         },
@@ -372,7 +372,7 @@ pub assume_specification<T: PartialEq>[ <Option<T> as PartialEq>::eq ](
     allocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocates(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
+                call_allocations(<T as PartialEq>::eq, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },
@@ -404,7 +404,7 @@ pub assume_specification<T: PartialOrd>[ <Option<T> as PartialOrd>::partial_cmp 
     allocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocates(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
+                call_allocations(<T as PartialOrd>::partial_cmp, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },
@@ -435,7 +435,7 @@ pub assume_specification<T: Ord>[ <Option<T> as Ord>::cmp ](
     allocates
         deallocates_when(
             if x.is_some() && y.is_some() {
-                call_allocates(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
+                call_allocations(<T as Ord>::cmp, (&x.unwrap(), &y.unwrap()))
             } else {
                 0
             },

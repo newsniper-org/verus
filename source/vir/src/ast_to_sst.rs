@@ -2356,6 +2356,8 @@ pub(crate) fn expr_to_stm_opt(
                 BuiltinSpecFun::ClosureAlloc => InternalFun::ClosureAlloc,
                 BuiltinSpecFun::ClosureDealloc => InternalFun::ClosureDealloc,
                 BuiltinSpecFun::ClosureUnwinds => InternalFun::ClosureUnwinds,
+                BuiltinSpecFun::ClosureAllocates => InternalFun::ClosureAllocates,
+                BuiltinSpecFun::ClosureDeallocations => InternalFun::ClosureDeallocations,
             };
             Ok((
                 check_stms,

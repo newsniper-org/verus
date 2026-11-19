@@ -56,7 +56,7 @@ pub assume_specification<T: core::default::Default>[ <Box<
     ensures
         T::default.ensures((), *res),
     allocates
-        1 + call_allocates(T::default, ()),
+        1 + call_allocations(T::default, ()),
 ;
 
 pub assume_specification<T>[ Rc::<T>::new ](t: T) -> (v: Rc<T>)
@@ -72,7 +72,7 @@ pub assume_specification<T: core::default::Default>[ <Rc<
     ensures
         T::default.ensures((), *res),
     allocates
-        1 + call_allocates(T::default, ()),
+        1 + call_allocations(T::default, ()),
 ;
 
 pub assume_specification<T>[ Arc::<T>::new ](t: T) -> (v: Arc<T>)
@@ -88,7 +88,7 @@ pub assume_specification<T: core::default::Default>[ <Arc<
     ensures
         T::default.ensures((), *res),
     allocates
-        1 + call_allocates(T::default, ()),
+        1 + call_allocations(T::default, ()),
 ;
 
 pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::clone ](
@@ -97,7 +97,7 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::
     ensures
         cloned::<T>(**b, *res),
     allocates
-        1 + call_allocates(T::clone, (&**b,)),
+        1 + call_allocations(T::clone, (&**b,)),
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>) -> (result: Result<

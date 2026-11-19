@@ -488,8 +488,8 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_one_fails(err)
 }
 
-// W: a generic function's bound mentions its callbacks with `call_allocates`; calls through a
-// trait method are charged with `call_allocates(T::m, args)`, tied to each impl's own bound.
+// W: a generic function's bound mentions its callbacks with `call_allocations`; calls through a
+// trait method are charged with `call_allocations(T::m, args)`, tied to each impl's own bound.
 // M: `vstd::alloc_check::AllocFreeDrop` marks types whose drop cannot allocate (checked).
 
 test_verify_one_file_with_options! {
@@ -529,7 +529,7 @@ test_verify_one_file_with_options! {
         }
 
         fn dup<T: Clone + AllocFreeDrop>(x: &T) -> (r: T)
-            allocates call_allocates(T::clone, (x,))
+            allocates call_allocations(T::clone, (x,))
         {
             x.clone()
         }
@@ -556,7 +556,7 @@ test_verify_one_file_with_options! {
             fn req(&self) -> u8;
 
             fn twice(&self) -> (r: (u8, u8))
-                allocates 2 * call_allocates(Self::req, (self,))
+                allocates 2 * call_allocations(Self::req, (self,))
             {
                 (self.req(), self.req())
             }
@@ -633,7 +633,7 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "its `Drop::drop` is not bounded by `allocates 0`")
 }
 
-// Decision 1: user impls called by std functions are charged through vstd's `call_allocates`
+// Decision 1: user impls called by std functions are charged through vstd's `call_allocations`
 // bounds (`?` -> From::from, `&a == &b` -> PartialEq::eq, Vec::clone -> T::clone per element).
 
 test_verify_one_file_with_options! {
@@ -967,7 +967,7 @@ test_verify_one_file_with_options! {
 
         impl<U: Display> Display for Wrap<U> {
             fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error>
-                allocates call_allocates(<U as Display>::fmt, (&self.0, f))
+                allocates call_allocations(<U as Display>::fmt, (&self.0, f))
             {
                 write!(f, "{}", self.0)
             }
@@ -1550,10 +1550,10 @@ test_verify_one_file_with_options! {
             }
         }
         proof fn outside() {
-            assert(call_allocates(<S as Tr>::m, (0u8,)) == 100);
+            assert(call_allocations(<S as Tr>::m, (0u8,)) == 100);
         }
         proof fn no_contradiction() {
-            assert(call_allocates(<S as Tr>::m, (0u8,)) <= 0); // FAILS
+            assert(call_allocations(<S as Tr>::m, (0u8,)) <= 0); // FAILS
         }
     } => Err(err) => assert_fails(err, 1)
 }
@@ -1578,7 +1578,7 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_error_msgs(err, &["this `allocates` bound may exceed the trait method's `allocates` bound"])
 }
 
-// Without -V alloc-check nothing is checked, so no `call_allocates` axiom may be assumed.
+// Without -V alloc-check nothing is checked, so no `call_allocations` axiom may be assumed.
 test_verify_one_file! {
     #[test] alloc_check_off_no_call_allocates_axioms verus_code! {
         use vstd::prelude::*;
@@ -1590,10 +1590,10 @@ test_verify_one_file! {
             fn m(x: u8) allocates 100 { }
         }
         proof fn own_bound() {
-            assert(call_allocates(<S as Tr>::m, (0u8,)) == 100); // FAILS
+            assert(call_allocations(<S as Tr>::m, (0u8,)) == 100); // FAILS
         }
         proof fn decl_bound() {
-            assert(call_allocates(<S as Tr>::m, (0u8,)) <= 0); // FAILS
+            assert(call_allocations(<S as Tr>::m, (0u8,)) <= 0); // FAILS
         }
     } => Err(err) => assert_fails(err, 2)
 }
@@ -1691,7 +1691,7 @@ test_verify_one_file_with_options! {
 
 // Soundness regressions from the adversarial hunt (2026-11-05)
 
-// The `call_allocates` axiom of a blanket impl only holds where its bounds hold: `S` is not `Copy`,
+// The `call_allocations` axiom of a blanket impl only holds where its bounds hold: `S` is not `Copy`,
 // so the blanket's bound says nothing about `S`'s own impl (no contradiction), and a generic
 // caller gets no bound from the blanket either.
 test_verify_one_file_with_options! {
@@ -1708,7 +1708,7 @@ test_verify_one_file_with_options! {
         proof fn no_contradiction(s: S)
             ensures false // FAILS
         {
-            let a = call_allocates(<S as Tr>::m, (&s,));
+            let a = call_allocations(<S as Tr>::m, (&s,));
         }
     } => Err(err) => assert_fails(err, 1)
 }
@@ -1735,7 +1735,7 @@ test_verify_one_file! {
             ensures false // FAILS
         {
             let c = |n: u8| -> (r: u8) allocates n - 1 { n };
-            assert(call_allocates(c, (0u8,)) >= 0);
+            assert(call_allocations(c, (0u8,)) >= 0);
         }
     } => Err(err) => assert_fails(err, 1)
 }
@@ -2705,7 +2705,7 @@ test_verify_one_file_with_options! {
 
         fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> u64
             requires f.requires((x,)),
-            allocates call_allocates(*f, (x,))
+            allocates call_allocations(*f, (x,))
         {
             f(x)
         }
@@ -2916,4 +2916,61 @@ test_verify_one_file_with_options! {
             deallocate(p, 8, 8, Tracked(pt), Tracked(d));
         }
     } => Err(err) => assert_one_fails(err)
+}
+
+// `call_allocations(f, args)` / `f.allocations(x)` is the count a call is charged;
+// `call_allocates(f, args)` / `f.allocates(x)` is whether it may allocate (the count is positive)
+test_verify_one_file_with_options! {
+    #[test] call_allocations_and_call_allocates ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn zero(x: u64) -> (r: u64) allocates 0 { x }
+        fn one(x: u64) -> (r: u64) allocates 1 { x }
+
+        proof fn t() {
+            assert(!zero.allocates(3));
+            assert(one.allocates(3));
+            assert(one.allocations(3u64) == 1);
+            assert(call_allocations(zero, (3u64,)) == 0);
+        }
+
+        // (a generic caller can require that the function value allocates nothing)
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.allocates(x),
+            allocates 0
+        {
+            f(x)
+        }
+
+        fn use_it() -> (r: u64) allocates 0 {
+            let c = |y: u64| -> (r: u64) allocates 0 { y };
+            let a = apply(&c, 3);
+            let b = apply(&zero, 4);
+            a.wrapping_add(b)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] call_allocates_fail ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        fn one(x: u64) -> (r: u64) allocates 1 { x }
+
+        fn apply<F: Fn(u64) -> u64>(f: &F, x: u64) -> (r: u64)
+            requires
+                f.requires((x,)),
+                !f.allocates(x),
+            allocates 0
+        {
+            f(x)
+        }
+
+        fn bad() -> (r: u64) allocates 0 { apply(&one, 3) } // FAILS
+        proof fn bad2() { assert(!one.allocates(3)); } // FAILS
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 2)
 }

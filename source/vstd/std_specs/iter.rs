@@ -389,7 +389,7 @@ pub trait ExIterator {
             U: IntoIterator,
         ensures
             self.obeys_prophetic_iter_laws() ==> zip_post(self, other, r),
-        allocates iter_adapter_cost::<Self>() + call_allocates(<U as IntoIterator>::into_iter, (other,))
+        allocates iter_adapter_cost::<Self>() + call_allocations(<U as IntoIterator>::into_iter, (other,))
     ;
 }
 
@@ -1206,7 +1206,7 @@ pub broadcast axiom fn axiom_map_next_cost<I: Iterator, F: FnOnce<(I::Item,)>>(
     requires
         iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
-        forall|x: I::Item| call_allocates(map_fun(*m), (x,)) == 0,
+        forall|x: I::Item| call_allocations(map_fun(*m), (x,)) == 0,
     ensures
         #[trigger] iter_next_cost(m) == 0,
 ;
@@ -1217,7 +1217,7 @@ pub broadcast axiom fn axiom_filter_next_cost<I: Iterator, P: for<'a> FnOnce<(&'
     requires
         iter_aux_alloc_free::<I>(),
         iter_alloc_free::<I>(),
-        forall|x: &I::Item| call_allocates(filter_fun(*f), (x,)) == 0,
+        forall|x: &I::Item| call_allocations(filter_fun(*f), (x,)) == 0,
     ensures
         #[trigger] iter_next_cost(f) == 0,
 ;
@@ -1256,7 +1256,7 @@ pub broadcast axiom fn axiom_aux_alloc_free_zip<A, B>()
 pub broadcast axiom fn axiom_aux_alloc_free_map<I: Iterator, F: FnOnce<(I::Item,)>>()
     requires
         iter_aux_alloc_free::<I>(),
-        forall|m: core::iter::Map<I, F>, x: I::Item| #[trigger] call_allocates(map_fun(m), (x,)) == 0,
+        forall|m: core::iter::Map<I, F>, x: I::Item| #[trigger] call_allocations(map_fun(m), (x,)) == 0,
     ensures
         #[trigger] iter_aux_alloc_free::<core::iter::Map<I, F>>(),
 ;
@@ -1264,7 +1264,7 @@ pub broadcast axiom fn axiom_aux_alloc_free_map<I: Iterator, F: FnOnce<(I::Item,
 pub broadcast axiom fn axiom_aux_alloc_free_filter<I: Iterator, P: for<'a> FnOnce<(&'a I::Item,)>>()
     requires
         iter_aux_alloc_free::<I>(),
-        forall|f: core::iter::Filter<I, P>, x: &I::Item| #[trigger] call_allocates(filter_fun(f), (x,)) == 0,
+        forall|f: core::iter::Filter<I, P>, x: &I::Item| #[trigger] call_allocations(filter_fun(f), (x,)) == 0,
     ensures
         #[trigger] iter_aux_alloc_free::<core::iter::Filter<I, P>>(),
 ;

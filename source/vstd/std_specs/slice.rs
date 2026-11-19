@@ -289,7 +289,7 @@ pub open spec fn seq_ne_allocates<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: n
     if n == 0 {
         0
     } else {
-        seq_ne_allocates(a, b, (n - 1) as nat) + call_allocates(
+        seq_ne_allocates(a, b, (n - 1) as nat) + call_allocations(
             <T as PartialEq<U>>::ne,
             (&a[n - 1], &b[n - 1]),
         )
@@ -300,7 +300,7 @@ pub open spec fn seq_ne_allocates<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: n
 pub broadcast proof fn lemma_seq_ne_allocates_zero<T: PartialEq<U>, U>(a: Seq<T>, b: Seq<U>, n: nat)
     ensures
         (forall|i: int|
-            0 <= i < n ==> #[trigger] call_allocates(<T as PartialEq<U>>::ne, (&a[i], &b[i])) == 0)
+            0 <= i < n ==> #[trigger] call_allocations(<T as PartialEq<U>>::ne, (&a[i], &b[i])) == 0)
             ==> #[trigger] seq_ne_allocates(a, b, n) == 0,
     decreases n,
 {
@@ -325,7 +325,7 @@ pub open spec fn seq_contains_allocates<T: PartialEq<T>>(s: Seq<T>, value: &T, n
     if n == 0 {
         0
     } else {
-        seq_contains_allocates(s, value, (n - 1) as nat) + call_allocates(
+        seq_contains_allocates(s, value, (n - 1) as nat) + call_allocations(
             <T as PartialEq<T>>::eq,
             (&s[n - 1], value),
         )
@@ -335,7 +335,7 @@ pub open spec fn seq_contains_allocates<T: PartialEq<T>>(s: Seq<T>, value: &T, n
 pub broadcast proof fn lemma_seq_contains_allocates_zero<T: PartialEq<T>>(s: Seq<T>, value: &T, n: nat)
     ensures
         (forall|i: int|
-            0 <= i < n ==> #[trigger] call_allocates(<T as PartialEq<T>>::eq, (&s[i], value)) == 0)
+            0 <= i < n ==> #[trigger] call_allocations(<T as PartialEq<T>>::eq, (&s[i], value)) == 0)
             ==> #[trigger] seq_contains_allocates(s, value, n) == 0,
     decreases n,
 {

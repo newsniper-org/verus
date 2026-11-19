@@ -66,12 +66,12 @@ pub assume_specification<T>[ <T as From<T>>::from ](t: T) -> (ret: T)
 ;
 
 // The blanket impls forward to the other trait's method: they allocate and deallocate exactly as
-// it does (`call_allocates`, `call_deallocates`)
+// it does (`call_allocations`, `call_deallocates`)
 pub assume_specification<T, U: From<T>>[ <T as Into<U>>::into ](a: T) -> (ret: U)
     ensures
         call_ensures(U::from, (a,), ret),
     allocates
-        deallocates_when(call_allocates(U::from, (a,)), call_deallocates(U::from, (a,))),
+        deallocates_when(call_allocations(U::from, (a,)), call_deallocates(U::from, (a,))),
 ;
 
 #[verifier::external_type_specification]
@@ -129,7 +129,7 @@ pub assume_specification<T, U: TryFrom<T>>[ <T as TryInto<U>>::try_into ](a: T) 
     ensures
         call_ensures(U::try_from, (a,), ret),
     allocates
-        deallocates_when(call_allocates(U::try_from, (a,)), call_deallocates(U::try_from, (a,))),
+        deallocates_when(call_allocations(U::try_from, (a,)), call_deallocates(U::try_from, (a,))),
 ;
 
 pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> (ret: Result<
@@ -140,7 +140,7 @@ pub assume_specification<T, U: Into<T>>[ <T as TryFrom<U>>::try_from ](a: U) -> 
         ret.is_ok(),
         call_ensures(U::into, (a,), ret.unwrap()),
     allocates
-        deallocates_when(call_allocates(U::into, (a,)), call_deallocates(U::into, (a,))),
+        deallocates_when(call_allocations(U::into, (a,)), call_deallocates(U::into, (a,))),
 ;
 
 } // verus!

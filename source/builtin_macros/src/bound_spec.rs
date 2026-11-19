@@ -245,7 +245,7 @@ fn method_reqs(
         };
         let e = fix(e);
         out.push(quote_spanned! { span =>
-            forall|#(#binders),*| #[trigger] #builtin::call_allocates(#callee, #tuple) <= #e
+            forall|#(#binders),*| #[trigger] #builtin::call_allocations(#callee, #tuple) <= #e
         });
     }
     if spec.recommends.is_some()

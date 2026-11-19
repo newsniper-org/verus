@@ -30,14 +30,14 @@ pub open spec fn seq_clone_allocates<T: Clone>(s: Seq<T>, n: nat) -> int
     if n == 0 {
         0
     } else {
-        seq_clone_allocates(s, (n - 1) as nat) + call_allocates(T::clone, (&s[n - 1],))
+        seq_clone_allocates(s, (n - 1) as nat) + call_allocations(T::clone, (&s[n - 1],))
     }
 }
 
 /// Cloning elements that each allocate nothing allocates nothing in total
 pub broadcast proof fn lemma_seq_clone_allocates_zero<T: Clone>(s: Seq<T>, n: nat)
     ensures
-        (forall|i: int| 0 <= i < n ==> #[trigger] call_allocates(T::clone, (&s[i],)) == 0)
+        (forall|i: int| 0 <= i < n ==> #[trigger] call_allocations(T::clone, (&s[i],)) == 0)
             ==> #[trigger] seq_clone_allocates(s, n) == 0,
     decreases n,
 {

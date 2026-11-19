@@ -352,6 +352,8 @@ fn gather_terms(ctxt: &mut Ctxt, ctx: &Ctx, exp: &Exp, depth: u64) -> (bool, Ter
                     | InternalFun::DefaultEns
                     | InternalFun::ClosureAlloc
                     | InternalFun::ClosureDealloc
+                    | InternalFun::ClosureAllocates
+                    | InternalFun::ClosureDeallocations
                     | InternalFun::ClosureUnwinds,
                 ) => (is_pure, Arc::new(TermX::App(App::ClosureSpec, Arc::new(all_terms)))),
                 CallFun::InternalFun(

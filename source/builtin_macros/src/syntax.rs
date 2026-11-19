@@ -2912,15 +2912,17 @@ impl Visitor {
         true
     }
 
-    /// In ghost code, `f.allocates(a, b)` is `call_allocates(f, (a, b))`, `f.deallocates(a, b)`
-    /// is `call_deallocates(f, (a, b))` and `f.unwinds(a, b)` is `call_unwinds(f, (a, b))` (the
-    /// `allocates` bound, the deallocation condition (-V alloc-check) and whether a call may
-    /// unwind, of the function value `f` at those arguments). Exec code keeps such method calls.
+    /// In ghost code, `f.NAME(a, b)` is `call_NAME(f, (a, b))` for `NAME` in `allocations`,
+    /// `deallocations` (the counts a call of the function value `f` at those arguments is
+    /// charged, -V alloc-check), `allocates`, `deallocates` (may it allocate, deallocate) and
+    /// `unwinds` (may it unwind). Exec code keeps such method calls.
     fn handle_call_bound_methods(&mut self, expr: &mut Expr) -> bool {
         let Expr::MethodCall(m) = &*expr else { return false };
         let name = m.method.to_string();
-        if !(name == "allocates" || name == "deallocates" || name == "unwinds")
-            || self.inside_ghost == 0
+        if !matches!(
+            name.as_str(),
+            "allocations" | "deallocations" | "allocates" | "deallocates" | "unwinds"
+        ) || self.inside_ghost == 0
             || m.turbofish.is_some()
             || m.atomically.is_some()
         {

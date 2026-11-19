@@ -244,7 +244,7 @@ pub assume_specification<T, F: FnOnce() -> T>[ bool::then ](b: bool, f: F) -> (r
         },
     allocates
         if b {
-            call_allocates(f, ())
+            call_allocations(f, ())
         } else {
             0
         },

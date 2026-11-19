@@ -1014,6 +1014,10 @@ pub enum BuiltinSpecFun {
     ClosureAlloc,
     /// `call_deallocates(f, args)`: may a call of the function value deallocate (-V alloc-check)
     ClosureDealloc,
+    /// `call_allocates(f, args)`: may a call of the function value allocate (-V alloc-check)
+    ClosureAllocates,
+    /// `call_deallocations(f, args)`: the deallocations a call of the function value is charged
+    ClosureDeallocations,
     /// `call_unwinds(f, args)`: may a call of the function value unwind
     ClosureUnwinds,
 }

@@ -633,7 +633,7 @@ pub assume_specification<T: Clone, A: Allocator>[ Vec::<T, A>::resize ](
         0int
     } else {
         vec_reserve_cost(old(vec), len - old(vec)@.len())
-            + (len - old(vec)@.len()) * call_allocates(T::clone, (&value,))
+            + (len - old(vec)@.len()) * call_allocations(T::clone, (&value,))
     }
 ;
 
@@ -730,7 +730,7 @@ pub assume_specification<T: Clone>[ alloc::vec::from_elem ](elem: T, n: usize) -
         v.len() == n,
         forall |i| 0 <= i < n ==> cloned(elem, #[trigger] v@[i])
     // `with_capacity(n)` (one buffer), then at most one `T::clone` per element
-    allocates (if n == 0 { 0int } else { 1int }) + n * call_allocates(T::clone, (&elem,));
+    allocates (if n == 0 { 0int } else { 1int }) + n * call_allocations(T::clone, (&elem,));
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_iter ](vec: Vec<T, A>) -> (iter: <Vec<
     T,

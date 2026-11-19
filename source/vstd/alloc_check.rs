@@ -576,12 +576,12 @@ pub broadcast axiom fn axiom_clone_is_fip<T: FipClone>()
 // bounds)
 pub broadcast axiom fn axiom_fbip_eq<T: FbipPartialEq<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialEq<Rhs>>::eq, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialEq<Rhs>>::eq, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_ne<T: FbipPartialEq<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialEq<Rhs>>::ne, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialEq<Rhs>>::ne, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_partial_cmp<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(
@@ -589,57 +589,57 @@ pub broadcast axiom fn axiom_fbip_partial_cmp<T: FbipPartialOrd<Rhs> + ?Sized, R
     b: &Rhs,
 )
     ensures
-        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::partial_cmp, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialOrd<Rhs>>::partial_cmp, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_lt<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::lt, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialOrd<Rhs>>::lt, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_le<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::le, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialOrd<Rhs>>::le, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_gt<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::gt, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialOrd<Rhs>>::gt, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_ge<T: FbipPartialOrd<Rhs> + ?Sized, Rhs: ?Sized>(a: &T, b: &Rhs)
     ensures
-        #[trigger] call_allocates(<T as PartialOrd<Rhs>>::ge, (a, b)) == 0,
+        #[trigger] call_allocations(<T as PartialOrd<Rhs>>::ge, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_cmp<T: FbipOrd + ?Sized>(a: &T, b: &T)
     ensures
-        #[trigger] call_allocates(<T as Ord>::cmp, (a, b)) == 0,
+        #[trigger] call_allocations(<T as Ord>::cmp, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_max<T: FbipOrd>(a: T, b: T)
     ensures
-        #[trigger] call_allocates(<T as Ord>::max, (a, b)) == 0,
+        #[trigger] call_allocations(<T as Ord>::max, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_min<T: FbipOrd>(a: T, b: T)
     ensures
-        #[trigger] call_allocates(<T as Ord>::min, (a, b)) == 0,
+        #[trigger] call_allocations(<T as Ord>::min, (a, b)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_clone<T: FbipClone>(a: &T)
     ensures
-        #[trigger] call_allocates(<T as Clone>::clone, (a,)) == 0,
+        #[trigger] call_allocations(<T as Clone>::clone, (a,)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_from<T, U: FbipFrom<T>>(v: T)
     ensures
-        #[trigger] call_allocates(<U as From<T>>::from, (v,)) == 0,
+        #[trigger] call_allocations(<U as From<T>>::from, (v,)) == 0,
 ;
 
 pub broadcast axiom fn axiom_fbip_into<T: FbipInto<U>, U>(v: T)
     ensures
-        #[trigger] call_allocates(<T as Into<U>>::into, (v,)) == 0,
+        #[trigger] call_allocations(<T as Into<U>>::into, (v,)) == 0,
 ;
 
 // vstd's impls for std's impls that compare through their type arguments (trusted: `Option`'s

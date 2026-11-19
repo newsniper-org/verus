@@ -674,7 +674,7 @@ pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
     ensures
         m@ == Map::<K, V>::empty(),
     allocates
-        call_allocates(S::default, ()),
+        call_allocations(S::default, ()),
 ;
 
 pub assume_specification<Key, Value>[ HashMap::<Key, Value>::with_capacity ](capacity: usize) -> (m:
@@ -1058,7 +1058,7 @@ pub assume_specification<T, S: core::default::Default>[ <HashSet<
     ensures
         m@ == Set::<T>::empty(),
     allocates
-        call_allocates(S::default, ()),
+        call_allocations(S::default, ()),
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) -> (m: HashSet<
@@ -1606,7 +1606,7 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
 /// -V alloc-check: the allocations of the user callbacks that an operation on the table `m` with
 /// the key `k` (`insert`, `entry`) runs: hashing `k`, comparing it with keys of `m` (`Hash::hash`,
 /// `Eq::eq`, and the `BuildHasher`/`Hasher` methods of the table's hasher), and, if the table
-/// grows, rehashing every key of `m`. Like `call_allocates` for a callback without a bound of its
+/// grows, rehashing every key of `m`. Like `call_allocations` for a callback without a bound of its
 /// own, it is a function of the inputs: everything those callbacks see is `m` (including its
 /// hasher state) and `k`. (A cost of `m` alone could not exist for keys whose hashing allocates
 /// more for larger keys.)

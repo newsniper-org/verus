@@ -1004,6 +1004,8 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc
                 | InternalFun::ClosureDealloc
+                | InternalFun::ClosureAllocates
+                | InternalFun::ClosureDeallocations
                 | InternalFun::ClosureUnwinds => true,
                 _ => false,
             };
@@ -1026,6 +1028,10 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                     InternalFun::ClosureAlloc => str_ident(crate::def::CLOSURE_ALLOC),
                     InternalFun::ClosureDealloc => str_ident(crate::def::CLOSURE_DEALLOC),
                     InternalFun::ClosureUnwinds => str_ident(crate::def::CLOSURE_UNWINDS),
+                    InternalFun::ClosureAllocates => str_ident(crate::def::CLOSURE_ALLOCATES),
+                    InternalFun::ClosureDeallocations => {
+                        str_ident(crate::def::CLOSURE_DEALLOCATIONS)
+                    }
                     InternalFun::CheckDecreaseHeight => {
                         str_ident(crate::def::CHECK_DECREASE_HEIGHT)
                     }

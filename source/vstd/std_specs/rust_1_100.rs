@@ -399,7 +399,7 @@ pub uninterp spec fn vec_from_fn_cost<T, F>(f: F, length: usize) -> int;
 pub broadcast axiom fn axiom_vec_from_fn_cost<T, F: FnOnce(usize) -> T>(f: F, length: usize)
     ensures
         #[trigger] vec_from_fn_cost::<T, F>(f, length) >= 0,
-        (forall|g: F, i: usize| #[trigger] call_allocates(g, (i,)) == 0) ==> vec_from_fn_cost::<
+        (forall|g: F, i: usize| #[trigger] call_allocations(g, (i,)) == 0) ==> vec_from_fn_cost::<
             T,
             F,
         >(f, length) == 0,
@@ -407,7 +407,7 @@ pub broadcast axiom fn axiom_vec_from_fn_cost<T, F: FnOnce(usize) -> T>(f: F, le
 
 pub broadcast axiom fn axiom_vec_from_fn_cost_fn<T, F: Fn(usize) -> T>(f: F, length: usize)
     requires
-        forall|i: usize| #[trigger] call_allocates(f, (i,)) == 0,
+        forall|i: usize| #[trigger] call_allocations(f, (i,)) == 0,
     ensures
         #[trigger] vec_from_fn_cost::<T, F>(f, length) == 0,
 ;
@@ -504,7 +504,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(T) -> U>[ Box::<T, A>::ma
             0int
         } else {
             1int
-        }) + call_allocates(f, (*this,)),
+        }) + call_allocations(f, (*this,)),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::map::<U> ](
@@ -516,7 +516,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::ma
     ensures
         f.ensures((&*this,), *r),
     allocates
-        1 + call_allocates(f, (&*this,)),
+        1 + call_allocations(f, (&*this,)),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::map::<U> ](
@@ -528,7 +528,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::m
     ensures
         f.ensures((&*this,), *r),
     allocates
-        1 + call_allocates(f, (&*this,)),
+        1 + call_allocations(f, (&*this,)),
 ;
 
 } // verus!

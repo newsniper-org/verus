@@ -352,7 +352,7 @@ pub assume_specification<T: Clone, A: Allocator>[ VecDeque::<T, A>::resize ](
         if len <= old(v).len() {
             0int
         } else {
-            1int + (len - old(v).len()) * call_allocates(T::clone, (&value,))
+            1int + (len - old(v).len()) * call_allocations(T::clone, (&value,))
         },
 ;
 

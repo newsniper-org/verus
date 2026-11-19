@@ -217,7 +217,7 @@ pub assume_specification<T: core::fmt::Display + ?Sized>[ <T as ToString>::to_st
 // the `Display::fmt` callback, and the growth of the new `String`
 
     allocates
-        call_allocates(
+        call_allocations(
             <T as core::fmt::Display>::fmt,
             (t, super::std_specs::fmt::fmt_witness_formatter()),
         ) + super::std_specs::fmt::sink_growth(t),

@@ -74,7 +74,7 @@ pub assume_specification<U: core::default::Default, T: core::default::Default>[ 
         call_ensures(U::default, (), r.0),
         call_ensures(T::default, (), r.1),
     allocates
-        call_allocates(U::default, ()) + call_allocates(T::default, ()),
+        call_allocations(U::default, ()) + call_allocations(T::default, ()),
 ;
 
 pub assume_specification<
@@ -87,7 +87,7 @@ pub assume_specification<
         call_ensures(U::default, (), r.1),
         call_ensures(T::default, (), r.2),
     allocates
-        call_allocates(V::default, ()) + call_allocates(U::default, ()) + call_allocates(
+        call_allocations(V::default, ()) + call_allocations(U::default, ()) + call_allocations(
             T::default,
             (),
         ),

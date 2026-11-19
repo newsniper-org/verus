@@ -63,6 +63,8 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let closure_alloc = str_to_node(CLOSURE_ALLOC);
     let closure_dealloc = str_to_node(CLOSURE_DEALLOC);
     let closure_unwinds = str_to_node(CLOSURE_UNWINDS);
+    let closure_allocates = str_to_node(CLOSURE_ALLOCATES);
+    let closure_deallocations = str_to_node(CLOSURE_DEALLOCATIONS);
     let default_ens = str_to_node(DEFAULT_ENS);
     #[allow(non_snake_case)]
     let Poly = str_to_node(POLY);
@@ -1050,6 +1052,32 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         )))
         // call_deallocates (-V alloc-check): may a call of a function value deallocate
         (declare-fun [closure_dealloc] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Bool)
+        // call_allocates (-V alloc-check): may a call of a function value allocate; a positive
+        // count (call_allocations) implies it
+        (declare-fun [closure_allocates] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Bool)
+        (axiom (forall ((t1 [typ]) (d2 [decoration]) (t2 [typ]) (f [Poly]) (a [Poly])) (!
+            (=> (< 0 ([closure_alloc] t1 d2 t2 f a)) ([closure_allocates] t1 d2 t2 f a))
+            :pattern (([closure_alloc] t1 d2 t2 f a))
+            :pattern (([closure_allocates] t1 d2 t2 f a))
+            :qid prelude_closure_allocates_of_count
+            :skolemid skolem_prelude_closure_allocates_of_count
+        )))
+        // call_deallocations (-V alloc-check): the deallocations a call of a function value is
+        // charged; a positive count implies call_deallocates
+        (declare-fun [closure_deallocations] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Int)
+        (axiom (forall ((t1 [typ]) (d2 [decoration]) (t2 [typ]) (f [Poly]) (a [Poly])) (!
+            (<= 0 ([closure_deallocations] t1 d2 t2 f a))
+            :pattern (([closure_deallocations] t1 d2 t2 f a))
+            :qid prelude_closure_deallocations_nonneg
+            :skolemid skolem_prelude_closure_deallocations_nonneg
+        )))
+        (axiom (forall ((t1 [typ]) (d2 [decoration]) (t2 [typ]) (f [Poly]) (a [Poly])) (!
+            (=> (< 0 ([closure_deallocations] t1 d2 t2 f a)) ([closure_dealloc] t1 d2 t2 f a))
+            :pattern (([closure_deallocations] t1 d2 t2 f a))
+            :pattern (([closure_dealloc] t1 d2 t2 f a))
+            :qid prelude_closure_dealloc_of_count
+            :skolemid skolem_prelude_closure_dealloc_of_count
+        )))
         // call_unwinds: may a call of a function value unwind
         (declare-fun [closure_unwinds] (/*[decoration] skipped */ [typ] [decoration] [typ] [Poly] [Poly]) Bool)
 

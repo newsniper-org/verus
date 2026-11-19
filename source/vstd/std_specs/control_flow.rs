@@ -71,7 +71,7 @@ pub assume_specification<T, E, F: From<E>>[ Result::<T, F>::from_residual ](
 
     allocates
         match result {
-            Err(e) => call_allocates(F::from, (e,)),
+            Err(e) => call_allocations(F::from, (e,)),
             _ => 0,
         },
 ;

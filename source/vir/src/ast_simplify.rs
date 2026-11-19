@@ -1205,8 +1205,40 @@ fn exec_closure_spec_allocates(
     let forall = Quant { quant: air::ast::Quant::Forall };
     let binders =
         Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident.clone(), a: tuple_typ.clone() })]);
-    let value_level =
-        SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall.clone(), binders, quant_body));
+    let value_level = SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExprX::Quant(forall.clone(), binders.clone(), quant_body),
+    );
+    // (and `call_allocates` is whether that is positive, in a quantifier of its own: one
+    // trigger each)
+    let allocates_call = wrap_in_trigger(&SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExprX::Call {
+            target: CallTarget::BuiltinSpecFun(
+                BuiltinSpecFun::ClosureAllocates,
+                closure_trait_call_typ_args(state, closure_var, params),
+                Arc::new(vec![]),
+            ),
+            args: Arc::new(vec![closure_var.clone(), tuple_var.clone()]),
+            post_args: None,
+            body: None,
+        },
+    ));
+    let zero_for_bool = SpannedTyped::new(
+        span,
+        &int_typ,
+        ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+    );
+    let positive =
+        crate::ast_util::mk_ineq(span, &zero_for_bool, &bound_body, crate::ast::InequalityOp::Lt);
+    let allocates_level = SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExprX::Quant(forall.clone(), binders, mk_eq(span, &allocates_call, &positive)),
+    );
+    let value_level = conjoin(span, &vec![value_level, allocates_level]);
 
     // When the bound mentions only the parameters, it is the same for every value of the closure
     // type (all of them come from this closure expression, and a closure's captures do not
@@ -1557,8 +1589,9 @@ fn add_fndef_axioms_to_function(
         }
     }
 
-    // `call_allocates(f, args)` (-V alloc-check): equal to f's `allocates` bound, clamped at 0
-    // (a negative bound must not offset other allocations).
+    // `call_allocations(f, args)` (-V alloc-check): equal to f's `allocates` bound, clamped at 0
+    // (a negative bound must not offset other allocations); `call_allocates(f, args)` (may it
+    // allocate) is whether that is positive.
     // Without -V alloc-check no bound is checked, so none may be assumed either: a trait
     // declaration's bound and an impl's own bound would otherwise be two unchecked axioms that
     // can contradict each other.
@@ -1639,7 +1672,35 @@ fn add_fndef_axioms_to_function(
         let forall = Quant { quant: air::ast::Quant::Forall };
         let binders = Arc::new(vec![Arc::new(VarBinderX { name: tuple_ident, a: tuple_typ })]);
         let bool_typ = Arc::new(TypX::Bool);
-        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
+        fndef_axioms.push(SpannedTyped::new(
+            span,
+            &bool_typ,
+            ExprX::Quant(forall, binders.clone(), rel),
+        ));
+        if !matches!(&function.x.kind, FunctionKind::TraitMethodDecl { .. }) {
+            let allocates_call = SpannedTyped::new(
+                span,
+                &bool_typ,
+                ExprX::Call {
+                    target: CallTarget::BuiltinSpecFun(
+                        BuiltinSpecFun::ClosureAllocates,
+                        closure_trait_call_typ_args(state, &fndef_singleton, &params),
+                        Arc::new(vec![]),
+                    ),
+                    args: Arc::new(vec![fndef_singleton.clone(), tuple_var.clone()]),
+                    post_args: None,
+                    body: None,
+                },
+            );
+            let positive =
+                crate::ast_util::mk_ineq(span, &zero, &clamped, crate::ast::InequalityOp::Lt);
+            let rel = crate::ast_util::mk_eq(span, &wrap_in_trigger(&allocates_call), &positive);
+            fndef_axioms.push(SpannedTyped::new(
+                span,
+                &bool_typ,
+                ExprX::Quant(forall, binders, rel),
+            ));
+        }
     }
 
     // `call_deallocates(f, args)` (-V alloc-check): `false` for a `#[verifier::fip]` function, and

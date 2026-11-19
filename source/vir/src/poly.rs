@@ -541,6 +541,8 @@ fn visit_exp(ctx: &Ctx, state: &mut State, exp: &Exp) -> Exp {
                 | InternalFun::DefaultEns
                 | InternalFun::ClosureAlloc
                 | InternalFun::ClosureDealloc
+                | InternalFun::ClosureAllocates
+                | InternalFun::ClosureDeallocations
                 | InternalFun::ClosureUnwinds,
             ) => {
                 let exps = visit_exps_poly(ctx, state, exps);
