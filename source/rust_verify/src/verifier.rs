@@ -361,7 +361,8 @@ pub struct Verifier {
     /// -V alloc-check: the functions of this crate whose bodies are counted against a
     /// `deallocates` bound (own or inherited), and are not `#[verifier::fip]` (their VIR paths):
     /// `fip_mir` checks that their implicit drops free nothing
-    pub(crate) alloc_local_dealloc_bounded_fns: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)>,
+    pub(crate) alloc_local_dealloc_bounded_fns:
+        Vec<(crate::fip_mir::CountedBodyKey, Vec<crate::fip_mir::DropSiteKey>)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -2862,21 +2863,46 @@ impl Verifier {
             let local_names: std::collections::HashSet<&vir::ast::Fun> =
                 local_crate.functions.iter().map(|f| &f.x.name).collect();
             let source_map = tcx.sess.source_map();
-            let mut bounded: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)> = drop_sites
-                .iter()
-                .filter(|(f, _)| local_names.contains(f))
-                .map(|(f, sites)| {
-                    let keys = sites
+            let mut bounded: Vec<(
+                crate::fip_mir::CountedBodyKey,
+                Vec<crate::fip_mir::DropSiteKey>,
+            )> = vec![];
+            for (f, bodies) in drop_sites.iter() {
+                if !local_names.contains(f) {
+                    continue;
+                }
+                for body in bodies.iter() {
+                    let closure = match &body.closure {
+                        None => None,
+                        Some(c) => {
+                            let span = crate::spans::from_raw_span(&c.raw_span);
+                            span.and_then(|s| crate::fip_mir::closure_key(source_map, s))
+                        }
+                    };
+                    let keys = body
+                        .sites
                         .iter()
-                        .filter_map(|(local, site, is_param)| {
-                            let local = crate::spans::from_raw_span(&local.raw_span)?;
+                        .filter_map(|(local, site)| {
                             let site = crate::spans::from_raw_span(&site.raw_span)?;
-                            crate::fip_mir::drop_site_key(source_map, local, site, *is_param)
+                            match local {
+                                vir::resolution_inference::DropLocal::Binding(l) => {
+                                    let l = crate::spans::from_raw_span(&l.raw_span)?;
+                                    crate::fip_mir::drop_site_key(source_map, Some(l), None, site)
+                                }
+                                vir::resolution_inference::DropLocal::Param(name) => {
+                                    crate::fip_mir::drop_site_key(
+                                        source_map,
+                                        None,
+                                        Some(name.clone()),
+                                        site,
+                                    )
+                                }
+                            }
                         })
                         .collect();
-                    (format!("{:?}", f.path), keys)
-                })
-                .collect();
+                    bounded.push(((format!("{:?}", f.path), closure), keys));
+                }
+            }
             bounded.sort_by(|a, b| a.0.cmp(&b.0));
             self.alloc_local_dealloc_bounded_fns = bounded;
         }

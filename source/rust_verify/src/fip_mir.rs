@@ -28,9 +28,29 @@ const MARKER: &str = "vstd::alloc_check::NoDeallocDrop";
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DropSiteKey {
     file: Vec<u8>,
-    local_lo: u32,
-    local_hi: u32,
+    local: DropLocalKey,
     site_hi: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum DropLocalKey {
+    /// A local variable (its binding) or temporary (its expression), by file-relative offsets
+    Binding(u32, u32),
+    /// A parameter, by name
+    Param(String),
+}
+
+/// A closure, by the file and file-relative offsets of its expression
+pub(crate) type ClosureKey = (Vec<u8>, u32, u32);
+
+/// A function (its VIR path) or a closure in it, that counts its drops
+pub(crate) type CountedBodyKey = (String, Option<ClosureKey>);
+
+pub(crate) fn closure_key(
+    sm: &rustc_span::source_map::SourceMap,
+    span: Span,
+) -> Option<ClosureKey> {
+    span_offsets(sm, span)
 }
 
 /// The file and file-relative offsets of a span
@@ -41,20 +61,27 @@ fn span_offsets(sm: &rustc_span::source_map::SourceMap, span: Span) -> Option<(V
     Some((lo.sf.src_hash.hash_bytes().to_vec(), lo.pos.0, lo.pos.0 + len))
 }
 
-/// (A parameter is identified by the start of its span: VIR's span covers its type too.)
+/// The drop of a local variable or temporary (`local`: its binding or expression), or else of a
+/// parameter (`param`: its name), at `site`
 pub(crate) fn drop_site_key(
     sm: &rustc_span::source_map::SourceMap,
-    local: Span,
+    local: Option<Span>,
+    param: Option<String>,
     site: Span,
-    is_param: bool,
 ) -> Option<DropSiteKey> {
-    let (file, local_lo, local_hi) = span_offsets(sm, local)?;
-    let local_hi = if is_param { local_lo } else { local_hi };
-    let (site_file, _, site_hi) = span_offsets(sm, site)?;
-    if file != site_file {
-        return None;
-    }
-    Some(DropSiteKey { file, local_lo, local_hi, site_hi })
+    let (file, _, site_hi) = span_offsets(sm, site)?;
+    let local = match (local, param) {
+        (Some(local), _) => {
+            let (local_file, local_lo, local_hi) = span_offsets(sm, local)?;
+            if local_file != file {
+                return None;
+            }
+            DropLocalKey::Binding(local_lo, local_hi)
+        }
+        (None, Some(name)) => DropLocalKey::Param(name),
+        (None, None) => return None,
+    };
+    Some(DropSiteKey { file, local, site_hi })
 }
 
 /// For each statement of the body: the end of its span (where its temporaries are dropped) and
@@ -449,18 +476,26 @@ fn check_fip_body<'tcx>(
                         let local_span = local_binding_span(&body, place.local);
                         let is_arg =
                             place.local.index() >= 1 && place.local.index() <= body.arg_count;
-                        let is_user_var = body.var_debug_info.iter().any(|v| {
-                            matches!(&v.value, rustc_middle::mir::VarDebugInfoContents::Place(p)
-                                if p.local == place.local && p.projection.is_empty())
+                        let name = body.var_debug_info.iter().find_map(|v| match &v.value {
+                            rustc_middle::mir::VarDebugInfoContents::Place(p)
+                                if p.local == place.local && p.projection.is_empty() =>
+                            {
+                                Some(v.name.to_string())
+                            }
+                            _ => None,
                         });
                         // (a temporary dropped at the end of its statement: VIR charges it at
                         // the statement's own span)
-                        let site = if !is_arg && !is_user_var {
+                        let site = if !is_arg && name.is_none() {
                             *stmt_sites.get(&span.hi()).unwrap_or(&span)
                         } else {
                             span
                         };
-                        let key = drop_site_key(tcx.sess.source_map(), local_span, site, is_arg);
+                        let key = if is_arg {
+                            drop_site_key(tcx.sess.source_map(), None, name, site)
+                        } else {
+                            drop_site_key(tcx.sess.source_map(), Some(local_span), None, site)
+                        };
                         if !key.as_ref().is_some_and(|k| counted.contains(k)) {
                             report_not_counted(tcx, span, ty);
                         }
@@ -1020,10 +1055,10 @@ pub(crate) struct ExternalStrict {
     /// their specifications (their VIR paths, `{:?}`)
     local_encapsulates: std::collections::HashSet<String>,
     /// the functions of this crate whose bodies VIR counts against a `deallocates` bound (their
-    /// own, or their trait method declaration's), which are not `#[verifier::fip]`, with the
-    /// drops that VIR charged
+    /// own, or their trait method declaration's), which are not `#[verifier::fip]`, and the
+    /// closures with a `deallocates` bound, with the drops that VIR charged
     local_dealloc_bounded:
-        std::collections::HashMap<String, std::collections::HashSet<DropSiteKey>>,
+        std::collections::HashMap<CountedBodyKey, std::collections::HashSet<DropSiteKey>>,
 }
 
 impl ExternalStrict {
@@ -1049,23 +1084,34 @@ impl ExternalStrict {
             .is_some_and(|p| self.local_encapsulates.contains(&format!("{:?}", p)))
     }
 
-    /// For a function that counts its deallocations: its VIR path and the drops VIR charged
+    /// For a function, or closure, that counts its deallocations: its key and the drops VIR
+    /// charged
     fn dealloc_bounded<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,
-        def_id: DefId,
-    ) -> Option<(String, &std::collections::HashSet<DropSiteKey>)> {
-        if !def_id.is_local() || self.local_dealloc_bounded.is_empty() {
+        def_id: LocalDefId,
+    ) -> Option<(CountedBodyKey, &std::collections::HashSet<DropSiteKey>)> {
+        if self.local_dealloc_bounded.is_empty() {
             return None;
         }
+        // (a closure by its function's path and its expression's position)
+        let (fn_def_id, closure) = if tcx.def_kind(def_id) == rustc_hir::def::DefKind::Closure {
+            let rustc_hir::Node::Expr(e) = tcx.hir_node_by_def_id(def_id) else {
+                return None;
+            };
+            let key = closure_key(tcx.sess.source_map(), e.span)?;
+            (tcx.typeck_root_def_id(def_id.to_def_id()), Some(key))
+        } else {
+            (def_id.to_def_id(), None)
+        };
         let p = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
             tcx,
             &self.verus_items,
-            def_id,
+            fn_def_id,
         )?;
-        let p = format!("{:?}", p);
-        let sites = self.local_dealloc_bounded.get(&p)?;
-        Some((p, sites))
+        let key = (format!("{:?}", p), closure);
+        let sites = self.local_dealloc_bounded.get(&key)?;
+        Some((key, sites))
     }
 
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
@@ -1370,7 +1416,7 @@ pub(crate) fn check_fip_crate<'tcx>(
     strict_fns: &[String],
     no_drop_fns: &[String],
     local_encapsulates_fns: &[String],
-    local_dealloc_bounded_fns: &[(String, Vec<DropSiteKey>)],
+    local_dealloc_bounded_fns: &[(CountedBodyKey, Vec<DropSiteKey>)],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
@@ -1402,7 +1448,7 @@ pub(crate) fn check_fip_crate<'tcx>(
     }
     let mut any = false;
     let mut strict: Vec<LocalDefId> = Vec::new();
-    let mut matched: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut matched: std::collections::HashSet<CountedBodyKey> = std::collections::HashSet::new();
     for def_id in tcx.hir_body_owners() {
         // (a `#[verifier::fip]` closure too: its body is checked like a function's)
         if !matches!(
@@ -1416,7 +1462,7 @@ pub(crate) fn check_fip_crate<'tcx>(
         // (and a function with a `deallocates` bound: its implicit drops must be the ones VIR
         // charged)
         let fip = is_fip_local(tcx, def_id);
-        let bounded = if fip { None } else { ext.dealloc_bounded(tcx, def_id.to_def_id()) };
+        let bounded = if fip { None } else { ext.dealloc_bounded(tcx, def_id) };
         if !(fip || bounded.is_some()) || allocator_runtime(tcx, def_id.to_def_id()) {
             continue;
         }
@@ -1431,11 +1477,12 @@ pub(crate) fn check_fip_crate<'tcx>(
         check_fip_body(tcx, def_id, marker, &ext, &om, sites);
     }
     // (every function that VIR counted must be found here, or its drops would go unchecked)
-    for (p, _) in local_dealloc_bounded_fns.iter() {
-        if !matched.contains(p) {
+    for (key, _) in local_dealloc_bounded_fns.iter() {
+        if !matched.contains(key) {
             tcx.dcx().err(format!(
-                "-V alloc-check: internal error: the function `{}`, which counts its deallocations, was not found in the compiled program, so its implicit drops could not be checked",
-                p
+                "-V alloc-check: internal error: the function `{}`{}, which counts its deallocations, was not found in the compiled program, so its implicit drops could not be checked",
+                key.0,
+                if key.1.is_some() { " (a closure in it)" } else { "" }
             ));
         }
     }

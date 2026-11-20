@@ -87,8 +87,8 @@ reallocate(grow·shrink)입니다. deallocate는 세지 않습니다.
 
 ## drop
 
-암묵적인 drop(스코프 끝, 임시값, 재대입, 컨테이너의 drop glue)은 호출로 나타나지 않습니다. 그래서
-그 자리에서 비용을 셀 수 없습니다. 대신 `-V alloc-check`는 검사 대상 함수가 실행할 수 있는 모든
+암묵적인 drop(스코프 끝, 임시값, 재대입, 컨테이너의 drop glue)은 호출로 나타나지 않습니다. 할당은 그
+자리에서 세지 않습니다(해제는 셉니다. "해제 상한" 절 참고). 대신 `-V alloc-check`는 검사 대상 함수가 실행할 수 있는 모든
 `Drop::drop`이 할당하지 않을 것을 요구합니다. 함수가 drop할 수 있는 것은 매개변수 타입과 본문의 모든
 식의 타입으로 과대 근사합니다. 이 타입 각각에 대해 다음을 요구합니다.
 
@@ -443,17 +443,44 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * trait 메서드 선언의 상한은 모든 구현의 계약입니다. 구현의 본문은 그 상한으로 세고, 자기 상한을 적은 구현은 그 안에 있어야
   합니다(진입 시점에 검사).
 * `call_deallocations(f, args)` / `f.deallocations(x)`는 함수 값의 상한입니다("콜백, 클로저, trait" 참고).
-* **지금은 암묵적 drop을 세지 않습니다.** `deallocates` 상한이 있는 함수(자기 것이든 trait 선언에서 물려받은 것이든)는
-  컴파일러가 넣는 drop으로 메모리를 놓으면 안 됩니다. fip 함수처럼 컴파일된 프로그램에서 검사합니다. 클로저에는 아직
-  `deallocates`를 붙일 수 없습니다(`#[verifier::fip]` 클로저는 해제하지 않습니다).
+* 암묵적 drop도 셉니다. 컴파일러가 값을 drop하는 곳에서는 값 가운데 아직 남아 있는(옮겨지지 않은) 부분의
+  `vstd::alloc_check::drop_deallocations(v)`를 셉니다. 그런 곳은 이렇습니다.
+  - 지역 변수의 스코프가 끝나는 곳. 스코프를 떠나는 모든 경로가 해당합니다(블록 끝, `return`, `break`, `continue`, `?`).
+  - 임시값이 속한 문장의 끝.
+  - 대입이 덮어쓰는 자리의 원래 값.
+
+  일부 경로에서만 옮겨진 값은 나머지 경로에서만 셉니다(ghost drop flag). 그래서
+  `match o { Some(b) => consume(b), None => {} }`는 `o`에 대해 아무것도 세지 않습니다. 본문에서 값을 drop하는
+  루프는 불변식에 `deallocated()`가 있어야 합니다.
+* `drop_deallocations`는 타입마다 이렇습니다.
+  - 정확한 값:
+    - `Box`: 내용물, 그다음 블록 1. 크기 0인 `T`에서는 블록이 0입니다.
+    - `Vec`: 원소들, 그다음 버퍼가 있으면 1(`vec_has_buffer`).
+    - 배열, `Option`, `Result`, 튜플: 구성 요소들의 합.
+  - 상한:
+    - `String`: 많아야 1.
+    - `VecDeque`: 많아야 원소들 + 1.
+    - `Rc`와 `Arc`: 많아야 1 + 내용물. 마지막 참조일 때만 해제합니다.
+    - `HashMap`과 `HashSet`: 키·값·해시 함수가 해제할 수 없을 때 많아야 1.
+  - 0: 할당기, `Copy` 타입, `NoDeallocDrop` 타입.
+  - 그 밖의 타입(타입 매개변수, 사용자 구조체)에는 정의가 없습니다. 필요한 것을 직접 적거나(예: `deallocates
+    drop_deallocations(x)`), 타입 매개변수에 `NoDeallocDrop` bound를 겁니다.
+* Verus는 컴파일된 프로그램에서, 해제할 수 있는 drop이 모두 자기가 센 것인지 검사하고 아니면 거부합니다. 지금 거부하는
+  것은 이렇습니다.
+  - 수명이 문장과 함께 끝나지 않는 임시값(루프 조건 안의 것, `let r = &f();`로 살아 있는 것).
+  - 내용물을 꺼낸 `Box`.
+  - 캡처한 값을 읽기만 하는 `move` 클로저.
+
+  값을 지역 변수에 묶거나 옮기면 됩니다.
+* 클로저에도 `deallocates` 상한을 붙일 수 있고, 같은 방식으로 셉니다(자기 drop 포함). 그 클로저를 부르면 그
+  `call_deallocations`를 셉니다. `#[verifier::fip]` 클로저는 해제하지 않으므로 `deallocates`를 적을 수 없습니다.
 * 이전 형태 `allocates deallocates_when(n, c)`(횟수 없는 조건)는 더는 받지 않습니다.
   `allocates n deallocates deallocates_when(d, c)`로 씁니다.
 * std 함수에 대한 vstd 명세는 해제를 적습니다. 메모리를 놓을 수 있는 함수는 횟수로 적습니다(`Vec::push`는 기존 버퍼를
   키울 때 1, `String::push_str`은 1, `Vec::clear`와 `truncate`는 지운 원소들의 drop, 사용자 코드를 부르는 비교나
   `clone`은 그 호출들이 해제하는 만큼). 받은 값을 drop하는 함수는 `vstd::alloc_check::drop_deallocations(v)`를 셉니다
   (`Option::unwrap_or`는 옵션이 `Some`이면 `default`를, `Option::insert`는 원래 내용을 drop합니다). 값들의 열에는
-  `seq_drop_deallocations(s)`를 씁니다. `drop_deallocations`는 drop이 해제할 수 없는 타입(`NoDeallocDrop`)에서는 0이고,
-  다른 타입에는 아직 정의가 없습니다.
+  `seq_drop_deallocations(s)`를 씁니다(`drop_deallocations`는 위 항목 참고).
 * 몇몇 명세는 상한을 적지 않습니다. vstd가 아직 해제 횟수를 이름 붙일 수 없는 사용자 코드를 부르기 때문입니다. 키를
   해시하는 `HashMap`·`HashSet` 연산(`insert`, `get`, `remove`, `contains_key`, `entry`, `reserve` 등), `to_string`,
   `format!`과 `Formatter::write_fmt`, `Vec::from_fn`, 그리고 `Iterator::next`(그래서 `for` 루프)입니다. 이런 함수는

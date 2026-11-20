@@ -678,6 +678,8 @@ fn simplify_one_expr(
 
             // (without -V alloc-check no bound is checked, so none may be assumed)
             let checked_allocates = if ctx.alloc_check { allocates.clone() } else { None };
+            let checked_deallocations =
+                if ctx.alloc_check && !*fip { deallocations.clone() } else { None };
             let external_spec_expr = exec_closure_spec(
                 state,
                 &expr.span,
@@ -688,6 +690,7 @@ fn simplify_one_expr(
                 ensures,
                 mask_spec,
                 &checked_allocates,
+                &checked_deallocations,
                 ctx.alloc_check && *fip,
                 unwind_spec,
                 proof_fn_modes.is_some(),
@@ -1148,12 +1151,16 @@ fn exec_closure_spec_allocates(
     closure_var: &Expr,
     params: &VarBinders<Typ>,
     bound: &Expr,
+    count_fun: BuiltinSpecFun,
+    positive_fun: BuiltinSpecFun,
 ) -> Result<Expr, VirErr> {
     // `-V alloc-check`: for `|a0, a1| allocates f(a0, a1) { .. }` emit
     //
     //      forall x :: closure_alloc(closure, x) == f(x.0, x.1)
     //
     // with `closure_alloc(closure, x)` as the trigger. The closure body is checked against `f`.
+    // (Likewise for `deallocates`, with `count_fun` and `positive_fun` the deallocation
+    // builtins.)
     let (tuple_ident, tuple_var) = exec_closure_spec_param(state, span, params);
     let tuple_typ = tuple_var.typ.clone();
 
@@ -1192,7 +1199,7 @@ fn exec_closure_spec_allocates(
         &int_typ,
         ExprX::Call {
             target: CallTarget::BuiltinSpecFun(
-                BuiltinSpecFun::ClosureAlloc,
+                count_fun.clone(),
                 closure_trait_call_typ_args(state, closure_var, params),
                 Arc::new(vec![]),
             ),
@@ -1219,7 +1226,7 @@ fn exec_closure_spec_allocates(
         &bool_typ,
         ExprX::Call {
             target: CallTarget::BuiltinSpecFun(
-                BuiltinSpecFun::ClosureAllocates,
+                positive_fun.clone(),
                 closure_trait_call_typ_args(state, closure_var, params),
                 Arc::new(vec![]),
             ),
@@ -1262,7 +1269,7 @@ fn exec_closure_spec_allocates(
         &int_typ,
         ExprX::Call {
             target: CallTarget::BuiltinSpecFun(
-                BuiltinSpecFun::ClosureAlloc,
+                count_fun.clone(),
                 closure_trait_call_typ_args(state, &c_var, params),
                 Arc::new(vec![]),
             ),
@@ -1431,6 +1438,7 @@ fn exec_closure_spec(
     ensures: &Exprs,
     mask_spec: &Option<crate::ast::MaskSpec>,
     allocates: &Option<Expr>,
+    deallocations: &Option<Expr>,
     fip: bool,
     unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
@@ -1452,7 +1460,27 @@ fn exec_closure_spec(
         exprs.push(ens_mask);
     }
     if let Some(bound) = allocates {
-        exprs.push(exec_closure_spec_allocates(state, span, closure_var, params, bound)?);
+        exprs.push(exec_closure_spec_allocates(
+            state,
+            span,
+            closure_var,
+            params,
+            bound,
+            BuiltinSpecFun::ClosureAlloc,
+            BuiltinSpecFun::ClosureAllocates,
+        )?);
+    }
+    if let Some(bound) = deallocations {
+        // (`call_deallocations`/`call_deallocates` of the closure)
+        exprs.push(exec_closure_spec_allocates(
+            state,
+            span,
+            closure_var,
+            params,
+            bound,
+            BuiltinSpecFun::ClosureDeallocations,
+            BuiltinSpecFun::ClosureDealloc,
+        )?);
     }
     if fip {
         exprs.push(exec_closure_spec_fip(state, span, closure_var, params));

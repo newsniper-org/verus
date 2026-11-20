@@ -4840,15 +4840,21 @@ pub(crate) fn closure_to_vir<'tcx>(
         // allocates nothing either
         let closure_fip =
             bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(closure_expr.hir_id))?.fip;
-        // -V alloc-check: until implicit drops are counted, a closure's deallocations are
-        // expressed only by `#[verifier::fip]` (none): the drops of a closure body with a
-        // `deallocates` bound could not be checked on the MIR (functions are found there by their
-        // VIR names, closures have none that both compilations share)
+        // -V alloc-check: a closure with a `deallocates` bound counts its deallocations like a
+        // function (its implicit drops are found on the MIR by its position)
         if deallocations.is_some() {
-            return err_span(
-                closure_expr.span,
-                "a closure cannot have a `deallocates` bound yet; a `#[verifier::fip]` closure deallocates nothing",
-            );
+            if closure_fip.is_some() {
+                return err_span(
+                    closure_expr.span,
+                    "a `#[verifier::fip]` closure deallocates nothing: it cannot state `deallocates`",
+                );
+            }
+            if is_spec_fn || proof_fn_modes.is_some() {
+                return err_span(
+                    closure_expr.span,
+                    "`deallocates` can only be used on exec closures",
+                );
+            }
         }
         if closure_fip.is_some() {
             if !bctx.ctxt.cmd_line_args.alloc_check {

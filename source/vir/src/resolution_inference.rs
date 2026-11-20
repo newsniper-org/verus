@@ -325,10 +325,26 @@ pub fn function_counts_deallocations(
     }
 }
 
-/// -V alloc-check: for each function that counts its implicit drops, the drops it charges (see
-/// DropCounting): (the span of the local's binding or temporary's expression, the drop site,
-/// whether the local is a parameter (whose span covers its type too))
-pub type DropSites = HashMap<Fun, Vec<(Span, Span, bool)>>;
+/// -V alloc-check: the local that a charged drop drops (for the MIR cross-check)
+#[derive(Clone, Debug)]
+pub enum DropLocal {
+    /// A local variable (the span of its binding) or temporary (of its expression)
+    Binding(Span),
+    /// A parameter, by its name
+    Param(String),
+}
+
+/// -V alloc-check: a function, or closure inside it, that counts its implicit drops, and the
+/// drops it charges (see DropCounting): (the dropped local, the drop site)
+#[derive(Clone, Debug)]
+pub struct CountedBody {
+    /// The closure expression (None for the function itself)
+    pub closure: Option<Span>,
+    pub sites: Vec<(DropLocal, Span)>,
+}
+
+/// -V alloc-check: for each function, the bodies in it that count their implicit drops
+pub type DropSites = HashMap<Fun, Vec<CountedBody>>;
 
 pub fn krate_infer_resolution(
     krate: &Krate,
@@ -372,12 +388,13 @@ pub fn krate_infer_resolution(
                 &functions,
                 function.x.owning_module.as_ref().unwrap(),
                 &rtypes,
+                alloc_check && !res_info.dual_mode,
                 count_drops,
             );
             match new_body {
-                Ok((new_body, sites)) => {
-                    if let Some(sites) = sites {
-                        drop_sites.insert(function.x.name.clone(), sites);
+                Ok((new_body, bodies)) => {
+                    if bodies.len() > 0 {
+                        drop_sites.insert(function.x.name.clone(), bodies);
                     }
                     Arc::make_mut(function).x.body = Some(new_body);
                 }
@@ -404,8 +421,9 @@ fn infer_resolution(
     functions: &HashMap<Fun, Function>,
     module: &Path,
     rtypes: &ResolutionTypes,
+    alloc_check: bool,
     count_drops: bool,
-) -> Result<(Expr, Option<Vec<(Span, Span, bool)>>), VirErr> {
+) -> Result<(Expr, Vec<CountedBody>), VirErr> {
     let (
         cfg,
         assigns_to_resolve,
@@ -421,15 +439,34 @@ fn infer_resolution(
         functions,
         &info.var_modes,
         &info.temporary_modes,
+        alloc_check,
         count_drops,
     )?;
     //println!("{:}", pretty_cfg(&cfg));
     let resolutions = if info.dual_mode { vec![] } else { get_resolutions(&cfg, rtypes, asserts) };
     let drops = match &drop_counting {
-        Some(dc) => Some(drop_insertions(&cfg, dc)?),
+        Some(dc) => Some(drop_insertions(&cfg, dc, &body.span)?),
         None => None,
     };
-    let sites = drops.as_ref().map(|d| d.sites.clone());
+    // (the bodies that count their drops, with the drops they charge)
+    let mut bodies = vec![];
+    if let (Some(dc), Some(d)) = (&drop_counting, &drops) {
+        let mut closures: Vec<Option<Span>> = vec![];
+        if count_drops {
+            closures.push(None);
+        }
+        closures.extend(dc.counted_closures.iter().map(|c| Some(c.clone())));
+        for closure in closures {
+            let id = closure.as_ref().map(|c| c.id);
+            let sites = d
+                .sites
+                .iter()
+                .filter(|(c, _, _)| c.as_ref().map(|c| c.id) == id)
+                .map(|(_, l, s)| (l.clone(), s.clone()))
+                .collect();
+            bodies.push(CountedBody { closure, sites });
+        }
+    }
     let e = apply_resolutions(
         &cfg,
         params,
@@ -442,7 +479,7 @@ fn infer_resolution(
         module,
         drops.unwrap_or_default(),
     )?;
-    Ok((e, sites))
+    Ok((e, bodies))
 }
 
 /// Represents the tree structure of "places" under consideration.
@@ -665,26 +702,52 @@ struct Builder<'a> {
 /// deallocate is one charged here (the same local and drop site, `drop_sites`); this analysis
 /// is not otherwise trusted to agree with rustc's.
 struct DropCounting {
-    /// The drop scopes of the outermost function, parallel to its `ScopeMap`'s scopes
-    scopes: Vec<DropScope>,
-    /// For each enclosing loop (parallel to `Builder::loops`): the numbers of drop scopes and of
-    /// statements around it
-    loop_depths: Vec<(usize, usize)>,
-    /// The spans of the enclosing blocks (the drop site of their `let` bindings)
-    block_spans: Vec<Span>,
-    /// The statements being built (innermost last), with the temporaries created in each
-    stmts: Vec<(Span, Vec<usize>)>,
-    /// Temporaries outside of any statement (dropped at the end of the body)
-    body_temps: Vec<usize>,
-    /// The function body (whose end also drops the parameters)
-    body_id: AstId,
-    body_span: Span,
+    /// The function or closure being built, if it counts its drops
+    frame: Option<DropFrame>,
+    /// The enclosing ones (parallel to `Builder::fns`, without the innermost)
+    outer_frames: Vec<Option<DropFrame>>,
     /// The drop points (`InstructionKind::ChargedDrop`)
     drops: Vec<DropPoint>,
     /// The span of each local's binding or temporary's expression (for the MIR cross-check)
     local_spans: HashMap<LocalName, Span>,
     /// The parameters (whose spans cover their types too)
     params: HashSet<VarIdent>,
+    /// The closures (by span) that count their drops (a closure with a `deallocates` bound)
+    counted_closures: Vec<Span>,
+}
+
+/// A function or closure that counts its drops
+struct DropFrame {
+    /// Its drop scopes, parallel to its `ScopeMap`'s scopes
+    scopes: Vec<DropScope>,
+    /// For each enclosing loop (by label): the numbers of drop scopes and of statements around it
+    loop_depths: Vec<(Label, usize, usize)>,
+    /// The spans of the enclosing blocks (the drop site of their `let` bindings)
+    block_spans: Vec<Span>,
+    /// The statements being built (innermost last), with the temporaries created in each
+    stmts: Vec<(Span, Vec<usize>)>,
+    /// Temporaries outside of any statement (dropped at the end of the body)
+    body_temps: Vec<usize>,
+    /// The body (whose end also drops the parameters)
+    body_id: AstId,
+    body_span: Span,
+    /// The closure expression (None for the function)
+    closure: Option<Span>,
+}
+
+impl DropFrame {
+    fn new(body: &Expr, closure: Option<Span>) -> Self {
+        DropFrame {
+            scopes: vec![],
+            loop_depths: vec![],
+            block_spans: vec![],
+            stmts: vec![],
+            body_temps: vec![],
+            body_id: body.span.id,
+            body_span: body.span.clone(),
+            closure,
+        }
+    }
 }
 
 struct DropScope {
@@ -696,6 +759,8 @@ struct DropScope {
 
 struct DropPoint {
     kind: DropKind,
+    /// The closure whose drop it is (None for the function)
+    closure: Option<Span>,
     /// The drop site (the span of the scope or statement that ends, or of the assigned place)
     site: Span,
     /// Where the instruction is in the CFG (block, index)
@@ -778,6 +843,7 @@ fn new_cfg<'a>(
     functions: &'a HashMap<Fun, Function>,
     var_modes: &'a HashMap<VarIdent, Mode>,
     temporary_modes: &'a HashMap<AstId, Mode>,
+    alloc_check: bool,
     count_drops: bool,
 ) -> Result<
     (
@@ -817,18 +883,14 @@ fn new_cfg<'a>(
             no_drop_closures: HashSet::new(),
         },
         read_kind_finals,
-        drop_counting: if count_drops {
+        drop_counting: if alloc_check {
             Some(DropCounting {
-                scopes: vec![],
-                loop_depths: vec![],
-                block_spans: vec![],
-                stmts: vec![],
-                body_temps: vec![],
-                body_id: body.span.id,
-                body_span: body.span.clone(),
+                frame: None,
+                outer_frames: vec![],
                 drops: vec![],
                 local_spans: HashMap::new(),
                 params: params.iter().map(|p| p.x.name.clone()).collect(),
+                counted_closures: vec![],
             })
         } else {
             None
@@ -838,6 +900,9 @@ fn new_cfg<'a>(
     builder.basic_blocks[start_bb].is_entry = true;
 
     builder.push_fn();
+    if count_drops {
+        builder.drop_counting.as_mut().unwrap().frame = Some(DropFrame::new(body, None));
+    }
     builder.push_scope();
     if builder.counting_drops() {
         // (the parameters are dropped at the end of the body)
@@ -850,7 +915,7 @@ fn new_cfg<'a>(
         for param in params.iter() {
             dc.local_spans.insert(LocalName::Named(param.x.name.clone()), param.span.clone());
         }
-        let scope = dc.scopes.last_mut().unwrap();
+        let scope = dc.frame.as_mut().unwrap().scopes.last_mut().unwrap();
         scope.vars = vars;
         scope.site = Some(body.span.clone());
     }
@@ -1253,14 +1318,19 @@ impl<'a> Builder<'a> {
                 ensures: _,
                 mask_spec: _,
                 allocates: _,
-                deallocations: _,
-                fip: _,
+                deallocations,
+                fip,
                 unwind_spec: _,
                 ret: _,
                 external_spec: _,
             } => {
                 // Build the closure interior as a disconnected part of the CFG
-                let fn_scope = self.build_closure(&expr.span, params, proof_fn_modes, body);
+                // (-V alloc-check: a closure with a `deallocates` bound counts its drops)
+                let counts = self.drop_counting.is_some()
+                    && deallocations.is_some()
+                    && !*fip
+                    && proof_fn_modes.is_none();
+                let fn_scope = self.build_closure(&expr.span, params, proof_fn_modes, body, counts);
                 if fn_scope.upvars_moved.is_empty() {
                     if let TypX::AnonymousClosure(_, _, _, id) =
                         &**undecorate_box_trk_shr_decorations(&expr.typ)
@@ -1318,9 +1388,10 @@ impl<'a> Builder<'a> {
                     continue_bb: outer_body_bb,
                     continue_taken: false,
                 });
-                if let Some(dc) = &mut self.drop_counting {
-                    // (kept parallel to `loops`, also inside closures)
-                    dc.loop_depths.push((dc.scopes.len(), dc.stmts.len()));
+                if self.counting_drops() {
+                    let f = self.frame_mut();
+                    let depths = (label.clone(), f.scopes.len(), f.stmts.len());
+                    f.loop_depths.push(depths);
                 }
 
                 self.basic_blocks[bb].successors.push(outer_body_bb);
@@ -1346,8 +1417,8 @@ impl<'a> Builder<'a> {
                     let cond_end_bb = self.build(cond, outer_body_bb);
                     let Maybe::Some(cond_end_bb) = cond_end_bb else {
                         self.loops.pop().unwrap();
-                        if let Some(dc) = &mut self.drop_counting {
-                            dc.loop_depths.pop().unwrap();
+                        if self.counting_drops() {
+                            self.frame_mut().loop_depths.pop().unwrap();
                         }
                         return Maybe::Some(post_bb);
                     };
@@ -1369,8 +1440,8 @@ impl<'a> Builder<'a> {
                 let end_bb = self.build(body, inner_body_bb);
 
                 let loop_entry = self.loops.pop().unwrap();
-                if let Some(dc) = &mut self.drop_counting {
-                    dc.loop_depths.pop().unwrap();
+                if self.counting_drops() {
+                    self.frame_mut().loop_depths.pop().unwrap();
                 }
 
                 match end_bb {
@@ -1450,9 +1521,9 @@ impl<'a> Builder<'a> {
                 }
                 if self.counting_drops() {
                     // (leaves the scopes and statements inside the loop)
-                    let i = self.loops.iter().rposition(|l| &l.label == label).unwrap();
-                    let (scopes_from, stmts_from) =
-                        self.drop_counting.as_ref().unwrap().loop_depths[i];
+                    let depths = &self.frame().loop_depths;
+                    let i = depths.iter().rposition(|(l, _, _)| l == label).unwrap();
+                    let (_, scopes_from, stmts_from) = depths[i].clone();
                     let position = match value {
                         Some(e) => AstPosition::After(e.span.id),
                         None => AstPosition::Before(span_id),
@@ -1557,15 +1628,14 @@ impl<'a> Builder<'a> {
             }
             ExprX::Block(stmts, e_opt) => {
                 let counting = self.counting_drops();
-                let scopes_before =
-                    self.drop_counting.as_ref().map(|dc| dc.scopes.len()).unwrap_or(0);
+                let scopes_before = if counting { self.frame().scopes.len() } else { 0 };
                 if counting {
-                    self.drop_counting.as_mut().unwrap().block_spans.push(expr.span.clone());
+                    self.frame_mut().block_spans.push(expr.span.clone());
                 }
                 let mut scope_count = 0;
                 for s in stmts.iter() {
                     if counting {
-                        self.drop_counting.as_mut().unwrap().stmts.push((s.span.clone(), vec![]));
+                        self.frame_mut().stmts.push((s.span.clone(), vec![]));
                     }
                     bb = match self.build_stmt(s, bb) {
                         Maybe::Some(bb) => bb,
@@ -1574,20 +1644,20 @@ impl<'a> Builder<'a> {
                                 self.pop_scope();
                             }
                             if counting {
-                                let dc = self.drop_counting.as_mut().unwrap();
-                                dc.stmts.pop().unwrap();
-                                dc.block_spans.pop().unwrap();
+                                let f = self.frame_mut();
+                                f.stmts.pop().unwrap();
+                                f.block_spans.pop().unwrap();
                             }
                             return Maybe::Never;
                         }
                     };
                     if counting {
                         // (the statement's temporaries are dropped at its end)
-                        let n = self.drop_counting.as_ref().unwrap().stmts.len();
-                        let n_scopes = self.drop_counting.as_ref().unwrap().scopes.len();
+                        let n = self.frame().stmts.len();
+                        let n_scopes = self.frame().scopes.len();
                         let position = AstPosition::After(s.span.id);
                         self.drop_scopes_and_temps(bb, position, n_scopes, n - 1, false);
-                        self.drop_counting.as_mut().unwrap().stmts.pop().unwrap();
+                        self.frame_mut().stmts.pop().unwrap();
                     }
 
                     if let StmtX::Decl { .. } = &s.x {
@@ -1602,7 +1672,7 @@ impl<'a> Builder<'a> {
                                 self.pop_scope();
                             }
                             if counting {
-                                self.drop_counting.as_mut().unwrap().block_spans.pop().unwrap();
+                                self.frame_mut().block_spans.pop().unwrap();
                             }
                             return Maybe::Never;
                         }
@@ -1611,7 +1681,7 @@ impl<'a> Builder<'a> {
                 if counting {
                     // The block's `let` bindings (and, for the body, the parameters and the
                     // temporaries outside of statements) are dropped at its end
-                    let is_body = self.drop_counting.as_ref().unwrap().body_id == span_id;
+                    let is_body = self.frame().body_id == span_id;
                     let position = if let Some(e) = e_opt {
                         AstPosition::After(e.span.id)
                     } else if let Some(s) = stmts.last() {
@@ -1619,10 +1689,10 @@ impl<'a> Builder<'a> {
                     } else {
                         AstPosition::Before(span_id)
                     };
-                    let n_stmts = self.drop_counting.as_ref().unwrap().stmts.len();
+                    let n_stmts = self.frame().stmts.len();
                     let scopes_from = if is_body { 0 } else { scopes_before };
                     self.drop_scopes_and_temps(bb, position, scopes_from, n_stmts, is_body);
-                    self.drop_counting.as_mut().unwrap().block_spans.pop().unwrap();
+                    self.frame_mut().block_spans.pop().unwrap();
                 }
                 for _i in 0..scope_count {
                     self.pop_scope();
@@ -1664,10 +1734,11 @@ impl<'a> Builder<'a> {
             StmtX::Decl { pattern, mode: _, init: None, els: None, assert_irrefutable: _ } => {
                 self.push_scope();
                 self.scope_insert_pattern(pattern);
-                if let Some(site) = self.drop_counting.as_ref().and_then(|dc| dc.block_spans.last())
-                {
-                    let site = site.clone();
-                    self.set_drop_scope_pattern(pattern, &site);
+                if self.counting_drops() {
+                    if let Some(site) = self.frame().block_spans.last() {
+                        let site = site.clone();
+                        self.set_drop_scope_pattern(pattern, &site);
+                    }
                 }
 
                 // If declaring a variable without initializing it, then we "drop" it.
@@ -1709,10 +1780,11 @@ impl<'a> Builder<'a> {
 
                 self.push_scope();
                 self.scope_insert_pattern(pattern);
-                if let Some(site) = self.drop_counting.as_ref().and_then(|dc| dc.block_spans.last())
-                {
-                    let site = site.clone();
-                    self.set_drop_scope_pattern(pattern, &site);
+                if self.counting_drops() {
+                    if let Some(site) = self.frame().block_spans.last() {
+                        let site = site.clone();
+                        self.set_drop_scope_pattern(pattern, &site);
+                    }
                 }
 
                 for bound_var in
@@ -1862,9 +1934,10 @@ impl<'a> Builder<'a> {
                         // (dropped at the end of its statement)
                         let dc = self.drop_counting.as_mut().unwrap();
                         dc.local_spans.insert(temp_name, place.span.clone());
-                        match dc.stmts.last_mut() {
+                        let f = dc.frame.as_mut().unwrap();
+                        match f.stmts.last_mut() {
                             Some((_, temps)) => temps.push(fp.local),
-                            None => dc.body_temps.push(fp.local),
+                            None => f.body_temps.push(fp.local),
                         }
                     }
                     self.push_instruction_propagate(
@@ -2224,8 +2297,8 @@ impl<'a> Builder<'a> {
         let arm_bb_end = self.build(&arm.x.body, arm_bb);
         if let Maybe::Some(arm_bb_end) = arm_bb_end {
             if self.counting_drops() {
-                let n = self.drop_counting.as_ref().unwrap().scopes.len();
-                let stmts = self.drop_counting.as_ref().unwrap().stmts.len();
+                let n = self.frame().scopes.len();
+                let stmts = self.frame().stmts.len();
                 let position = AstPosition::After(arm.x.body.span.id);
                 self.drop_scopes_and_temps(arm_bb_end, position, n - 1, stmts, false);
             }
@@ -2244,13 +2317,29 @@ impl<'a> Builder<'a> {
         params: &VarBinders<Typ>,
         proof_fn_modes: &Option<(Arc<Vec<Mode>>, Mode)>,
         body: &Expr,
+        counts_drops: bool,
     ) -> FnScope {
         let closure_prologue = self.new_bb(AstPosition::Before(body.span.id), true);
         self.basic_blocks[closure_prologue].is_entry = true;
         let closure_start_bb = self.new_bb(AstPosition::Before(body.span.id), false);
 
         self.push_fn();
+        if counts_drops {
+            let dc = self.drop_counting.as_mut().unwrap();
+            dc.frame = Some(DropFrame::new(body, Some(span.clone())));
+            dc.counted_closures.push(span.clone());
+        }
         self.push_scope();
+        if self.counting_drops() {
+            // (the parameters are dropped at the end of the body)
+            let dc = self.drop_counting.as_mut().unwrap();
+            for p in params.iter() {
+                dc.params.insert(p.name.clone());
+            }
+            let scope = dc.frame.as_mut().unwrap().scopes.last_mut().unwrap();
+            scope.vars = params.iter().map(|p| p.name.clone()).collect();
+            scope.site = Some(body.span.clone());
+        }
 
         for (i, param) in params.iter().enumerate() {
             self.scope_insert(&param.name);
@@ -2276,6 +2365,13 @@ impl<'a> Builder<'a> {
         }
 
         let closure_normal_ret_bb = self.build(body, closure_start_bb);
+        if let (Maybe::Some(end_bb), true) = (&closure_normal_ret_bb, self.counting_drops()) {
+            if !matches!(&body.x, ExprX::Block(..)) {
+                // (a body that is a block drops them at its end, see ExprX::Block)
+                let end_bb = *end_bb;
+                self.drop_scopes_and_temps(end_bb, AstPosition::After(body.span.id), 0, 0, true);
+            }
+        }
         self.optionally_exit(closure_normal_ret_bb);
 
         self.pop_scope();
@@ -2310,35 +2406,50 @@ impl<'a> Builder<'a> {
             upvars_mutated: vec![],
             upvars_moved: vec![],
         });
+        if let Some(dc) = &mut self.drop_counting {
+            // (a closure counts its own drops only if it has a `deallocates` bound, see
+            // `build_closure`)
+            let outer = dc.frame.take();
+            dc.outer_frames.push(outer);
+        }
     }
 
     fn pop_fn(&mut self) -> FnScope {
         let p = self.fns.pop().unwrap();
         assert_eq!(p.scope_map.num_scopes(), 0);
+        if let Some(dc) = &mut self.drop_counting {
+            dc.frame = dc.outer_frames.pop().unwrap();
+        }
         p
     }
 
     fn push_scope(&mut self) {
         self.fns.last_mut().unwrap().scope_map.push_scope(false);
         if self.counting_drops() {
-            let dc = self.drop_counting.as_mut().unwrap();
-            dc.scopes.push(DropScope { vars: vec![], site: None });
+            self.frame_mut().scopes.push(DropScope { vars: vec![], site: None });
         }
     }
 
     fn pop_scope(&mut self) {
         if self.counting_drops() {
-            let dc = self.drop_counting.as_mut().unwrap();
-            dc.scopes.pop().unwrap();
+            self.frame_mut().scopes.pop().unwrap();
         }
         self.fns.last_mut().unwrap().scope_map.pop_scope();
     }
 
     //// -V alloc-check: drop counting (see DropCounting)
 
-    /// Are we counting the drops here (in the function, not in a closure inside it)?
+    /// Are we counting the drops here (in a function, or closure, that counts them)?
     fn counting_drops(&self) -> bool {
-        self.drop_counting.is_some() && self.fns.len() == 1
+        self.drop_counting.as_ref().is_some_and(|dc| dc.frame.is_some())
+    }
+
+    fn frame(&self) -> &DropFrame {
+        self.drop_counting.as_ref().unwrap().frame.as_ref().unwrap()
+    }
+
+    fn frame_mut(&mut self) -> &mut DropFrame {
+        self.drop_counting.as_mut().unwrap().frame.as_mut().unwrap()
     }
 
     /// The innermost scope binds the pattern's variables, which are dropped at the end of `site`
@@ -2358,7 +2469,7 @@ impl<'a> Builder<'a> {
         for (x, span) in spans.into_iter() {
             dc.local_spans.insert(LocalName::Named(x), span);
         }
-        let scope = dc.scopes.last_mut().unwrap();
+        let scope = dc.frame.as_mut().unwrap().scopes.last_mut().unwrap();
         scope.vars = vars;
         scope.site = Some(site.clone());
     }
@@ -2373,7 +2484,8 @@ impl<'a> Builder<'a> {
         let dc = self.drop_counting.as_mut().unwrap();
         let i = dc.drops.len();
         let loc = (bb, self.basic_blocks[bb].instructions.len());
-        dc.drops.push(DropPoint { kind, site: site.clone(), loc, position });
+        let closure = dc.frame.as_ref().unwrap().closure.clone();
+        dc.drops.push(DropPoint { kind, closure, site: site.clone(), loc, position });
         self.push_instruction_raw(bb, position, InstructionKind::ChargedDrop(i));
     }
 
@@ -2392,7 +2504,7 @@ impl<'a> Builder<'a> {
             return;
         }
         let mut to_drop: Vec<(usize, Span)> = vec![];
-        let dc = self.drop_counting.as_ref().unwrap();
+        let dc = self.frame();
         // (temporaries are dropped at the end of their statement, before the locals of the
         // enclosing scopes)
         for (span, temps) in dc.stmts[stmts_from..].iter().rev() {
@@ -4940,9 +5052,9 @@ struct DropInsertions {
     temps: HashSet<AstId>,
     /// The drop flags (declared at the start of the body, initially false)
     flags: Vec<VarIdent>,
-    /// (the span of the local's binding or temporary's expression, the drop site, whether the
-    /// local is a parameter) of each charged drop, for the MIR cross-check
-    sites: Vec<(Span, Span, bool)>,
+    /// (the closure whose drop it is, the dropped local, the drop site) of each charged drop,
+    /// for the MIR cross-check
+    sites: Vec<(Option<Span>, DropLocal, Span)>,
 }
 
 /// The statements (charges, drop flag updates) inserted at an AstId, with the named local that
@@ -5155,7 +5267,11 @@ impl<'a> LocalCollection<'a> {
 }
 
 /// Compute the charges of the drop points (and the drop flags they need)
-fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirErr> {
+fn drop_insertions(
+    cfg: &CFG,
+    dc: &DropCounting,
+    body_span: &Span,
+) -> Result<DropInsertions, VirErr> {
     let mut out = DropInsertions::default();
     let leaves = cfg.locals.places_skip_insides_of_mut_refs();
     let ends: Arc<Vec<Option<FlattenedPlace>>> = Arc::new(
@@ -5167,11 +5283,16 @@ fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirEr
             })
             .collect(),
     );
-    let local_span = |local: usize| -> (Span, bool) {
+    let local_span = |local: usize| -> DropLocal {
         let name = &cfg.locals.locals[local].name;
-        let span = dc.local_spans.get(name).cloned().unwrap_or_else(|| dc.body_span.clone());
-        let is_param = matches!(name, LocalName::Named(x) if dc.params.contains(x));
-        (span, is_param)
+        match name {
+            LocalName::Named(x) if dc.params.contains(x) => {
+                DropLocal::Param(crate::def::user_local_name(x).to_string())
+            }
+            _ => DropLocal::Binding(
+                dc.local_spans.get(name).cloned().unwrap_or_else(|| body_span.clone()),
+            ),
+        }
     };
     let named = |local: usize| -> Option<VarIdent> {
         match &cfg.locals.locals[local].name {
@@ -5257,10 +5378,10 @@ fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirEr
             let position = instr.post_instruction_position;
             match &instr.kind {
                 InstructionKind::Overwrite(sp) => {
-                    set_flags(&mut out, sp, true, &dc.body_span, position)?;
+                    set_flags(&mut out, sp, true, body_span, position)?;
                 }
                 InstructionKind::MoveFrom(sp) | InstructionKind::DropFrom(sp) => {
-                    set_flags(&mut out, sp, false, &dc.body_span, position)?;
+                    set_flags(&mut out, sp, false, body_span, position)?;
                 }
                 InstructionKind::Mutate(_) => {}
                 InstructionKind::ChargedDrop(i) => {
@@ -5268,8 +5389,11 @@ fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirEr
                     match &d.kind {
                         DropKind::ScopeEnd(fp) | DropKind::Assign(fp) => {
                             if charges[*i].len() > 0 {
-                                let (span, is_param) = local_span(fp.local);
-                                out.sites.push((span, d.site.clone(), is_param));
+                                out.sites.push((
+                                    d.closure.clone(),
+                                    local_span(fp.local),
+                                    d.site.clone(),
+                                ));
                             }
                             for (li, under_flag) in charges[*i].iter() {
                                 let leaf = &leaves[*li];
@@ -5303,8 +5427,11 @@ fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirEr
                                 unreachable!()
                             };
                             out.items.entry(id).or_default().charge_assign = true;
-                            let (span, is_param) = local_span(fp.local);
-                            out.sites.push((span, d.site.clone(), is_param));
+                            out.sites.push((
+                                d.closure.clone(),
+                                local_span(fp.local),
+                                d.site.clone(),
+                            ));
                         }
                     }
                 }

@@ -2906,7 +2906,7 @@ pub(crate) fn expr_to_stm_opt(
             ensures,
             mask_spec,
             allocates,
-            deallocations: _, // (rejected for now: `closure_to_vir`)
+            deallocations,
             fip,
             unwind_spec,
             ret,
@@ -2927,6 +2927,7 @@ pub(crate) fn expr_to_stm_opt(
                 ensures,
                 mask_spec,
                 allocates,
+                deallocations,
                 *fip,
                 unwind_spec,
                 proof_fn_modes.is_some(),
@@ -5539,6 +5540,7 @@ fn exec_closure_body_stms(
     ensures: &Exprs,
     mask_spec: &Option<MaskSpec>,
     allocates: &Option<Expr>,
+    deallocations: &Option<Expr>,
     fip: bool,
     unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
@@ -5568,6 +5570,7 @@ fn exec_closure_body_stms(
         ensures,
         mask_spec,
         allocates,
+        if fip { &None } else { deallocations },
         unwind_spec,
         is_proof,
         &mut typ_inv_vars,
@@ -5590,6 +5593,7 @@ fn exec_closure_body_stms_inner(
     ensures: &Exprs,
     mask_spec: &Option<MaskSpec>,
     allocates: &Option<Expr>,
+    deallocations: &Option<Expr>,
     unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
     typ_inv_vars: &mut Vec<(UniqueIdent, Typ)>,
@@ -5632,8 +5636,42 @@ fn exec_closure_body_stms_inner(
         }
     };
 
-    // `-V alloc-check`: counter and bound
+    // `-V alloc-check`: counters and bounds
     let mut alloc_ens: Option<Exp> = None;
+    let mut dealloc_ens: Option<Exp> = None;
+    if let (true, Some(bound), false) = (ctx.global.alloc_check, deallocations, is_proof) {
+        // (a closure with a `deallocates` bound counts its deallocations, implicit drops
+        // included, like a function; as for a function, the bound is only about normal returns,
+        // so strict mode needs `no_unwind`)
+        if ctx.global.alloc_check_strict
+            && !matches!(unwind_spec, Some(crate::ast::UnwindSpec::NoUnwind))
+        {
+            return Err(error(
+                &bound.span,
+                "with -V alloc-check-strict, a closure with a `deallocates` bound must be `no_unwind`",
+            ));
+        }
+        let (check_stms, bound_exp) = expr_to_pure_exp_check(ctx, state, bound)?;
+        stms.extend(check_stms);
+        let int_typ = Arc::new(TypX::Int(IntRange::Int));
+        let span = &bound.span;
+        let (counter_name, _) = state.next_temp(span, &int_typ);
+        let counter =
+            state.declare_var_stm(&counter_name, &int_typ, PreLocalDeclKind::StmtLet, false);
+        let zero = SpannedTyped::new(span, &int_typ, ExpX::Const(Constant::Int(BigInt::zero())));
+        stms.push(init_var(span, &counter, &zero));
+        state.dealloc_counter = Some(counter.clone());
+        let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter));
+        dealloc_ens = Some(SpannedTyped::new(
+            span,
+            &Arc::new(TypX::Bool),
+            ExpX::Binary(
+                crate::sst::BinaryOp::Inequality(crate::ast::InequalityOp::Le),
+                current,
+                bound_exp,
+            ),
+        ));
+    }
     if let (true, Some(bound), false) = (ctx.global.alloc_check, allocates, is_proof) {
         let (check_stms, bound_exp) = expr_to_pure_exp_check(ctx, state, bound)?;
         stms.extend(check_stms);
@@ -5690,6 +5728,7 @@ fn exec_closure_body_stms_inner(
         ens_exps.push(exp);
     }
     ens_exps.extend(alloc_ens);
+    ens_exps.extend(dealloc_ens);
 
     let ens_exps = ens_exps.iter().map(|e| exp_with_vars_at_pre_state(e, &param_set)).collect();
     let ens_checks = ens_checks.iter().map(|s| stm_with_vars_at_pre_state(s, &param_set)).collect();

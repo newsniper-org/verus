@@ -133,7 +133,8 @@ struct CompilerCallbacksEraseMacro {
     /// see `Verifier::alloc_local_encapsulates_fns`
     pub alloc_local_encapsulates_fns: Vec<String>,
     /// see `Verifier::alloc_local_dealloc_bounded_fns`
-    pub alloc_local_dealloc_bounded_fns: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)>,
+    pub alloc_local_dealloc_bounded_fns:
+        Vec<(crate::fip_mir::CountedBodyKey, Vec<crate::fip_mir::DropSiteKey>)>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
@@ -216,7 +217,10 @@ pub(crate) fn run_with_erase_macro_compile(
     alloc_checked_strict_fns: Vec<String>,
     alloc_no_drop_fns: Vec<String>,
     alloc_local_encapsulates_fns: Vec<String>,
-    alloc_local_dealloc_bounded_fns: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)>,
+    alloc_local_dealloc_bounded_fns: Vec<(
+        crate::fip_mir::CountedBodyKey,
+        Vec<crate::fip_mir::DropSiteKey>,
+    )>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,

@@ -93,7 +93,8 @@ with their verified bounds.
 ## Drops
 
 Implicit drops (end of scope, temporaries, reassignment, the drop glue of containers) do not
-appear as calls, so they cannot be charged where they happen. Instead, `-V alloc-check` requires
+appear as calls. For allocations they are not charged where they happen (their deallocations
+are: see "Deallocation bounds"). Instead, `-V alloc-check` requires
 that every `Drop::drop` that a checked function may run allocates nothing. The function's
 parameter types and the types of every expression in its body over-approximate what it may
 drop. For each of these types:
@@ -465,10 +466,29 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   entry).
 * `call_deallocations(f, args)` / `f.deallocations(x)` is the bound of a function value (see
   "Callbacks, closures and traits").
-* **For now, implicit drops are not counted.** A function with a `deallocates` bound (its own or
-  its trait method declaration's) must not free memory through the drops that the compiler
-  inserts: they are checked on the compiled program, as a fip function's are. A closure cannot
-  have a `deallocates` bound yet (a `#[verifier::fip]` closure deallocates nothing).
+* The implicit drops are counted too. Where the compiler drops a value (a local at the end of
+  its scope, on every path that leaves it: the end of the block, `return`, `break`, `continue`,
+  `?`; a temporary at the end of its statement; the old value of a place an assignment
+  overwrites), the count is `vstd::alloc_check::drop_deallocations(v)` of the parts of the value
+  that are still there (not moved out). A value moved on some paths only is counted on the
+  others (a ghost drop flag), so `match o { Some(b) => consume(b), None => {} }` counts nothing
+  for `o`. A loop whose body drops values needs `deallocated()` in its invariant.
+* `drop_deallocations` is exact for `Box` (its contents, then 1 for its block, 0 for a
+  zero-sized `T`), `Vec` (its elements, then 1 if it has a buffer: `vec_has_buffer`), arrays,
+  `Option`, `Result` and tuples; at most 1 for `String`; at most the elements' plus 1 for
+  `VecDeque`; at most 1 plus the contents' for `Rc` and `Arc` (the last reference frees);
+  at most 1 for a `HashMap` or `HashSet` whose keys, values and hasher cannot deallocate; 0 for
+  allocators and `Copy` types and the `NoDeallocDrop` types. For other types (a type parameter,
+  a user struct) it is not defined: state what you need, e.g. `deallocates
+  drop_deallocations(x)`, or bound the type parameter by `NoDeallocDrop`.
+* Verus checks on the compiled program that each drop that may deallocate is one it counted,
+  and rejects any other: for now, a temporary whose life does not end with its statement (in a
+  loop condition, or kept alive by `let r = &f();`), a `Box` whose contents were moved out of it,
+  and a `move` closure that captures a value it only reads. Bind the value to a local, or move
+  it.
+* A closure can have a `deallocates` bound, counted the same way (its own drops included); a
+  call of it counts `call_deallocations` of it. A `#[verifier::fip]` closure deallocates nothing
+  (it cannot state `deallocates`).
 * The earlier form `allocates deallocates_when(n, c)` (a condition without a number) is no longer
   accepted: write `allocates n deallocates deallocates_when(d, c)`.
 * vstd's specifications of std functions state their deallocations: those that may free memory
@@ -477,8 +497,7 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   calls the user's code what those calls deallocate). A function that drops a value it was
   given counts `vstd::alloc_check::drop_deallocations(v)` (`Option::unwrap_or` drops `default`
   when the option is `Some`, `Option::insert` drops the old contents); for a sequence of values
-  it is `seq_drop_deallocations(s)`. `drop_deallocations` is 0 for a type whose drop cannot
-  deallocate (`NoDeallocDrop`), and not defined yet for the others.
+  it is `seq_drop_deallocations(s)` (for `drop_deallocations`, see above).
 * A few specifications state no bound, because they run user code whose deallocations vstd
   cannot name yet: the `HashMap` and `HashSet` operations that hash a key (`insert`, `get`,
   `remove`, `contains_key`, `entry`, `reserve`, ...), `to_string`, `format!` and

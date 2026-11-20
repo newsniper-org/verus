@@ -135,10 +135,68 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] deallocates_closure_rejected ["vstd", "-V alloc-check"] => verus_code! {
+    #[test] deallocates_closure_fip_rejected ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
-        fn f() { let c = |x: u64| -> (r: u64) deallocates 0 { x }; }
-    } => Err(err) => assert_vir_error_msg(err, "a closure cannot have a `deallocates` bound yet")
+        fn f() { let c = #[verifier::fip] |x: u64| -> (r: u64) deallocates 0 { x }; }
+    } => Err(err) => assert_vir_error_msg(err, "a `#[verifier::fip]` closure deallocates nothing: it cannot state `deallocates`")
+}
+
+// a closure with a `deallocates` bound counts its deallocations (implicit drops included), and a
+// call of it charges them
+const CLOSURES: &str = verus_code_str! {
+    use vstd::prelude::*;
+
+    fn call_it() deallocates 1 {
+        let f = |b: Box<u64>| -> (r: u64) deallocates 1 { *b };
+        let y = f(Box::new(3));
+    }
+
+    fn local_in_closure() deallocates 2 {
+        let f = |x: u64| -> (r: u64) deallocates 1 { let b = Box::new(x); 0 };
+        let y = f(3);
+        let z = f(4);
+    }
+
+    fn temps() deallocates 2 {
+        let f = |b: Box<u64>| -> (r: u64) deallocates 2 { let _ = Box::new(1u64); *b };
+        let y = f(Box::new(3));
+    }
+
+    fn unbounded_outer(x: u64) {
+        let f = |b: Box<u64>| -> (r: u64) deallocates 1 { *b };
+    }
+
+    fn generic<F: Fn(Box<u64>) -> u64>(f: &F)
+        requires
+            forall|b: Box<u64>| f.requires((b,)),
+            forall|b: Box<u64>| f.deallocations(b) <= 1,
+        deallocates 1
+    {
+        let y = f(Box::new(3));
+    }
+
+    fn use_generic() deallocates 1 {
+        let f = |b: Box<u64>| -> (r: u64) deallocates 1 { *b };
+        generic(&f);
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure ["vstd", "-V alloc-check"] => CLOSURES.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure_fail ["vstd", "-V alloc-check"] => CLOSURES.to_string() + verus_code_str! {
+        fn tight(x: u64) {
+            let f = |b: Box<u64>| -> (r: u64) deallocates 0 { *b }; // FAILS
+        }
+        fn caller_too_small() deallocates 0 { // FAILS
+            let f = |b: Box<u64>| -> (r: u64) deallocates 1 { *b };
+            let y = f(Box::new(3));
+        }
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 2)
 }
 
 test_verify_one_file_with_options! {

@@ -180,7 +180,7 @@ pub fn allocates_when<A: Integer>(_allocates: A, _when: bool) -> A {
 }
 
 /// -V alloc-check: `deallocates d`: an upper bound on the number of deallocations an exec function
-/// performs (on a normal return)
+/// or closure performs (on a normal return), its implicit drops included
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::deallocates"]
 #[verifier::proof]
