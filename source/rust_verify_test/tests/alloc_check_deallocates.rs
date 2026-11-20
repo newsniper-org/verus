@@ -424,14 +424,88 @@ test_verify_one_file_with_options! {
 }
 
 // a drop that Verus does not count yet is an error (checked on the compiled program)
+// a temporary is dropped at the end of its statement, or of a condition, a branch of an `if`, a
+// loop's condition or body (every iteration), a match arm or guard
+const TEMP_SCOPES: &str = verus_code_str! {
+    use vstd::prelude::*;
+    fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+    fn look(b: &Box<u64>) -> (r: u64) ensures r == 0 deallocates 0 { 0 }
+    fn see(b: &Box<u64>) deallocates 0 { }
+
+    fn body_tail(n: u64) deallocates n {
+        let mut i: u64 = 0;
+        while i < n
+            invariant i <= n, deallocated() == i,
+            decreases n - i,
+        {
+            i = i + 1;
+            see(&mk())
+        };
+    }
+
+    fn loop_condition() deallocates 4 {
+        let mut i: u64 = 0;
+        while look(&mk()) + i < 3
+            invariant i <= 3, deallocated() == i,
+            decreases 3 - i,
+        {
+            i = i + 1;
+        }
+    }
+
+    fn if_condition_and_branch(c: bool) deallocates 3 {
+        if look(&mk()) == 0 { look(&mk()); }
+        if c { look(&mk()) } else { 0 };
+    }
+
+    fn arm(o: Option<u64>) deallocates 1 {
+        match o {
+            Some(x) => { see(&mk()) }
+            None => {}
+        }
+    }
+};
+
 test_verify_one_file_with_options! {
-    #[test] deallocates_drop_loop_condition_temporary ["vstd", "-V alloc-check"] => verus_code! {
+    #[test] deallocates_drop_temporary_scopes ["vstd", "-V alloc-check"] => TEMP_SCOPES.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_temporary_scopes_fail ["vstd", "-V alloc-check"] => TEMP_SCOPES.to_string() + verus_code_str! {
+        fn body_tail_bad(n: u64) deallocates n {
+            let mut i: u64 = 0;
+            while i < n
+                invariant i <= n, deallocated() == 0, // FAILS
+                decreases n - i,
+            {
+                i = i + 1;
+                see(&mk())
+            };
+        }
+        fn loop_condition_bad() deallocates 3 { // FAILS
+            let mut i: u64 = 0;
+            while look(&mk()) + i < 3
+                invariant i <= 3, deallocated() == i,
+                decreases 3 - i,
+            {
+                i = i + 1;
+            }
+        }
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 2)
+}
+
+// a drop that Verus does not count yet is an error (checked on the compiled program)
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_logical_operand_temporary ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
         fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+        fn look(b: &Box<u64>) -> (r: u64) ensures r == 0 deallocates 0 { 0 }
         fn f() deallocates 100 {
             let mut i: u64 = 0;
-            while *mk() > i && i < 3
-                invariant i <= 3, deallocated() == 0,
+            while look(&mk()) < 1 && i < 3
+                invariant i <= 3, deallocated() <= i + 1,
                 decreases 3 - i,
             {
                 i = i + 1;

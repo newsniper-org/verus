@@ -1271,17 +1271,17 @@ impl<'a> Builder<'a> {
                 };
                 let join_position = AstPosition::After(span_id);
 
-                bb = unwrap!(self.build(cond, bb));
+                bb = unwrap!(self.build_temp_scope(cond, bb, &cond.span));
 
                 let thn_block = self.new_bb(thn_position, false);
                 let els_block = self.new_bb(els_position, false);
                 self.basic_blocks[bb].successors.push(thn_block);
                 self.basic_blocks[bb].successors.push(els_block);
 
-                let thn_bb_end = self.build(thn, thn_block);
+                let thn_bb_end = self.build_temp_scope(thn, thn_block, &thn.span);
 
                 let els_bb_end = match els {
-                    Some(els) => self.build(els, els_block),
+                    Some(els) => self.build_temp_scope(els, els_block, &els.span),
                     None => Maybe::Some(els_block),
                 };
 
@@ -1414,7 +1414,7 @@ impl<'a> Builder<'a> {
                     // post_bb is that we can put assumes in pre_break_bb that can be helpful
                     // to prove the invariants.
 
-                    let cond_end_bb = self.build(cond, outer_body_bb);
+                    let cond_end_bb = self.build_temp_scope(cond, outer_body_bb, &cond.span);
                     let Maybe::Some(cond_end_bb) = cond_end_bb else {
                         self.loops.pop().unwrap();
                         if self.counting_drops() {
@@ -1437,7 +1437,7 @@ impl<'a> Builder<'a> {
                     outer_body_bb
                 };
 
-                let end_bb = self.build(body, inner_body_bb);
+                let end_bb = self.build_temp_scope(body, inner_body_bb, &body.span);
 
                 let loop_entry = self.loops.pop().unwrap();
                 if self.counting_drops() {
@@ -2222,7 +2222,7 @@ impl<'a> Builder<'a> {
             // for the bound variables yet
             self.push_scope();
             self.scope_insert_pattern(&arm.x.pattern);
-            let guard_bb_end = self.build(&arm.x.guard, guard_bb);
+            let guard_bb_end = self.build_temp_scope(&arm.x.guard, guard_bb, &arm.x.guard.span);
             self.pop_scope();
 
             let guard_bb_end = match guard_bb_end {
@@ -2294,7 +2294,7 @@ impl<'a> Builder<'a> {
             );
         }
 
-        let arm_bb_end = self.build(&arm.x.body, arm_bb);
+        let arm_bb_end = self.build_temp_scope(&arm.x.body, arm_bb, &arm.span);
         if let Maybe::Some(arm_bb_end) = arm_bb_end {
             if self.counting_drops() {
                 let n = self.frame().scopes.len();
@@ -2528,6 +2528,25 @@ impl<'a> Builder<'a> {
             let fp = FlattenedPlace { local, projections: vec![] };
             self.push_charged_drop(bb, position, DropKind::ScopeEnd(fp), &site);
         }
+    }
+
+    /// Build an expression that is a scope of its own for temporaries (as rustc's terminating
+    /// scopes: a condition, a branch of an `if`, a loop's condition and body, which may run many
+    /// times in one statement, a match arm or guard): its temporaries are dropped at its end
+    /// (`site`), not at the end of the enclosing statement
+    fn build_temp_scope(&mut self, e: &Expr, bb: BBIndex, site: &Span) -> Maybe<BBIndex> {
+        if !self.counting_drops() {
+            return self.build(e, bb);
+        }
+        self.frame_mut().stmts.push((site.clone(), vec![]));
+        let end = self.build(e, bb);
+        if let Maybe::Some(end) = end {
+            let n_scopes = self.frame().scopes.len();
+            let n = self.frame().stmts.len();
+            self.drop_scopes_and_temps(end, AstPosition::After(e.span.id), n_scopes, n - 1, false);
+        }
+        self.frame_mut().stmts.pop().unwrap();
+        end
     }
 
     /// The drops of an assignment `place = ..` (that is not to a ghost place)

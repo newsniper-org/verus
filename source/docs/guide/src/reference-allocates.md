@@ -482,10 +482,11 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   a user struct) it is not defined: state what you need, e.g. `deallocates
   drop_deallocations(x)`, or bound the type parameter by `NoDeallocDrop`.
 * Verus checks on the compiled program that each drop that may deallocate is one it counted,
-  and rejects any other: for now, a temporary whose life does not end with its statement (in a
-  loop condition, or kept alive by `let r = &f();`), a `Box` whose contents were moved out of it,
-  and a `move` closure that captures a value it only reads. Bind the value to a local, or move
-  it.
+  and rejects any other: for now, a temporary in an operand of `&&` or `||`, or kept alive by
+  `let r = &f();`, or made on some paths only; a `Box` whose contents were moved out of it; and a
+  `move` closure that captures a value it only reads. Bind the value to a local, or move it.
+  (Like rustc, Verus drops a temporary at the end of its statement, or of the condition or branch
+  of an `if`, the condition or body of a loop (every iteration), or a match arm or guard.)
 * A closure can have a `deallocates` bound, counted the same way (its own drops included); a
   call of it counts `call_deallocations` of it. A `#[verifier::fip]` closure deallocates nothing
   (it cannot state `deallocates`).
