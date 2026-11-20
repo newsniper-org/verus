@@ -2205,14 +2205,20 @@ fn dealloc_count_after_call(
         ),
     );
     let charged = SpannedTyped::new(span, &int_typ, ExpX::If(nonneg, bound, zero));
+    Ok(Some(charge_deallocations(span, counter, charged)))
+}
+
+/// `counter := counter + n`
+fn charge_deallocations(span: &Span, counter: &VarIdent, n: Exp) -> Stm {
+    let int_typ = Arc::new(TypX::Int(IntRange::Int));
     let current = SpannedTyped::new(span, &int_typ, ExpX::Var(counter.clone()));
     let sum = SpannedTyped::new(
         span,
         &int_typ,
-        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, charged),
+        ExpX::Binary(crate::sst::BinaryOp::Arith(crate::sst::ArithOp::Add), current, n),
     );
     let lhs = Dest { dest: var_loc_exp(span, &int_typ, counter.clone()), is_init: false };
-    Ok(Some(Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum })))
+    Spanned::new(span.clone(), StmX::Assign { lhs, rhs: sum })
 }
 
 fn if_to_stm(
@@ -2358,8 +2364,9 @@ pub(crate) fn expr_to_stm_opt(
             ))
         }
         ExprX::ConstVar(..) => panic!("ConstVar should already be removed"),
-        ExprX::Assign { place, rhs, op: Some(binary_op), resolve, typ: _ } => {
+        ExprX::Assign { place, rhs, op: Some(binary_op), resolve, typ: _, charge_drop } => {
             assert!(!resolve);
+            assert!(!charge_drop);
 
             let (stms_r, e_r) = expr_to_stm_opt(ctx, state, rhs)?;
             let e_r = to_exp_or_return_never!(e_r, stms_r);
@@ -2391,7 +2398,7 @@ pub(crate) fn expr_to_stm_opt(
 
             Ok((stms, Maybe::Some(Value::ImplicitUnit(expr.span.clone()))))
         }
-        ExprX::Assign { place, rhs, op: None, resolve, typ } => {
+        ExprX::Assign { place, rhs, op: None, resolve, typ, charge_drop } => {
             let (stms_r, e_r) = expr_to_stm_opt(ctx, state, rhs)?;
             let e_r = to_exp_or_return_never!(e_r, stms_r);
 
@@ -2417,6 +2424,23 @@ pub(crate) fn expr_to_stm_opt(
                 let res = SpannedTyped::new(&expr.span, &bool_typ(), resx);
                 let assume_stm = Spanned::new(expr.span.clone(), StmX::Assume(res));
                 stms.push(assume_stm);
+            }
+            if *charge_drop {
+                // -V alloc-check: the old value is dropped (see resolution_inference.rs)
+                let Some(counter) = state.dealloc_counter.clone() else {
+                    return Err(crate::messages::internal_error(
+                        &expr.span,
+                        "a drop is charged to a function that does not count its deallocations",
+                    ));
+                };
+                let nat = Arc::new(TypX::Int(IntRange::Nat));
+                let callx = ExpX::Call(
+                    crate::sst::CallFun::Fun(crate::def::fn_drop_deallocations(), None),
+                    Arc::new(vec![typ.clone()]),
+                    Arc::new(vec![e_l.clone()]),
+                );
+                let n = SpannedTyped::new(&expr.span, &nat, callx);
+                stms.push(charge_deallocations(&expr.span, &counter, n));
             }
 
             let assign = StmX::Assign { lhs: Dest { dest: lhs_exp, is_init: false }, rhs: e_r };
@@ -4602,6 +4626,18 @@ pub(crate) fn expr_to_stm_opt(
             let (stms, e) = place_to_exp_for_read(ctx, state, place)?;
             let e = unwrap_or_return_never!(e, stms);
             Ok((stms, Maybe::Some(Value::Exp(e))))
+        }
+        ExprX::ChargeDeallocations(n) => {
+            // -V alloc-check: an implicit drop (see resolution_inference.rs)
+            let Some(counter) = state.dealloc_counter.clone() else {
+                return Err(crate::messages::internal_error(
+                    &expr.span,
+                    "a drop is charged to a function that does not count its deallocations",
+                ));
+            };
+            let n = expr_to_pure_exp_skip_checks(ctx, state, n)?;
+            let stm = charge_deallocations(&expr.span, &counter, n);
+            Ok((vec![stm], Maybe::Some(Value::ImplicitUnit(expr.span.clone()))))
         }
         ExprX::EvalAndResolve(e1, e2) => {
             let (mut stms, exp1) = expr_to_stm_opt(ctx, state, e1)?;

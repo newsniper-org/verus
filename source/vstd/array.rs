@@ -236,7 +236,17 @@ pub broadcast proof fn lemma_array_index_decreases<T, const N: usize>(a: &[T; N]
     lemma_seq_index_decreases(a@, i);
 }
 
+/// -V alloc-check: dropping an array drops its elements
+#[cfg(not(verus_verify_core))]
+pub broadcast axiom fn axiom_drop_deallocations_array<T, const N: usize>(a: [T; N])
+    ensures
+        #[trigger] super::alloc_check::drop_deallocations(a)
+            == super::alloc_check::seq_drop_deallocations(a@),
+;
+
 pub broadcast group group_array_axioms {
+    #[cfg(not(verus_verify_core))]
+    axiom_drop_deallocations_array,
     array_len_matches_n,
     lemma_array_index,
     axiom_spec_array_as_slice,

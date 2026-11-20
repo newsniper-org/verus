@@ -280,6 +280,7 @@ fn outer_reason_by_expr_kind(e: &Expr) -> Option<OuterProphReason> {
             | ExprX::NeverToAny(..)
             | ExprX::Nondeterministic
             | ExprX::EvalAndResolve(..)
+            | ExprX::ChargeDeallocations(..)
             | ExprX::ReadPlace(..)
             | ExprX::MatchGuardFreeze(..)
             // all borrow types checked in the main function
@@ -2560,7 +2561,7 @@ fn check_expr(
             )?;
             Ok((Mode::Spec, proph))
         }
-        ExprX::Assign { place, rhs, op: _, resolve: _, typ } => {
+        ExprX::Assign { place, rhs, op: _, resolve: _, typ, charge_drop: _ } => {
             if typing.in_assert_by_body {
                 return Err(error(
                     &expr.span,
@@ -3557,6 +3558,9 @@ fn check_expr(
                 };
 
             Ok((mode, p))
+        }
+        ExprX::ChargeDeallocations(..) => {
+            panic!("ChargeDeallocations shouldn't be created yet");
         }
         ExprX::EvalAndResolve(..) => {
             panic!("EvalAndResolve shouldn't be created yet");

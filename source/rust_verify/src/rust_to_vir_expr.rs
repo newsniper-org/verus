@@ -4415,6 +4415,7 @@ fn expr_assign_to_vir_innermost<'tcx>(
         op: op,
         resolve: false,
         typ: bctx.mid_ty_to_vir(lhs.span, &bctx.types.expr_ty_adjusted(lhs))?,
+        charge_drop: false,
     })
 }
 

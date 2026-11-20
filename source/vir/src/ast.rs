@@ -1270,7 +1270,18 @@ pub enum ExprX {
     /// See: [https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.assign.evaluation-order]
     /// (Also note that this does not apply to overloaded compound assignment, which should
     /// lower to a Call node instead.)
-    Assign { place: Place, rhs: Expr, op: Option<BinaryOp>, typ: Typ, resolve: bool },
+    ///
+    /// -V alloc-check: with `charge_drop` (set by the resolution analysis, see
+    /// resolution_inference.rs), the drop of the old value (`drop_deallocations`) is charged to
+    /// the function's deallocation counter, before the write.
+    Assign {
+        place: Place,
+        rhs: Expr,
+        op: Option<BinaryOp>,
+        typ: Typ,
+        resolve: bool,
+        charge_drop: bool,
+    },
     /// Reveal definition of an opaque function with some integer fuel amount
     Fuel(Fun, u32, bool),
     /// Reveal a string
@@ -1368,6 +1379,11 @@ pub enum ExprX {
     /// The right side should only contain `assume(has_resolved(...))` statements
     /// emitted by the resolution analysis.
     EvalAndResolve(Expr, Expr),
+    /// -V alloc-check: charge the given number (a spec `nat` expression) of deallocations to
+    /// the function's deallocation counter here: an implicit drop of a function with a
+    /// `deallocates` bound. Created only by the resolution analysis (see
+    /// resolution_inference.rs), after mode checking.
+    ChargeDeallocations(Expr),
     /// The `old` node.
     /// Note: to explicitly refer to the pre-state of a variable, the ExprX::VarAt(e, Pre)
     /// node should be used. The 'old' node itself is used for some bookkeeping purposes
@@ -1999,6 +2015,12 @@ pub struct DatatypeX {
     pub sized_constraint: Option<Typ>,
     /// Does this type have a Drop impl?
     pub destructor: bool,
+    /// -V alloc-check: the types whose drops make up the drop glue of this type (from rustc's
+    /// `adt_drop_tys`), usually some of its type parameters (none: dropping it runs no code); or
+    /// None when it, or a type inside it, has a `Drop` impl (or this is not known).
+    /// (A function with a `deallocates` bound counts its implicit drops of values that may need
+    /// dropping, see resolution_inference.rs.)
+    pub drop_glue: Option<Typs>,
 }
 pub type Datatype = Arc<Spanned<DatatypeX>>;
 pub type Datatypes = Vec<Datatype>;

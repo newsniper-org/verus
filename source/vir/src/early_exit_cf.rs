@@ -82,6 +82,7 @@ fn expr_get_early_exits_rec(
             | ExprX::ImplicitReborrowOrSpecRead(..)
             | ExprX::ReadPlace(..)
             | ExprX::EvalAndResolve(..)
+            | ExprX::ChargeDeallocations(..)
             | ExprX::Old(..)
             | ExprX::Block(..)
             | ExprX::MatchGuardFreeze(..)

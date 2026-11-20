@@ -498,7 +498,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                     })
                 })
             }
-            ExprX::Assign { place, rhs, op, resolve, typ } => {
+            ExprX::Assign { place, rhs, op, resolve, typ, charge_drop } => {
                 let place = self.visit_place(place)?;
                 let rhs = self.visit_expr(rhs)?;
                 let typ = self.visit_typ(typ)?;
@@ -509,6 +509,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         op: *op,
                         resolve: *resolve,
                         typ: R::get(typ),
+                        charge_drop: *charge_drop,
                     })
                 })
             }
@@ -771,6 +772,10 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 let e1 = self.visit_expr(e1)?;
                 let e2 = self.visit_expr(e2)?;
                 R::ret(|| expr_new(ExprX::EvalAndResolve(R::get(e1), R::get(e2))))
+            }
+            ExprX::ChargeDeallocations(e) => {
+                let e = self.visit_expr(e)?;
+                R::ret(|| expr_new(ExprX::ChargeDeallocations(R::get(e))))
             }
             ExprX::Old(e) => {
                 let e = self.visit_expr(e)?;
@@ -1345,6 +1350,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
             user_defined_invariant_fn,
             sized_constraint,
             destructor,
+            drop_glue,
         } = &datatype.x;
         let type_bounds = self.visit_generic_bounds(typ_bounds)?;
         let variants = self.visit_variants(variants)?;
@@ -1364,6 +1370,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 user_defined_invariant_fn: user_defined_invariant_fn.clone(),
                 sized_constraint: R::get_opt(sized_constraint),
                 destructor: *destructor,
+                drop_glue: drop_glue.clone(),
             })
         })
     }

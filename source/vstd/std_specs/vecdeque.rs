@@ -497,7 +497,15 @@ pub assume_specification<'a, T, A: Allocator>[ VecDeque::<T, A>::iter ](
         0,
 ;
 
+/// Dropping a VecDeque drops its elements and frees its block, if it has one
+pub broadcast axiom fn axiom_drop_deallocations_vecdeque<T, A: Allocator>(v: VecDeque<T, A>)
+    ensures
+        #[trigger] super::super::alloc_check::drop_deallocations(v)
+            <= super::super::alloc_check::seq_drop_deallocations(v@) + 1,
+;
+
 pub broadcast group group_vec_dequeue_axioms {
+    axiom_drop_deallocations_vecdeque,
     axiom_next_cost_vecdeque_iter,
     axiom_aux_alloc_free_vecdeque_iter,
     axiom_next_back_cost_vecdeque_iter,

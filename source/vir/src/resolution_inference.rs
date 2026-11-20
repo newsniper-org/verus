@@ -298,10 +298,44 @@ pub struct ResolutionInfo {
     pub(crate) dual_mode: bool,
 }
 
+/// -V alloc-check: does the function count its deallocations (and so its implicit drops)?
+/// (The same functions as those that get a deallocation counter in ast_to_sst_func.rs.)
+pub fn function_counts_deallocations(
+    function: &Function,
+    functions: &HashMap<Fun, Function>,
+    alloc_check: bool,
+    check_api_safety: bool,
+) -> bool {
+    if !alloc_check
+        || function.x.mode != Mode::Exec
+        || check_api_safety
+        || function.x.attrs.allocator_runtime
+        || function.x.attrs.fip
+    {
+        return false;
+    }
+    if function.x.deallocations.is_some() {
+        return true;
+    }
+    match &function.x.kind {
+        crate::ast::FunctionKind::TraitMethodImpl { method, .. } => {
+            functions.get(method).map(|m| m.x.deallocations.is_some()).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// -V alloc-check: for each function that counts its implicit drops, the drops it charges (see
+/// DropCounting): (the span of the local's binding or temporary's expression, the drop site,
+/// whether the local is a parameter (whose span covers its type too))
+pub type DropSites = HashMap<Fun, Vec<(Span, Span, bool)>>;
+
 pub fn krate_infer_resolution(
     krate: &Krate,
     infos: &HashMap<Fun, Arc<ResolutionInfo>>,
-) -> Result<Krate, Vec<VirErr>> {
+    alloc_check: bool,
+    check_api_safety: bool,
+) -> Result<(Krate, DropSites), Vec<VirErr>> {
     let mut datatypes = HashMap::new();
     for datatype in krate.datatypes.iter() {
         let Dt::Path(path) = datatype.x.name.clone() else {
@@ -320,8 +354,16 @@ pub fn krate_infer_resolution(
 
     let mut krate = krate.clone();
     let mut errors = vec![];
+    let mut drop_sites = HashMap::new();
     for function in &mut Arc::make_mut(&mut krate).functions {
         if let Some(res_info) = infos.get(&function.x.name) {
+            let count_drops = !res_info.dual_mode
+                && function_counts_deallocations(
+                    function,
+                    &functions,
+                    alloc_check,
+                    check_api_safety,
+                );
             let new_body = infer_resolution(
                 &function.x.params,
                 &function.x.body.as_ref().unwrap(),
@@ -330,9 +372,13 @@ pub fn krate_infer_resolution(
                 &functions,
                 function.x.owning_module.as_ref().unwrap(),
                 &rtypes,
+                count_drops,
             );
             match new_body {
-                Ok(new_body) => {
+                Ok((new_body, sites)) => {
+                    if let Some(sites) = sites {
+                        drop_sites.insert(function.x.name.clone(), sites);
+                    }
                     Arc::make_mut(function).x.body = Some(new_body);
                 }
                 Err(err) => {
@@ -341,7 +387,7 @@ pub fn krate_infer_resolution(
             }
         }
     }
-    if errors.len() > 0 { Err(errors) } else { Ok(krate) }
+    if errors.len() > 0 { Err(errors) } else { Ok((krate, drop_sites)) }
 }
 
 /// Updates the given function body to include assume(has_resolved(...)) nodes
@@ -358,20 +404,33 @@ fn infer_resolution(
     functions: &HashMap<Fun, Function>,
     module: &Path,
     rtypes: &ResolutionTypes,
-) -> Result<Expr, VirErr> {
-    let (cfg, assigns_to_resolve, typ_inv_obligations, asserts, loops_with_no_back_edges) =
-        new_cfg(
-            params,
-            body,
-            &info.read_kind_finals,
-            datatypes,
-            functions,
-            &info.var_modes,
-            &info.temporary_modes,
-        )?;
+    count_drops: bool,
+) -> Result<(Expr, Option<Vec<(Span, Span, bool)>>), VirErr> {
+    let (
+        cfg,
+        assigns_to_resolve,
+        typ_inv_obligations,
+        asserts,
+        loops_with_no_back_edges,
+        drop_counting,
+    ) = new_cfg(
+        params,
+        body,
+        &info.read_kind_finals,
+        datatypes,
+        functions,
+        &info.var_modes,
+        &info.temporary_modes,
+        count_drops,
+    )?;
     //println!("{:}", pretty_cfg(&cfg));
     let resolutions = if info.dual_mode { vec![] } else { get_resolutions(&cfg, rtypes, asserts) };
-    apply_resolutions(
+    let drops = match &drop_counting {
+        Some(dc) => Some(drop_insertions(&cfg, dc)?),
+        None => None,
+    };
+    let sites = drops.as_ref().map(|d| d.sites.clone());
+    let e = apply_resolutions(
         &cfg,
         params,
         body,
@@ -381,7 +440,9 @@ fn infer_resolution(
         &info.typ_inv_info,
         loops_with_no_back_edges,
         module,
-    )
+        drops.unwrap_or_default(),
+    )?;
+    Ok((e, sites))
 }
 
 /// Represents the tree structure of "places" under consideration.
@@ -436,6 +497,14 @@ struct LocalCollection<'a> {
     functions: &'a HashMap<Fun, Function>,
     var_modes: HashMap<VarIdent, Mode>,
     temporary_modes: &'a HashMap<AstId, Mode>,
+
+    /// The locals whose trees are split below a `Box` (a part of the box's contents is a place
+    /// of its own): -V alloc-check does not count their drops yet
+    box_split: HashSet<usize>,
+    /// -V alloc-check: the closures (`TypX::AnonymousClosure` ids) created in the function that
+    /// move nothing into themselves, which have no drop glue (if Rust captures something by value
+    /// after all, the MIR cross-check finds the drop uncharged)
+    no_drop_closures: HashSet<usize>,
 }
 
 /// A projection that maps a place to a subplace
@@ -495,6 +564,9 @@ enum AstPosition {
     AfterTempAssignment(AstId),
     /// Extra place generated during Match that doesn't go anywhere nice
     MatchIntermediate,
+    /// For an ExprX::Assign node, after the evaluation of the right-hand side, before the
+    /// write (where the old value is dropped)
+    BeforeAssignWrite(AstId),
 }
 
 struct Instruction {
@@ -517,6 +589,9 @@ enum InstructionKind {
     /// or partially initialized. Whatever was there before gets dropped.
     /// The place is subsequently uninitialized.
     DropFrom(FlattenedPlace),
+    /// -V alloc-check: a drop of the program (`DropCounting::drops[i]`), counted for a function
+    /// with a `deallocates` bound. The analyses for resolution ignore it.
+    ChargedDrop(usize),
 }
 
 type BBIndex = usize;
@@ -569,6 +644,78 @@ struct Builder<'a> {
     fns: Vec<FnScope>,
 
     read_kind_finals: &'a ReadKindFinals,
+
+    /// -V alloc-check: the implicit drops of a function with a `deallocates` bound
+    drop_counting: Option<DropCounting>,
+}
+
+/// -V alloc-check, `deallocates d`: the function's implicit drops, which are charged to its
+/// deallocation counter (`ExprX::ChargeDeallocations`).
+///
+/// The drop points are those of rustc's MIR (before drop elaboration): a local is dropped at the
+/// end of its scope (a block for a `let`, an arm for the bindings of a match arm, the body for a
+/// parameter), on every path that leaves the scope (the end of the scope, `return`, `break`,
+/// `continue`); a temporary at the end of its statement; an overwritten place before an
+/// assignment writes it. At a drop point we charge `drop_deallocations` of each leaf of the place
+/// that may be initialized there (as drop elaboration drops the initialized parts): a leaf that
+/// is initialized on some paths only is charged under a ghost drop flag. The closures inside the
+/// function are not part of it (they cannot have a bound of their own yet).
+///
+/// The erase compile checks, on the MIR after drop elaboration, that each drop that may
+/// deallocate is one charged here (the same local and drop site, `drop_sites`); this analysis
+/// is not otherwise trusted to agree with rustc's.
+struct DropCounting {
+    /// The drop scopes of the outermost function, parallel to its `ScopeMap`'s scopes
+    scopes: Vec<DropScope>,
+    /// For each enclosing loop (parallel to `Builder::loops`): the numbers of drop scopes and of
+    /// statements around it
+    loop_depths: Vec<(usize, usize)>,
+    /// The spans of the enclosing blocks (the drop site of their `let` bindings)
+    block_spans: Vec<Span>,
+    /// The statements being built (innermost last), with the temporaries created in each
+    stmts: Vec<(Span, Vec<usize>)>,
+    /// Temporaries outside of any statement (dropped at the end of the body)
+    body_temps: Vec<usize>,
+    /// The function body (whose end also drops the parameters)
+    body_id: AstId,
+    body_span: Span,
+    /// The drop points (`InstructionKind::ChargedDrop`)
+    drops: Vec<DropPoint>,
+    /// The span of each local's binding or temporary's expression (for the MIR cross-check)
+    local_spans: HashMap<LocalName, Span>,
+    /// The parameters (whose spans cover their types too)
+    params: HashSet<VarIdent>,
+}
+
+struct DropScope {
+    /// The exec-mode variables bound by value in the scope
+    vars: Vec<VarIdent>,
+    /// The span whose end is the drop site of the variables
+    site: Option<Span>,
+}
+
+struct DropPoint {
+    kind: DropKind,
+    /// The drop site (the span of the scope or statement that ends, or of the assigned place)
+    site: Span,
+    /// Where the instruction is in the CFG (block, index)
+    loc: (BBIndex, usize),
+    position: AstPosition,
+}
+
+enum DropKind {
+    /// The place goes out of scope: its initialized leaves are dropped (and it is then
+    /// uninitialized)
+    ScopeEnd(FlattenedPlace),
+    /// An assignment overwrites the place: its initialized leaves are dropped
+    Assign(FlattenedPlace),
+    /// An assignment overwrites a place behind a mutable reference (always initialized): its
+    /// whole old value is dropped
+    AssignWhole(FlattenedPlace),
+    /// An assignment overwrites a place that is not tracked (an element of an array, a field of
+    /// a type with a `Drop` impl): its whole old value is dropped. (The tracked place that
+    /// contains it.)
+    AssignUntracked(FlattenedPlace),
 }
 
 #[derive(Clone)]
@@ -631,8 +778,16 @@ fn new_cfg<'a>(
     functions: &'a HashMap<Fun, Function>,
     var_modes: &'a HashMap<VarIdent, Mode>,
     temporary_modes: &'a HashMap<AstId, Mode>,
+    count_drops: bool,
 ) -> Result<
-    (CFG<'a>, Vec<AstId>, Vec<(AstId, FunWithVis)>, Vec<((BBIndex, usize), Expr)>, HashSet<AstId>),
+    (
+        CFG<'a>,
+        Vec<AstId>,
+        Vec<(AstId, FunWithVis)>,
+        Vec<((BBIndex, usize), Expr)>,
+        HashSet<AstId>,
+        Option<DropCounting>,
+    ),
     VirErr,
 > {
     let mut var_modes = var_modes.clone();
@@ -658,14 +813,47 @@ fn new_cfg<'a>(
             functions,
             var_modes,
             temporary_modes,
+            box_split: HashSet::new(),
+            no_drop_closures: HashSet::new(),
         },
         read_kind_finals,
+        drop_counting: if count_drops {
+            Some(DropCounting {
+                scopes: vec![],
+                loop_depths: vec![],
+                block_spans: vec![],
+                stmts: vec![],
+                body_temps: vec![],
+                body_id: body.span.id,
+                body_span: body.span.clone(),
+                drops: vec![],
+                local_spans: HashMap::new(),
+                params: params.iter().map(|p| p.x.name.clone()).collect(),
+            })
+        } else {
+            None
+        },
     };
     let start_bb = builder.new_bb(AstPosition::Before(body.span.id), true);
     builder.basic_blocks[start_bb].is_entry = true;
 
     builder.push_fn();
     builder.push_scope();
+    if builder.counting_drops() {
+        // (the parameters are dropped at the end of the body)
+        let vars = params
+            .iter()
+            .filter(|p| p.x.mode == Mode::Exec)
+            .map(|p| p.x.name.clone())
+            .collect::<Vec<_>>();
+        let dc = builder.drop_counting.as_mut().unwrap();
+        for param in params.iter() {
+            dc.local_spans.insert(LocalName::Named(param.x.name.clone()), param.span.clone());
+        }
+        let scope = dc.scopes.last_mut().unwrap();
+        scope.vars = vars;
+        scope.site = Some(body.span.clone());
+    }
 
     for param in params.iter() {
         builder.scope_insert(&param.x.name);
@@ -685,6 +873,13 @@ fn new_cfg<'a>(
     }
 
     let end_bb = builder.build(body, start_bb);
+    if let (Maybe::Some(end_bb), true) = (&end_bb, builder.counting_drops()) {
+        let end_bb = *end_bb;
+        if !matches!(&body.x, ExprX::Block(..)) {
+            // (a body that is a block drops them at its end, see ExprX::Block)
+            builder.drop_scopes_and_temps(end_bb, AstPosition::After(body.span.id), 0, 0, true);
+        }
+    }
     builder.optionally_exit(end_bb);
 
     builder.pop_scope();
@@ -704,6 +899,7 @@ fn new_cfg<'a>(
         builder.typ_inv_obligations,
         builder.asserts,
         builder.loops_with_no_back_edges,
+        builder.drop_counting,
     ))
 }
 
@@ -782,7 +978,7 @@ impl<'a> Builder<'a> {
                     self.fns.last_mut().unwrap().upvars_moved.push(fp.clone());
                 }
             }
-            InstructionKind::DropFrom(_) => {}
+            InstructionKind::DropFrom(_) | InstructionKind::ChargedDrop(_) => {}
         }
         self.push_instruction_raw(bb, post_instruction_position, instr);
     }
@@ -1065,6 +1261,13 @@ impl<'a> Builder<'a> {
             } => {
                 // Build the closure interior as a disconnected part of the CFG
                 let fn_scope = self.build_closure(&expr.span, params, proof_fn_modes, body);
+                if fn_scope.upvars_moved.is_empty() {
+                    if let TypX::AnonymousClosure(_, _, _, id) =
+                        &**undecorate_box_trk_shr_decorations(&expr.typ)
+                    {
+                        self.locals.no_drop_closures.insert(*id);
+                    }
+                }
 
                 // Emit instructions in the parent function that correspond to the
                 // construction of the closure.
@@ -1115,6 +1318,10 @@ impl<'a> Builder<'a> {
                     continue_bb: outer_body_bb,
                     continue_taken: false,
                 });
+                if let Some(dc) = &mut self.drop_counting {
+                    // (kept parallel to `loops`, also inside closures)
+                    dc.loop_depths.push((dc.scopes.len(), dc.stmts.len()));
+                }
 
                 self.basic_blocks[bb].successors.push(outer_body_bb);
 
@@ -1139,6 +1346,9 @@ impl<'a> Builder<'a> {
                     let cond_end_bb = self.build(cond, outer_body_bb);
                     let Maybe::Some(cond_end_bb) = cond_end_bb else {
                         self.loops.pop().unwrap();
+                        if let Some(dc) = &mut self.drop_counting {
+                            dc.loop_depths.pop().unwrap();
+                        }
                         return Maybe::Some(post_bb);
                     };
 
@@ -1159,6 +1369,9 @@ impl<'a> Builder<'a> {
                 let end_bb = self.build(body, inner_body_bb);
 
                 let loop_entry = self.loops.pop().unwrap();
+                if let Some(dc) = &mut self.drop_counting {
+                    dc.loop_depths.pop().unwrap();
+                }
 
                 match end_bb {
                     Maybe::Never => {
@@ -1222,12 +1435,29 @@ impl<'a> Builder<'a> {
                 if let Some(e) = e_opt {
                     bb = unwrap!(self.build(e, bb));
                 }
+                // (a return leaves every scope and statement of the function)
+                let position = match e_opt {
+                    Some(e) => AstPosition::After(e.span.id),
+                    None => AstPosition::Before(span_id),
+                };
+                self.drop_scopes_and_temps(bb, position, 0, 0, true);
                 self.basic_blocks[bb].is_exit = true;
                 Maybe::Never
             }
             ExprX::BreakOrContinue { label, is_break, value } => {
                 if let Some(value) = value {
                     bb = unwrap!(self.build(value, bb));
+                }
+                if self.counting_drops() {
+                    // (leaves the scopes and statements inside the loop)
+                    let i = self.loops.iter().rposition(|l| &l.label == label).unwrap();
+                    let (scopes_from, stmts_from) =
+                        self.drop_counting.as_ref().unwrap().loop_depths[i];
+                    let position = match value {
+                        Some(e) => AstPosition::After(e.span.id),
+                        None => AstPosition::Before(span_id),
+                    };
+                    self.drop_scopes_and_temps(bb, position, scopes_from, stmts_from, false);
                 }
                 let entry = Self::get_loop(&mut self.loops, label);
                 if *is_break {
@@ -1246,8 +1476,9 @@ impl<'a> Builder<'a> {
                 let _ = unwrap!(self.build(e, bb));
                 Maybe::Never
             }
-            ExprX::Assign { place, rhs, op, resolve, typ: _ } => {
+            ExprX::Assign { place, rhs, op, resolve, typ: _, charge_drop } => {
                 assert!(!resolve);
+                assert!(!charge_drop);
                 // Right-hand side first!
                 let bb = unwrap!(self.build(rhs, bb));
                 let (p, bb) = unwrap!(self.build_place_and_intern(place, bb, TypInv::Yes));
@@ -1261,6 +1492,10 @@ impl<'a> Builder<'a> {
                         // Exact: resolution handled by main part of the analysis
                         // Ghost: unsound to resolve because this place is ghost
                     }
+                }
+                if op.is_none() {
+                    // (the old value is dropped after the right-hand side, before the write)
+                    self.drop_for_assign(bb, span_id, place, &p);
                 }
                 match p {
                     ComputedPlace::Exact(p) => {
@@ -1321,17 +1556,39 @@ impl<'a> Builder<'a> {
                 }
             }
             ExprX::Block(stmts, e_opt) => {
+                let counting = self.counting_drops();
+                let scopes_before =
+                    self.drop_counting.as_ref().map(|dc| dc.scopes.len()).unwrap_or(0);
+                if counting {
+                    self.drop_counting.as_mut().unwrap().block_spans.push(expr.span.clone());
+                }
                 let mut scope_count = 0;
                 for s in stmts.iter() {
+                    if counting {
+                        self.drop_counting.as_mut().unwrap().stmts.push((s.span.clone(), vec![]));
+                    }
                     bb = match self.build_stmt(s, bb) {
                         Maybe::Some(bb) => bb,
                         Maybe::Never => {
                             for _i in 0..scope_count {
                                 self.pop_scope();
                             }
+                            if counting {
+                                let dc = self.drop_counting.as_mut().unwrap();
+                                dc.stmts.pop().unwrap();
+                                dc.block_spans.pop().unwrap();
+                            }
                             return Maybe::Never;
                         }
                     };
+                    if counting {
+                        // (the statement's temporaries are dropped at its end)
+                        let n = self.drop_counting.as_ref().unwrap().stmts.len();
+                        let n_scopes = self.drop_counting.as_ref().unwrap().scopes.len();
+                        let position = AstPosition::After(s.span.id);
+                        self.drop_scopes_and_temps(bb, position, n_scopes, n - 1, false);
+                        self.drop_counting.as_mut().unwrap().stmts.pop().unwrap();
+                    }
 
                     if let StmtX::Decl { .. } = &s.x {
                         scope_count += 1;
@@ -1344,9 +1601,28 @@ impl<'a> Builder<'a> {
                             for _i in 0..scope_count {
                                 self.pop_scope();
                             }
+                            if counting {
+                                self.drop_counting.as_mut().unwrap().block_spans.pop().unwrap();
+                            }
                             return Maybe::Never;
                         }
                     };
+                }
+                if counting {
+                    // The block's `let` bindings (and, for the body, the parameters and the
+                    // temporaries outside of statements) are dropped at its end
+                    let is_body = self.drop_counting.as_ref().unwrap().body_id == span_id;
+                    let position = if let Some(e) = e_opt {
+                        AstPosition::After(e.span.id)
+                    } else if let Some(s) = stmts.last() {
+                        AstPosition::After(s.span.id)
+                    } else {
+                        AstPosition::Before(span_id)
+                    };
+                    let n_stmts = self.drop_counting.as_ref().unwrap().stmts.len();
+                    let scopes_from = if is_body { 0 } else { scopes_before };
+                    self.drop_scopes_and_temps(bb, position, scopes_from, n_stmts, is_body);
+                    self.drop_counting.as_mut().unwrap().block_spans.pop().unwrap();
                 }
                 for _i in 0..scope_count {
                     self.pop_scope();
@@ -1355,6 +1631,9 @@ impl<'a> Builder<'a> {
             }
             ExprX::EvalAndResolve(..) => {
                 panic!("EvalAndResolve shouldn't be created yet");
+            }
+            ExprX::ChargeDeallocations(..) => {
+                panic!("ChargeDeallocations shouldn't be created yet");
             }
             ExprX::MatchGuardFreeze(..) => {
                 panic!("MatchGuardFreeze shouldn't be created yet");
@@ -1385,6 +1664,11 @@ impl<'a> Builder<'a> {
             StmtX::Decl { pattern, mode: _, init: None, els: None, assert_irrefutable: _ } => {
                 self.push_scope();
                 self.scope_insert_pattern(pattern);
+                if let Some(site) = self.drop_counting.as_ref().and_then(|dc| dc.block_spans.last())
+                {
+                    let site = site.clone();
+                    self.set_drop_scope_pattern(pattern, &site);
+                }
 
                 // If declaring a variable without initializing it, then we "drop" it.
                 // This probably isn't really necessary, but it
@@ -1425,6 +1709,11 @@ impl<'a> Builder<'a> {
 
                 self.push_scope();
                 self.scope_insert_pattern(pattern);
+                if let Some(site) = self.drop_counting.as_ref().and_then(|dc| dc.block_spans.last())
+                {
+                    let site = site.clone();
+                    self.set_drop_scope_pattern(pattern, &site);
+                }
 
                 for bound_var in
                     pattern_all_bound_vars_with_ownership(pattern, &self.locals.var_modes)
@@ -1564,11 +1853,20 @@ impl<'a> Builder<'a> {
                     let temp_name = self.locals.new_temp_name(place.span.id);
 
                     let fpt = FlattenedPlaceTyped {
-                        local: temp_name,
+                        local: temp_name.clone(),
                         typ: place.typ.clone(),
                         projections: vec![],
                     };
                     let fp = self.locals.add_place(&fpt);
+                    if *mode == Mode::Exec && self.counting_drops() {
+                        // (dropped at the end of its statement)
+                        let dc = self.drop_counting.as_mut().unwrap();
+                        dc.local_spans.insert(temp_name, place.span.clone());
+                        match dc.stmts.last_mut() {
+                            Some((_, temps)) => temps.push(fp.local),
+                            None => dc.body_temps.push(fp.local),
+                        }
+                    }
                     self.push_instruction_propagate(
                         bb,
                         AstPosition::AfterTempAssignment(place.span.id),
@@ -1904,6 +2202,7 @@ impl<'a> Builder<'a> {
 
         self.push_scope();
         self.scope_insert_pattern(&arm.x.pattern);
+        self.set_drop_scope_pattern(&arm.x.pattern, &arm.span);
 
         for bound_var in
             pattern_all_bound_vars_with_ownership(&arm.x.pattern, &self.locals.var_modes)
@@ -1923,6 +2222,14 @@ impl<'a> Builder<'a> {
         }
 
         let arm_bb_end = self.build(&arm.x.body, arm_bb);
+        if let Maybe::Some(arm_bb_end) = arm_bb_end {
+            if self.counting_drops() {
+                let n = self.drop_counting.as_ref().unwrap().scopes.len();
+                let stmts = self.drop_counting.as_ref().unwrap().stmts.len();
+                let position = AstPosition::After(arm.x.body.span.id);
+                self.drop_scopes_and_temps(arm_bb_end, position, n - 1, stmts, false);
+            }
+        }
 
         self.pop_scope();
 
@@ -2013,10 +2320,129 @@ impl<'a> Builder<'a> {
 
     fn push_scope(&mut self) {
         self.fns.last_mut().unwrap().scope_map.push_scope(false);
+        if self.counting_drops() {
+            let dc = self.drop_counting.as_mut().unwrap();
+            dc.scopes.push(DropScope { vars: vec![], site: None });
+        }
     }
 
     fn pop_scope(&mut self) {
+        if self.counting_drops() {
+            let dc = self.drop_counting.as_mut().unwrap();
+            dc.scopes.pop().unwrap();
+        }
         self.fns.last_mut().unwrap().scope_map.pop_scope();
+    }
+
+    //// -V alloc-check: drop counting (see DropCounting)
+
+    /// Are we counting the drops here (in the function, not in a closure inside it)?
+    fn counting_drops(&self) -> bool {
+        self.drop_counting.is_some() && self.fns.len() == 1
+    }
+
+    /// The innermost scope binds the pattern's variables, which are dropped at the end of `site`
+    fn set_drop_scope_pattern(&mut self, pattern: &Pattern, site: &Span) {
+        if !self.counting_drops() {
+            return;
+        }
+        let vars: Vec<VarIdent> =
+            pattern_all_bound_vars_with_ownership(pattern, &self.locals.var_modes)
+                .into_iter()
+                .filter(|v| self.locals.var_modes.get(&v.name) == Some(&Mode::Exec))
+                .map(|v| v.name)
+                .collect();
+        let mut spans = vec![];
+        pattern_binding_spans(pattern, &mut spans);
+        let dc = self.drop_counting.as_mut().unwrap();
+        for (x, span) in spans.into_iter() {
+            dc.local_spans.insert(LocalName::Named(x), span);
+        }
+        let scope = dc.scopes.last_mut().unwrap();
+        scope.vars = vars;
+        scope.site = Some(site.clone());
+    }
+
+    fn push_charged_drop(
+        &mut self,
+        bb: BBIndex,
+        position: AstPosition,
+        kind: DropKind,
+        site: &Span,
+    ) {
+        let dc = self.drop_counting.as_mut().unwrap();
+        let i = dc.drops.len();
+        let loc = (bb, self.basic_blocks[bb].instructions.len());
+        dc.drops.push(DropPoint { kind, site: site.clone(), loc, position });
+        self.push_instruction_raw(bb, position, InstructionKind::ChargedDrop(i));
+    }
+
+    /// Drop (innermost first) the variables of the drop scopes from index `scopes_from` on, and
+    /// the temporaries of the statements from index `stmts_from` on (and, if `body_temps`, the
+    /// temporaries outside of statements)
+    fn drop_scopes_and_temps(
+        &mut self,
+        bb: BBIndex,
+        position: AstPosition,
+        scopes_from: usize,
+        stmts_from: usize,
+        body_temps: bool,
+    ) {
+        if !self.counting_drops() {
+            return;
+        }
+        let mut to_drop: Vec<(usize, Span)> = vec![];
+        let dc = self.drop_counting.as_ref().unwrap();
+        // (temporaries are dropped at the end of their statement, before the locals of the
+        // enclosing scopes)
+        for (span, temps) in dc.stmts[stmts_from..].iter().rev() {
+            for t in temps.iter().rev() {
+                to_drop.push((*t, span.clone()));
+            }
+        }
+        if body_temps {
+            for t in dc.body_temps.iter().rev() {
+                to_drop.push((*t, dc.body_span.clone()));
+            }
+        }
+        for scope in dc.scopes[scopes_from..].iter().rev() {
+            for x in scope.vars.iter().rev() {
+                if let Some(idx) = self.locals.ident_to_idx.get(&LocalName::Named(x.clone())) {
+                    to_drop.push((*idx, scope.site.clone().expect("drop scope site")));
+                }
+            }
+        }
+        for (local, site) in to_drop.into_iter() {
+            let fp = FlattenedPlace { local, projections: vec![] };
+            self.push_charged_drop(bb, position, DropKind::ScopeEnd(fp), &site);
+        }
+    }
+
+    /// The drops of an assignment `place = ..` (that is not to a ghost place)
+    fn drop_for_assign(&mut self, bb: BBIndex, assign_id: AstId, place: &Place, p: &ComputedPlace) {
+        if !self.counting_drops() {
+            return;
+        }
+        let position = AstPosition::BeforeAssignWrite(assign_id);
+        match p {
+            ComputedPlace::Exact(fp)
+                if fp.has_deref() || self.locals.locals[fp.local].name.is_temp() =>
+            {
+                // (behind a mutable reference, always initialized; or part of a temporary,
+                // which is evaluated with the place, after the right-hand side)
+                let kind = DropKind::AssignWhole(fp.clone());
+                self.push_charged_drop(bb, position, kind, &place.span);
+            }
+            ComputedPlace::Exact(fp) => {
+                let kind = DropKind::Assign(fp.clone());
+                self.push_charged_drop(bb, position, kind, &place.span);
+            }
+            ComputedPlace::Partial(fp) => {
+                let kind = DropKind::AssignUntracked(fp.clone());
+                self.push_charged_drop(bb, position, kind, &place.span);
+            }
+            ComputedPlace::Ghost(_) => {}
+        }
     }
 
     fn scope_insert(&mut self, id: &VarIdent) {
@@ -2365,8 +2791,17 @@ impl<'a> LocalCollection<'a> {
         }
         let idx = self.ident_to_idx[&p.local];
 
-        let projections =
-            Self::extend_tree(&mut self.locals[idx].tree, &p.typ, &p.projections, &self.datatypes);
+        let mut below_box = false;
+        let projections = Self::extend_tree(
+            &mut self.locals[idx].tree,
+            &p.typ,
+            &p.projections,
+            &self.datatypes,
+            &mut below_box,
+        );
+        if below_box {
+            self.box_split.insert(idx);
+        }
 
         FlattenedPlace { local: idx, projections: projections }
     }
@@ -2376,6 +2811,7 @@ impl<'a> LocalCollection<'a> {
         root_typ: &Typ,
         projections: &[ProjectionTyped],
         datatypes: &HashMap<Path, Datatype>,
+        below_box: &mut bool,
     ) -> Vec<Projection> {
         let mut tree: &mut PlaceTree = tree;
         let mut output_projections: Vec<Projection> = vec![];
@@ -2398,6 +2834,9 @@ impl<'a> LocalCollection<'a> {
                 // which hasn't run yet.
                 // Thus, we just skip over them to avoid panicking.
                 let typ = undecorate_box_trk_shr_decorations(&cur_typ);
+                if typ_has_box_decoration(&cur_typ) {
+                    *below_box = true;
+                }
 
                 match &**typ {
                     TypX::MutRef(inner_typ) => {
@@ -2766,6 +3205,16 @@ impl<'a> LocalCollection<'a> {
     }
 }
 
+fn typ_has_box_decoration(t: &Typ) -> bool {
+    match &**t {
+        TypX::Decorate(TypDecoration::Box, _, _) => true,
+        TypX::Decorate(TypDecoration::Tracked, _, t) | TypX::Decorate(TypDecoration::Ref, _, t) => {
+            typ_has_box_decoration(t)
+        }
+        _ => false,
+    }
+}
+
 fn undecorate_box_trk_shr_decorations(t: &Typ) -> &Typ {
     match &**t {
         TypX::Decorate(TypDecoration::Box, _, t)
@@ -2866,6 +3315,7 @@ impl FlattenedPlace {
             InstructionKind::Overwrite(sp) => self.intersects(sp),
             InstructionKind::Mutate(sp) => self.intersects(sp),
             InstructionKind::DropFrom(_) => false,
+            InstructionKind::ChargedDrop(_) => false,
         }
     }
 
@@ -3322,6 +3772,9 @@ fn pretty_instr(locals: &LocalCollection, instr: &Instruction) -> String {
         InstructionKind::Overwrite(fp) => ("Overwrite", fp),
         InstructionKind::Mutate(fp) => ("Mutate", fp),
         InstructionKind::DropFrom(fp) => ("DropFrom", fp),
+        InstructionKind::ChargedDrop(i) => {
+            return format!("ChargedDrop({:})", i);
+        }
     };
     format!("{:}({:})", name, pretty_flattened_place(locals, fp))
 }
@@ -3437,6 +3890,7 @@ impl DataflowState for InitializationPossibilities {
                     *self
                 }
             }
+            InstructionKind::ChargedDrop(_) => *self,
         }
     }
 }
@@ -3484,6 +3938,7 @@ impl DataflowState for ResolveSafety {
                     *self
                 }
             }
+            InstructionKind::ChargedDrop(_) => *self,
         }
     }
 }
@@ -3723,7 +4178,10 @@ fn apply_resolutions(
     typ_inv_info: &crate::modes::TypeInvInfo,
     loops_with_no_back_edges: HashSet<AstId>,
     module: &Path,
+    drops: DropInsertions,
 ) -> Result<Expr, VirErr> {
+    let DropInsertions { items: drop_items, temps: drop_temps, flags: drop_flags, sites: _ } =
+        drops;
     // All the resolutions that apply to PlaceX::Temporary nodes
     let mut temp_map = HashMap::<AstId, (Vec<FlattenedPlace>, bool)>::new();
     let mut typ_inv_map = HashMap::<AstId, (FunWithVis, bool)>::new();
@@ -3765,6 +4223,10 @@ fn apply_resolutions(
                 temp_map.entry(ast_id).or_insert_with_key(|_| (vec![], false)).0.push(r.place);
                 continue;
             }
+            AstPosition::BeforeAssignWrite(_) => {
+                // (only drop points are here, which the resolution analysis does not see)
+                continue;
+            }
         };
 
         let entry = id_map
@@ -3784,6 +4246,7 @@ fn apply_resolutions(
             AstPosition::OnUnwind(_) => unreachable!(),
             AstPosition::AfterTempAssignment(_) => unreachable!(),
             AstPosition::MatchIntermediate => unreachable!(),
+            AstPosition::BeforeAssignWrite(_) => unreachable!(),
             AstPosition::AfterBool(_ast_id, false) => {
                 entry.3.push(r.place);
             }
@@ -3806,7 +4269,12 @@ fn apply_resolutions(
         assert!(found.is_none());
     }
 
-    let mut maps = (id_map, temp_map, typ_inv_map);
+    // -V alloc-check: the temporaries whose values the drop charges read must be named
+    for ast_id in drop_temps.iter() {
+        temp_map.entry(*ast_id).or_insert_with_key(|_| (vec![], false));
+    }
+
+    let mut maps = (id_map, temp_map, typ_inv_map, drop_items);
 
     let mut scope_map = VisitorScopeMap::new();
     scope_map.push_scope(true);
@@ -3823,7 +4291,7 @@ fn apply_resolutions(
         body,
         &mut scope_map,
         &mut maps,
-        &|(id_map, _, _), scope_map, expr: &Expr| {
+        &|(id_map, _, _, drop_items), scope_map, expr: &Expr| {
             let expr2 = crate::user_defined_type_invariants::annotate_one(
                 expr,
                 typ_inv_info,
@@ -3833,40 +4301,81 @@ fn apply_resolutions(
             )?;
             let expr2 = maybe_set_loop_no_back_edge(expr2, &loops_with_no_back_edges);
 
-            if let Some((befores, afters, after_args, after_f, after_t, assn, seen_yet)) =
-                id_map.get_mut(&expr.span.id)
-            {
+            let res = id_map.get_mut(&expr.span.id);
+            let drops = drop_items.get_mut(&expr.span.id);
+            if res.is_none() && drops.is_none() {
+                return Ok(expr2.clone());
+            }
+            let mut befores_exprs = vec![];
+            let mut afters_exprs = vec![];
+            let mut after_args_exprs = vec![];
+            let mut after_f_exprs = vec![];
+            let mut after_t_exprs = vec![];
+            let mut assign_write_exprs = vec![];
+            let mut e = expr2.clone();
+            if let Some((befores, afters, after_args, after_f, after_t, assn, seen_yet)) = res {
                 if *seen_yet {
                     panic!("Verus internal error: duplicate AstId {:?}", expr.span);
                 }
                 *seen_yet = true;
 
-                let befores_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, befores);
-                let afters_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, afters);
-                let after_args_exprs =
-                    filter_and_make_assumes(cfg, &expr.span, scope_map, after_args);
-                let after_f_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, after_f);
-                let after_t_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, after_t);
+                befores_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, befores);
+                afters_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, afters);
+                after_args_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, after_args);
+                after_f_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, after_f);
+                after_t_exprs = filter_and_make_assumes(cfg, &expr.span, scope_map, after_t);
 
-                let mut e = expr2.clone();
                 if *assn {
                     e = apply_resolution_to_assignment(&e);
                 }
-
-                let e = apply_after_args_exprs(e, after_args_exprs);
-                let e = apply_before_exprs(e, befores_exprs);
-                let e = apply_after_exprs(e, afters_exprs);
-                let e = apply_after_bool_exprs(e, after_f_exprs, after_t_exprs);
-
-                Ok(e)
-            } else {
-                Ok(expr2.clone())
             }
+            if let Some(d) = drops {
+                if d.seen {
+                    panic!("Verus internal error: duplicate AstId {:?}", expr.span);
+                }
+                d.seen = true;
+                befores_exprs.extend(drop_items_in_scope(&expr.span, scope_map, &d.befores)?);
+                afters_exprs.extend(drop_items_in_scope(&expr.span, scope_map, &d.afters)?);
+                after_args_exprs.extend(drop_items_in_scope(&expr.span, scope_map, &d.after_args)?);
+                after_f_exprs.extend(drop_items_in_scope(&expr.span, scope_map, &d.after_f)?);
+                after_t_exprs.extend(drop_items_in_scope(&expr.span, scope_map, &d.after_t)?);
+                assign_write_exprs = drop_items_in_scope(&expr.span, scope_map, &d.assign_write)?;
+                if d.charge_assign {
+                    e = match &e.x {
+                        ExprX::Assign { place, rhs, op, resolve, typ, charge_drop: _ } => {
+                            e.new_x(ExprX::Assign {
+                                place: place.clone(),
+                                rhs: rhs.clone(),
+                                op: *op,
+                                resolve: *resolve,
+                                typ: typ.clone(),
+                                charge_drop: true,
+                            })
+                        }
+                        _ => panic!("charge_assign expects Assign node"),
+                    };
+                }
+            }
+
+            let e = apply_assign_write_exprs(e, assign_write_exprs);
+            let e = apply_after_args_exprs(e, after_args_exprs);
+            let e = apply_before_exprs(e, befores_exprs);
+            let e = apply_after_exprs(e, afters_exprs);
+            let e = apply_after_bool_exprs(e, after_f_exprs, after_t_exprs);
+
+            Ok(e)
         },
-        &|(id_map, _, _), scope_map, stmt| {
-            if let Some((befores, afters, after_args, after_f, after_t, assn, seen_yet)) =
-                id_map.get_mut(&stmt.span.id)
-            {
+        &|(id_map, _, _, drop_items), scope_map, stmt| {
+            let res = id_map.get_mut(&stmt.span.id);
+            let drops = drop_items.get_mut(&stmt.span.id);
+            if res.is_none() && drops.is_none() {
+                return Ok(vec![stmt.clone()]);
+            }
+            let mut befores_exprs = vec![];
+            let mut afters_exprs = vec![];
+            let empty = vec![];
+            let mut res_afters = &empty;
+            if let Some((befores, afters, after_args, after_f, after_t, assn, seen_yet)) = res {
                 if *seen_yet {
                     panic!("Verus internal error: duplicate AstId");
                 }
@@ -3879,30 +4388,51 @@ fn apply_resolutions(
                 assert!(after_args.len() == 0);
                 *seen_yet = true;
 
-                let befores_exprs = filter_and_make_assumes(cfg, &stmt.span, scope_map, befores);
-
-                scope_map.push_scope(true);
-                match &stmt.x {
-                    StmtX::Expr(_) => {}
-                    StmtX::Decl { pattern, mode: _, init, els: _, assert_irrefutable: _ } => {
-                        use crate::ast_visitor::Scoper;
-                        scope_map.insert_pattern_bindings(pattern, init.is_some());
-                    }
-                }
-                let afters_exprs = filter_and_make_assumes(cfg, &stmt.span, scope_map, afters);
-                scope_map.pop_scope();
-
-                let mut v = exprs_to_stmts(befores_exprs);
-                v.push(stmt.clone());
-                v.append(&mut exprs_to_stmts(afters_exprs));
-
-                Ok(v)
-            } else {
-                Ok(vec![stmt.clone()])
+                befores_exprs = filter_and_make_assumes(cfg, &stmt.span, scope_map, befores);
+                res_afters = afters;
             }
+            let mut drop_afters = &vec![];
+            if let Some(d) = drops {
+                if d.seen {
+                    panic!("Verus internal error: duplicate AstId");
+                }
+                d.seen = true;
+                if d.after_args.len() > 0
+                    || d.after_f.len() > 0
+                    || d.after_t.len() > 0
+                    || d.assign_write.len() > 0
+                    || d.charge_assign
+                {
+                    return Err(crate::messages::internal_error(
+                        &stmt.span,
+                        "a drop is charged at an expression position of a statement",
+                    ));
+                }
+                befores_exprs.extend(drop_items_in_scope(&stmt.span, scope_map, &d.befores)?);
+                drop_afters = &d.afters;
+            }
+
+            scope_map.push_scope(true);
+            match &stmt.x {
+                StmtX::Expr(_) => {}
+                StmtX::Decl { pattern, mode: _, init, els: _, assert_irrefutable: _ } => {
+                    use crate::ast_visitor::Scoper;
+                    scope_map.insert_pattern_bindings(pattern, init.is_some());
+                }
+            }
+            afters_exprs.extend(filter_and_make_assumes(cfg, &stmt.span, scope_map, res_afters));
+            let drop_afters_exprs = drop_items_in_scope(&stmt.span, scope_map, drop_afters);
+            scope_map.pop_scope();
+            afters_exprs.extend(drop_afters_exprs?);
+
+            let mut v = exprs_to_stmts(befores_exprs);
+            v.push(stmt.clone());
+            v.append(&mut exprs_to_stmts(afters_exprs));
+
+            Ok(v)
         },
         &|_, t| Ok(t.clone()),
-        &|(_, temp_map, typ_inv_map), scope_map, p| {
+        &|(_, temp_map, typ_inv_map, _), scope_map, p| {
             let p1 = if matches!(&p.x, PlaceX::Temporary(_)) {
                 if let Some((afters, seen_yet)) = temp_map.get_mut(&p.span.id) {
                     if *seen_yet {
@@ -3935,7 +4465,16 @@ fn apply_resolutions(
         &|_, _, pattern| Ok(pattern.clone()),
     )?;
 
-    let (id_map, temp_map, typ_inv_map) = maps;
+    let (id_map, temp_map, typ_inv_map, drop_items) = maps;
+
+    for (_, d) in drop_items.iter() {
+        if !d.seen {
+            return Err(crate::messages::internal_error(
+                &body.span,
+                "-V alloc-check: a drop of this function could not be placed",
+            ));
+        }
+    }
 
     for (_, (_, _, _, _, _, _, found)) in id_map.iter() {
         if !*found {
@@ -3955,11 +4494,60 @@ fn apply_resolutions(
         }
     }
 
-    if temp_map.len() > 0 {
-        result = add_decls_for_temps(cfg, &temp_map, &result);
+    if temp_map.len() > 0 || drop_flags.len() > 0 {
+        result = add_decls_for_temps(cfg, &temp_map, &drop_flags, &result);
     }
 
     Ok(result)
+}
+
+/// The drop items (see `DropInsertions`), whose named locals must be in scope
+fn drop_items_in_scope(
+    span: &Span,
+    scope_map: &VisitorScopeMap,
+    items: &Vec<(Expr, Option<VarIdent>)>,
+) -> Result<Vec<Expr>, VirErr> {
+    let mut v = vec![];
+    for (e, local) in items.iter() {
+        if let Some(x) = local {
+            if !scope_map.contains_key(x) {
+                return Err(crate::messages::internal_error(
+                    span,
+                    format!(
+                        "-V alloc-check: a drop of `{}` is charged where it is not in scope",
+                        crate::def::user_local_name(x)
+                    ),
+                ));
+            }
+        }
+        v.push(e.clone());
+    }
+    Ok(v)
+}
+
+/// Run the given statements in an assignment after its right-hand side, before the write
+fn apply_assign_write_exprs(expr: Expr, exprs: Vec<Expr>) -> Expr {
+    if exprs.len() == 0 {
+        return expr;
+    }
+    match &expr.x {
+        ExprX::Assign { place, rhs, op, resolve, typ, charge_drop } => {
+            let stmts: Vec<Stmt> = exprs_to_stmts(exprs);
+            let block =
+                SpannedTyped::new(&rhs.span, &unit_typ(), ExprX::Block(Arc::new(stmts), None));
+            let rhs =
+                SpannedTyped::new(&rhs.span, &rhs.typ, ExprX::EvalAndResolve(rhs.clone(), block));
+            expr.new_x(ExprX::Assign {
+                place: place.clone(),
+                rhs,
+                op: *op,
+                resolve: *resolve,
+                typ: typ.clone(),
+                charge_drop: *charge_drop,
+            })
+        }
+        _ => panic!("apply_assign_write_exprs expects Assign node"),
+    }
 }
 
 impl ResolutionToInsert {
@@ -4012,7 +4600,7 @@ fn make_assume(cfg: &CFG, span: &Span, fp: &FlattenedPlace) -> Expr {
 /// (Equivalently, adds an `assume(has_resolved(...))` for the value being overwritten
 fn apply_resolution_to_assignment(e: &Expr) -> Expr {
     match &e.x {
-        ExprX::Assign { place, rhs, op, resolve, typ } => {
+        ExprX::Assign { place, rhs, op, resolve, typ, charge_drop } => {
             assert!(!resolve);
             e.new_x(ExprX::Assign {
                 place: place.clone(),
@@ -4020,6 +4608,7 @@ fn apply_resolution_to_assignment(e: &Expr) -> Expr {
                 op: *op,
                 resolve: true,
                 typ: typ.clone(),
+                charge_drop: *charge_drop,
             })
         }
         _ => {
@@ -4195,6 +4784,7 @@ fn apply_temp_simplification(cfg: &CFG, place: &Place, exprs: Vec<Expr>) -> Plac
             op: None,
             typ: place.typ.clone(),
             resolve: false,
+            charge_drop: false,
         },
     );
 
@@ -4212,6 +4802,7 @@ fn apply_temp_simplification(cfg: &CFG, place: &Place, exprs: Vec<Expr>) -> Plac
 fn add_decls_for_temps(
     cfg: &CFG,
     temp_map: &HashMap<AstId, (Vec<FlattenedPlace>, bool)>,
+    drop_flags: &Vec<VarIdent>,
     expr: &Expr,
 ) -> Expr {
     // Declare all temp vars at the beginning of the function body
@@ -4236,6 +4827,21 @@ fn add_decls_for_temps(
             }
         }
     }
+    // -V alloc-check: the drop flags, initially false
+    for x in drop_flags.iter() {
+        stmts.push(Spanned::new(
+            expr.span.clone(),
+            StmtX::Decl {
+                pattern: PatternX::simple_var(x.clone(), &expr.span, &bool_typ()),
+                mode: None, // doesn't matter
+                init: None,
+                els: None,
+                assert_irrefutable: false,
+            },
+        ));
+        let e = mk_flag_assign(&expr.span, x, false);
+        stmts.push(Spanned::new(expr.span.clone(), StmtX::Expr(e)));
+    }
     SpannedTyped::new(&expr.span, &expr.typ, ExprX::Block(Arc::new(stmts), Some(expr.clone())))
 }
 
@@ -4250,4 +4856,460 @@ fn maybe_set_loop_no_back_edge(e: Expr, loops_with_no_back_edges: &HashSet<AstId
     } else {
         e
     }
+}
+
+////// -V alloc-check: charging the implicit drops (see DropCounting)
+
+/// The (name, span) of each variable that the pattern binds
+fn pattern_binding_spans(pattern: &Pattern, out: &mut Vec<(VarIdent, Span)>) {
+    match &pattern.x {
+        PatternX::Var(binding) => out.push((binding.name.clone(), pattern.span.clone())),
+        PatternX::Binding { binding, sub_pat } => {
+            out.push((binding.name.clone(), pattern.span.clone()));
+            pattern_binding_spans(sub_pat, out);
+        }
+        PatternX::Constructor(_, _, binders) => {
+            for b in binders.iter() {
+                pattern_binding_spans(&b.a, out);
+            }
+        }
+        PatternX::Or(p1, _) | PatternX::ImmutRef(p1) | PatternX::MutRef(p1) => {
+            pattern_binding_spans(p1, out)
+        }
+        PatternX::Slice(pats) => {
+            for p in pats.iter() {
+                pattern_binding_spans(p, out);
+            }
+        }
+        PatternX::Wildcard | PatternX::Expr(_) | PatternX::Range(..) => {}
+    }
+}
+
+/// Initialization of a place for the drop analysis: may it be initialized, and may it be
+/// uninitialized? (A drop point ends the life of the place, unlike for the resolution analysis.)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct DropInit {
+    can_be_uninit: bool,
+    can_be_init: bool,
+}
+
+struct DropInitConst {
+    place: FlattenedPlace,
+    /// For each drop point: the place whose life it ends (a scope end), if any
+    ends: Arc<Vec<Option<FlattenedPlace>>>,
+}
+
+impl DataflowState for DropInit {
+    type Const = DropInitConst;
+
+    fn join(&mut self, b: &Self) {
+        *self = DropInit {
+            can_be_uninit: self.can_be_uninit || b.can_be_uninit,
+            can_be_init: self.can_be_init || b.can_be_init,
+        };
+    }
+
+    // forward transfer
+    fn transfer(&self, instr: &Instruction, c: &DropInitConst) -> Self {
+        let uninit = DropInit { can_be_uninit: true, can_be_init: false };
+        match &instr.kind {
+            InstructionKind::MoveFrom(sp) | InstructionKind::DropFrom(sp) => {
+                if sp.contains(&c.place) { uninit } else { *self }
+            }
+            InstructionKind::Overwrite(sp) => {
+                if sp.contains(&c.place) {
+                    DropInit { can_be_uninit: false, can_be_init: true }
+                } else {
+                    *self
+                }
+            }
+            InstructionKind::Mutate(_) => *self,
+            InstructionKind::ChargedDrop(i) => match &c.ends[*i] {
+                Some(sp) if sp.contains(&c.place) => uninit,
+                _ => *self,
+            },
+        }
+    }
+}
+
+/// -V alloc-check: what the drop points insert into the body
+#[derive(Default)]
+struct DropInsertions {
+    items: HashMap<AstId, DropItems>,
+    /// The temporaries whose values the charges read (named as for resolutions)
+    temps: HashSet<AstId>,
+    /// The drop flags (declared at the start of the body, initially false)
+    flags: Vec<VarIdent>,
+    /// (the span of the local's binding or temporary's expression, the drop site, whether the
+    /// local is a parameter) of each charged drop, for the MIR cross-check
+    sites: Vec<(Span, Span, bool)>,
+}
+
+/// The statements (charges, drop flag updates) inserted at an AstId, with the named local that
+/// each one reads (which must be in scope there)
+#[derive(Default)]
+struct DropItems {
+    befores: Vec<(Expr, Option<VarIdent>)>,
+    afters: Vec<(Expr, Option<VarIdent>)>,
+    after_args: Vec<(Expr, Option<VarIdent>)>,
+    after_f: Vec<(Expr, Option<VarIdent>)>,
+    after_t: Vec<(Expr, Option<VarIdent>)>,
+    assign_write: Vec<(Expr, Option<VarIdent>)>,
+    /// The assignment charges the drop of its whole old value (`charge_drop`)
+    charge_assign: bool,
+    seen: bool,
+}
+
+impl DropInsertions {
+    fn push(
+        &mut self,
+        span: &Span,
+        position: AstPosition,
+        e: Expr,
+        local: Option<VarIdent>,
+    ) -> Result<(), VirErr> {
+        let (id, which): (AstId, fn(&mut DropItems) -> &mut Vec<(Expr, Option<VarIdent>)>) =
+            match position {
+                AstPosition::Before(id) => (id, |d| &mut d.befores),
+                AstPosition::After(id) => (id, |d| &mut d.afters),
+                AstPosition::AfterArguments(id) => (id, |d| &mut d.after_args),
+                AstPosition::AfterBool(id, false) => (id, |d| &mut d.after_f),
+                AstPosition::AfterBool(id, true) => (id, |d| &mut d.after_t),
+                AstPosition::BeforeAssignWrite(id) => (id, |d| &mut d.assign_write),
+                // (only normal returns are counted)
+                AstPosition::OnUnwind(_) => return Ok(()),
+                AstPosition::AfterTempAssignment(_) | AstPosition::MatchIntermediate => {
+                    return Err(error(
+                        span,
+                        "-V alloc-check: Verus cannot count this drop yet (a value that is moved on some paths only, in a position Verus cannot follow); move or drop the value explicitly on every path",
+                    ));
+                }
+            };
+        which(self.items.entry(id).or_default()).push((e, local));
+        Ok(())
+    }
+}
+
+/// May dropping a value of this type run drop glue? (false only when it certainly does not;
+/// the MIR cross-check catches a drop that this misses)
+fn typ_may_need_drop(
+    typ: &Typ,
+    datatypes: &HashMap<Path, Datatype>,
+    no_drop_closures: &HashSet<usize>,
+) -> bool {
+    let rec = |t: &Typ| typ_may_need_drop(t, datatypes, no_drop_closures);
+    match &**typ {
+        TypX::AnonymousClosure(_, _, _, id) => !no_drop_closures.contains(id),
+        TypX::Bool | TypX::Int(_) | TypX::Real | TypX::Float(_) | TypX::FnDef(..) => false,
+        TypX::MutRef(_) => false,
+        TypX::Decorate(dec, _, _) => match dec {
+            TypDecoration::Ref
+            | TypDecoration::Ghost
+            | TypDecoration::Tracked
+            | TypDecoration::Never
+            | TypDecoration::ConstPtr => false,
+            TypDecoration::Box | TypDecoration::Rc | TypDecoration::Arc => true,
+        },
+        TypX::Primitive(prim, typs) => match prim {
+            crate::ast::Primitive::Array | crate::ast::Primitive::Slice => rec(&typs[0]),
+            crate::ast::Primitive::StrSlice
+            | crate::ast::Primitive::Ptr
+            | crate::ast::Primitive::Global => false,
+        },
+        TypX::Datatype(Dt::Tuple(_), typs, _) => typs.iter().any(|t| rec(t)),
+        TypX::Datatype(Dt::Path(path), typs, _) => {
+            let Some(datatype) = datatypes.get(path) else {
+                return true;
+            };
+            // (rustc's components of its drop glue, see DatatypeX::drop_glue)
+            let Some(components) = &datatype.x.drop_glue else {
+                return true;
+            };
+            let substs: HashMap<Ident, Typ> = datatype
+                .x
+                .typ_params
+                .iter()
+                .map(|(x, _)| x.clone())
+                .zip(typs.iter().cloned())
+                .collect();
+            components.iter().any(|c| rec(&crate::sst_util::subst_typ(&substs, c)))
+        }
+        _ => true,
+    }
+}
+
+/// The IsVariant conditions under which the place exists
+fn place_variant_conditions(
+    place: &Place,
+    datatypes: &HashMap<Path, Datatype>,
+    out: &mut Vec<Expr>,
+) {
+    match &place.x {
+        PlaceX::Local(_) => {}
+        PlaceX::DerefMut(p) | PlaceX::Index(p, _, ArrayKind::Array, _) => {
+            place_variant_conditions(p, datatypes, out)
+        }
+        PlaceX::Field(field_opr, p) => {
+            place_variant_conditions(p, datatypes, out);
+            let is_irref = match &field_opr.datatype {
+                Dt::Tuple(_) => true,
+                Dt::Path(path) => datatypes[path].x.variants.len() == 1,
+            };
+            if !is_irref {
+                let e0 = crate::ast_util::place_to_spec_expr(p);
+                let is_variantx = ExprX::UnaryOpr(
+                    UnaryOpr::IsVariant {
+                        datatype: field_opr.datatype.clone(),
+                        variant: field_opr.variant.clone(),
+                    },
+                    e0,
+                );
+                out.push(SpannedTyped::new(&place.span, &bool_typ(), is_variantx));
+            }
+        }
+        _ => panic!("place_variant_conditions got unexpected Place kind"),
+    }
+}
+
+/// `ChargeDeallocations(if conds { drop_deallocations(place) } else { 0 })`
+fn mk_drop_charge(span: &Span, place: &Place, conds: Vec<Expr>) -> Expr {
+    let nat = Arc::new(TypX::Int(crate::ast::IntRange::Nat));
+    let call_target_attrs = crate::ast::CallTargetAttrs {
+        autospec: crate::ast::AutospecUsage::Final,
+        const_var: false,
+        assume_external_allowed: false,
+        trusted_call: false,
+        into_forward: None,
+    };
+    let value = crate::ast_util::place_to_spec_expr(place);
+    let call = ExprX::Call {
+        target: crate::ast::CallTarget::Fun(
+            crate::ast::CallTargetKind::Static,
+            crate::def::fn_drop_deallocations(),
+            Arc::new(vec![place.typ.clone()]),
+            Arc::new(vec![]),
+            call_target_attrs,
+        ),
+        args: Arc::new(vec![value]),
+        post_args: None,
+        body: None,
+    };
+    let mut n = SpannedTyped::new(span, &nat, call);
+    if conds.len() > 0 {
+        let cond = crate::ast_util::conjoin(span, &conds);
+        let zero = SpannedTyped::new(
+            span,
+            &nat,
+            ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        n = SpannedTyped::new(span, &nat, ExprX::If(cond, n, Some(zero)));
+    }
+    SpannedTyped::new(span, &unit_typ(), ExprX::ChargeDeallocations(n))
+}
+
+fn mk_flag_assign(span: &Span, flag: &VarIdent, b: bool) -> Expr {
+    let place = SpannedTyped::new(span, &bool_typ(), PlaceX::Local(flag.clone()));
+    SpannedTyped::new(
+        span,
+        &unit_typ(),
+        ExprX::Assign {
+            place,
+            rhs: mk_bool(span, b),
+            op: None,
+            resolve: false,
+            typ: bool_typ(),
+            charge_drop: false,
+        },
+    )
+}
+
+impl<'a> LocalCollection<'a> {
+    /// The leaf is an exec-mode part of an exec-mode local, which may need dropping
+    fn drop_leaf_needs_charge(&self, leaf: &FlattenedPlace) -> bool {
+        let local = &self.locals[leaf.local];
+        let mode = match &local.name {
+            LocalName::Named(x) => self.var_modes.get(x).copied(),
+            LocalName::Temporary(id, _) => self.temporary_modes.get(id).copied(),
+        };
+        if mode != Some(Mode::Exec) {
+            return false;
+        }
+        let mut tree = &local.tree;
+        for projection in leaf.projections.iter() {
+            match (projection, tree) {
+                (Projection::StructField((v, f)), PlaceTree::Struct(_, dt, trees)) => {
+                    if let Dt::Path(path) = dt {
+                        if self.datatypes[path].x.variants[*v].fields[*f].a.1 != Mode::Exec {
+                            return false;
+                        }
+                    }
+                    tree = trees[*v][*f].as_ref().unwrap();
+                }
+                (Projection::DerefMut, PlaceTree::MutRef(_, inner)) => tree = inner,
+                (Projection::Index(i), PlaceTree::Array(_, trees)) => tree = &trees[*i],
+                _ => unreachable!(),
+            }
+        }
+        typ_may_need_drop(tree.typ(), self.datatypes, &self.no_drop_closures)
+    }
+}
+
+/// Compute the charges of the drop points (and the drop flags they need)
+fn drop_insertions(cfg: &CFG, dc: &DropCounting) -> Result<DropInsertions, VirErr> {
+    let mut out = DropInsertions::default();
+    let leaves = cfg.locals.places_skip_insides_of_mut_refs();
+    let ends: Arc<Vec<Option<FlattenedPlace>>> = Arc::new(
+        dc.drops
+            .iter()
+            .map(|d| match &d.kind {
+                DropKind::ScopeEnd(fp) => Some(fp.clone()),
+                _ => None,
+            })
+            .collect(),
+    );
+    let local_span = |local: usize| -> (Span, bool) {
+        let name = &cfg.locals.locals[local].name;
+        let span = dc.local_spans.get(name).cloned().unwrap_or_else(|| dc.body_span.clone());
+        let is_param = matches!(name, LocalName::Named(x) if dc.params.contains(x));
+        (span, is_param)
+    };
+    let named = |local: usize| -> Option<VarIdent> {
+        match &cfg.locals.locals[local].name {
+            LocalName::Named(x) => Some(x.clone()),
+            LocalName::Temporary(..) => None,
+        }
+    };
+
+    // Which leaves each drop point charges, and whether under a flag
+    let mut analyses: HashMap<usize, DataflowOutput<DropInit>> = HashMap::new();
+    let mut charges: Vec<Vec<(usize, bool)>> = vec![];
+    let mut flagged: HashSet<usize> = HashSet::new();
+    for d in dc.drops.iter() {
+        let mut c = vec![];
+        if let DropKind::ScopeEnd(fp) | DropKind::Assign(fp) = &d.kind {
+            for (li, leaf) in leaves.iter().enumerate() {
+                if !fp.contains(leaf) || !cfg.locals.drop_leaf_needs_charge(leaf) {
+                    continue;
+                }
+                if cfg.locals.box_split.contains(&leaf.local) {
+                    return Err(error(
+                        &d.site,
+                        "-V alloc-check: Verus cannot count the drop of a box whose contents were moved out (in part) yet",
+                    ));
+                }
+                let analysis = analyses.entry(li).or_insert_with(|| {
+                    do_dataflow::<DropInit>(
+                        cfg,
+                        DropInit { can_be_uninit: false, can_be_init: false },
+                        DropInit { can_be_uninit: true, can_be_init: false },
+                        &DropInitConst { place: leaf.clone(), ends: ends.clone() },
+                        Direction::Forward,
+                    )
+                });
+                let st = analysis.output[d.loc.0][d.loc.1];
+                if !st.can_be_init {
+                    continue;
+                }
+                if st.can_be_uninit {
+                    if cfg.locals.locals[leaf.local].name.is_temp() {
+                        return Err(error(
+                            &d.site,
+                            "-V alloc-check: Verus cannot count the drop of a temporary value that is moved on some paths only yet",
+                        ));
+                    }
+                    flagged.insert(li);
+                }
+                c.push((li, st.can_be_uninit));
+            }
+        }
+        charges.push(c);
+    }
+    let mut flags: HashMap<usize, VarIdent> = HashMap::new();
+    let mut flagged: Vec<usize> = flagged.into_iter().collect();
+    flagged.sort();
+    for li in flagged.iter() {
+        let x = VarIdent(
+            str_ident("drop_flag"),
+            VarIdentDisambiguate::ResInfTemp(cfg.locals.next_temp_id + *li as u64),
+        );
+        out.flags.push(x.clone());
+        flags.insert(*li, x);
+    }
+
+    let set_flags = |out: &mut DropInsertions,
+                     sp: &FlattenedPlace,
+                     b: bool,
+                     span: &Span,
+                     position: AstPosition|
+     -> Result<(), VirErr> {
+        for li in flagged.iter() {
+            if sp.contains(&leaves[*li]) {
+                let e = mk_flag_assign(span, &flags[li], b);
+                out.push(span, position, e, None)?;
+            }
+        }
+        Ok(())
+    };
+
+    // In the order of the instructions: the charges and the drop flag updates
+    for bb in cfg.basic_blocks.iter() {
+        for instr in bb.instructions.iter() {
+            let position = instr.post_instruction_position;
+            match &instr.kind {
+                InstructionKind::Overwrite(sp) => {
+                    set_flags(&mut out, sp, true, &dc.body_span, position)?;
+                }
+                InstructionKind::MoveFrom(sp) | InstructionKind::DropFrom(sp) => {
+                    set_flags(&mut out, sp, false, &dc.body_span, position)?;
+                }
+                InstructionKind::Mutate(_) => {}
+                InstructionKind::ChargedDrop(i) => {
+                    let d = &dc.drops[*i];
+                    match &d.kind {
+                        DropKind::ScopeEnd(fp) | DropKind::Assign(fp) => {
+                            if charges[*i].len() > 0 {
+                                let (span, is_param) = local_span(fp.local);
+                                out.sites.push((span, d.site.clone(), is_param));
+                            }
+                            for (li, under_flag) in charges[*i].iter() {
+                                let leaf = &leaves[*li];
+                                let place = cfg.locals.to_ast_place(&d.site, leaf);
+                                let mut conds = vec![];
+                                if *under_flag {
+                                    let flag = SpannedTyped::new(
+                                        &d.site,
+                                        &bool_typ(),
+                                        ExprX::Var(flags[li].clone()),
+                                    );
+                                    conds.push(flag);
+                                }
+                                place_variant_conditions(&place, &cfg.locals.datatypes, &mut conds);
+                                let e = mk_drop_charge(&d.site, &place, conds);
+                                if let LocalName::Temporary(id, _) =
+                                    &cfg.locals.locals[leaf.local].name
+                                {
+                                    out.temps.insert(*id);
+                                }
+                                out.push(&d.site, d.position, e, named(leaf.local))?;
+                            }
+                            if let DropKind::ScopeEnd(fp) = &d.kind {
+                                set_flags(&mut out, fp, false, &d.site, position)?;
+                            }
+                        }
+                        DropKind::AssignWhole(fp) | DropKind::AssignUntracked(fp) => {
+                            // (charged by the assignment itself, from the old value it reads
+                            // after evaluating the place)
+                            let AstPosition::BeforeAssignWrite(id) = d.position else {
+                                unreachable!()
+                            };
+                            out.items.entry(id).or_default().charge_assign = true;
+                            let (span, is_param) = local_span(fp.local);
+                            out.sites.push((span, d.site.clone(), is_param));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }

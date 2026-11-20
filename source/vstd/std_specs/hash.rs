@@ -1841,7 +1841,30 @@ def_hash_free!(char, axiom_hash_free_char);
 
 def_hash_free!(alloc::string::String, axiom_hash_free_string);
 
+/// Dropping a HashMap whose keys, values and hasher cannot deallocate frees at most its table
+pub broadcast axiom fn axiom_drop_deallocations_hash_map<Key, Value, S, A: Allocator>(
+    m: HashMap<Key, Value, S, A>,
+)
+    ensures
+        !super::super::alloc_check::drop_may_deallocate::<Key>()
+            && !super::super::alloc_check::drop_may_deallocate::<Value>()
+            && !super::super::alloc_check::drop_may_deallocate::<S>()
+            ==> #[trigger] super::super::alloc_check::drop_deallocations(m) <= 1,
+;
+
+/// Dropping a HashSet whose keys and hasher cannot deallocate frees at most its table
+pub broadcast axiom fn axiom_drop_deallocations_hash_set<Key, S, A: Allocator>(
+    m: HashSet<Key, S, A>,
+)
+    ensures
+        !super::super::alloc_check::drop_may_deallocate::<Key>()
+            && !super::super::alloc_check::drop_may_deallocate::<S>()
+            ==> #[trigger] super::super::alloc_check::drop_deallocations(m) <= 1,
+;
+
 pub broadcast group group_hash_axioms {
+    axiom_drop_deallocations_hash_map,
+    axiom_drop_deallocations_hash_set,
     axiom_hash_ops_cost_nonneg,
     axiom_hash_lookup_cost_nonneg,
     axiom_hash_lookup_cost_map,

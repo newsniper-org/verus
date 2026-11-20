@@ -2358,6 +2358,9 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
                 Some(Arc::new(TypX::TypParam(prefix_tuple_param(arity - 1))))
             },
             destructor: false,
+            drop_glue: Some(Arc::new(
+                (0..arity).map(|i| Arc::new(TypX::TypParam(prefix_tuple_param(i)))).collect(),
+            )),
         };
         datatypes.push(Spanned::new(ctx.no_span.clone(), datatypex));
 
@@ -2425,6 +2428,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             user_defined_invariant_fn: None,
             sized_constraint: None,
             destructor: false,
+            drop_glue: None,
         };
         datatypes.push(Spanned::new(ctx.no_span.clone(), datatypex));
 

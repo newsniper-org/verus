@@ -1055,6 +1055,15 @@ pub fn prune_krate_for_module_or_krate(
         for i in trait_impls {
             reach(&mut state.reached_trait_impls, &mut state.worklist_trait_impls, &i.x.impl_path);
         }
+        // -V alloc-check: the resolution analysis, which runs on this pruned crate, charges
+        // `drop_deallocations` for the implicit drops of the functions with a `deallocates`
+        // bound (see resolution_inference.rs)
+        let drop_deallocations = crate::def::fn_drop_deallocations();
+        if krate.functions.iter().any(|f| f.x.name == drop_deallocations)
+            && krate.functions.iter().any(|f| f.x.deallocations.is_some())
+        {
+            reach(&mut state.reached_functions, &mut state.worklist_functions, &drop_deallocations);
+        }
     }
 
     let mut root_modules_reveal: Vec<Fun> = Vec::new();

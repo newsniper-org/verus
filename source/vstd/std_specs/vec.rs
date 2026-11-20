@@ -178,9 +178,26 @@ pub open spec fn vec_reserve_cost<T, A: Allocator>(v: &Vec<T, A>, additional: in
 /// reallocates its existing buffer (`grow`, which frees the old block); growing a vector that has
 /// no buffer yet only allocates
 pub open spec fn vec_regrows<T, A: Allocator>(v: &Vec<T, A>, additional: int) -> bool {
-    super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(v) > 0 && spec_vec_capacity(v)
-        - v@.len() < additional
+    vec_has_buffer(v) && spec_vec_capacity(v) - v@.len() < additional
 }
+
+/// A Vec has a block (that dropping it frees) when its elements are not zero-sized and its
+/// capacity is not 0
+pub open spec fn vec_has_buffer<T, A: Allocator>(v: &Vec<T, A>) -> bool {
+    super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(v) > 0
+}
+
+/// Dropping a Vec drops its elements and frees its block (through its allocator: dropping the
+/// allocator itself is the runtime's)
+pub broadcast axiom fn axiom_drop_deallocations_vec<T, A: Allocator>(v: Vec<T, A>)
+    ensures
+        #[trigger] super::super::alloc_check::drop_deallocations(v)
+            == super::super::alloc_check::seq_drop_deallocations(v@) + if vec_has_buffer(&v) {
+            1nat
+        } else {
+            0nat
+        },
+;
 
 /// After `v` made room for `additional` more elements (if it had to grow, and grew), its capacity
 /// is the one that std's growth policy picks
@@ -240,6 +257,7 @@ pub assume_specification<T>[ Vec::<T>::with_capacity ](capacity: usize) -> (v: V
     ensures
         v@ == Seq::<T>::empty(),
         spec_vec_capacity(&v) >= capacity,
+        capacity == 0 && super::super::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
     allocates
         if capacity == 0 { 0int } else { 1int },
     deallocates
@@ -250,6 +268,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::with_capacity_in ](capac
     ensures
         v@ == Seq::<T>::empty(),
         spec_vec_capacity(&v) >= capacity,
+        capacity == 0 && super::super::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
         spec_vec_allocator(&v) == alloc,
     // `RawVecInner::try_allocate_in`: one `allocate` of the array layout, unless it is empty
     allocates
@@ -933,6 +952,7 @@ pub broadcast group group_vec_axioms {
     axiom_next_back_cost_vec_into_iter,
     axiom_spec_len,
     axiom_spec_capacity,
+    axiom_drop_deallocations_vec,
     lemma_seq_clone_allocates_zero,
     lemma_seq_clone_deallocations_zero,
     axiom_vec_index_decreases,

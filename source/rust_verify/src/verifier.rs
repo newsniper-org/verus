@@ -361,7 +361,7 @@ pub struct Verifier {
     /// -V alloc-check: the functions of this crate whose bodies are counted against a
     /// `deallocates` bound (own or inherited), and are not `#[verifier::fip]` (their VIR paths):
     /// `fip_mir` checks that their implicit drops free nothing
-    pub(crate) alloc_local_dealloc_bounded_fns: Vec<String>,
+    pub(crate) alloc_local_dealloc_bounded_fns: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -2854,25 +2854,31 @@ impl Verifier {
 
         let merged_crate = query.get_merged_crate().map_err(map_query_err)?;
         {
-            // (a trait method implementation inherits its declaration's `deallocates` bound)
-            let decl_bounded: std::collections::HashSet<&vir::ast::Fun> = merged_crate
-                .functions
+            // The functions of this crate that count their deallocations (their own `deallocates`
+            // bound, or their trait method declaration's), with the implicit drops that the
+            // resolution analysis charged: the erase compile checks that these are all the drops
+            // that may deallocate (see `fip_mir`)
+            let drop_sites = query.get_drop_sites().map_err(map_query_err)?;
+            let local_names: std::collections::HashSet<&vir::ast::Fun> =
+                local_crate.functions.iter().map(|f| &f.x.name).collect();
+            let source_map = tcx.sess.source_map();
+            let mut bounded: Vec<(String, Vec<crate::fip_mir::DropSiteKey>)> = drop_sites
                 .iter()
-                .filter(|f| f.x.deallocations.is_some())
-                .map(|f| &f.x.name)
-                .collect();
-            self.alloc_local_dealloc_bounded_fns = local_crate
-                .functions
-                .iter()
-                .filter(|f| !f.x.attrs.fip && !f.x.attrs.allocator_runtime && f.x.body.is_some())
-                .filter(|f| {
-                    f.x.deallocations.is_some()
-                        || matches!(&f.x.kind,
-                            vir::ast::FunctionKind::TraitMethodImpl { method, .. }
-                                if decl_bounded.contains(method))
+                .filter(|(f, _)| local_names.contains(f))
+                .map(|(f, sites)| {
+                    let keys = sites
+                        .iter()
+                        .filter_map(|(local, site, is_param)| {
+                            let local = crate::spans::from_raw_span(&local.raw_span)?;
+                            let site = crate::spans::from_raw_span(&site.raw_span)?;
+                            crate::fip_mir::drop_site_key(source_map, local, site, *is_param)
+                        })
+                        .collect();
+                    (format!("{:?}", f.path), keys)
                 })
-                .map(|f| format!("{:?}", f.x.name.path))
                 .collect();
+            bounded.sort_by(|a, b| a.0.cmp(&b.0));
+            self.alloc_local_dealloc_bounded_fns = bounded;
         }
         self.maybe_log_impl_names(&merged_crate).map_err(map_err_diagnostics)?;
         self.maybe_log_vir_crate(&merged_crate).map_err(map_err_diagnostics)?;

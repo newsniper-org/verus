@@ -218,10 +218,110 @@ pub broadcast proof fn lemma_seq_drop_deallocations_no_dealloc<T>(s: Seq<T>)
     lemma_seq_prefix_drop_deallocations_no_dealloc(s, s.len());
 }
 
+/// -V alloc-check: the deallocation of a box's own block when the box is dropped: 1, or 0 for a
+/// zero-sized `T` (whose box has no block)
+pub open spec fn box_block_deallocations<T>() -> nat {
+    if super::layout::size_of::<T>() > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Dropping a `Box` drops its contents and frees its block (through its allocator: dropping the
+/// allocator itself is the runtime's)
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_drop_deallocations_box<T, A: core::alloc::Allocator>(
+    b: alloc::boxed::Box<T, A>,
+)
+    ensures
+        #[trigger] drop_deallocations(b) == drop_deallocations(*b) + box_block_deallocations::<T>(),
+;
+
+/// Dropping a `String` frees its buffer, if it has one
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_drop_deallocations_string(s: alloc::string::String)
+    ensures
+        #[trigger] drop_deallocations(s) <= 1,
+;
+
+/// Dropping an `Rc` drops its contents and frees its block when it is the last reference (which
+/// its value does not tell)
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_drop_deallocations_rc<T, A: core::alloc::Allocator>(
+    r: alloc::rc::Rc<T, A>,
+)
+    ensures
+        #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(*r),
+;
+
+/// Dropping an `Arc` drops its contents and frees its block when it is the last reference (which
+/// its value does not tell)
+#[cfg(feature = "alloc")]
+pub broadcast axiom fn axiom_drop_deallocations_arc<T, A: core::alloc::Allocator>(
+    r: alloc::sync::Arc<T, A>,
+)
+    ensures
+        #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(*r),
+;
+
+pub broadcast axiom fn axiom_drop_deallocations_option<T>(o: Option<T>)
+    ensures
+        #[trigger] drop_deallocations(o) == match o {
+            Some(t) => drop_deallocations(t),
+            None => 0nat,
+        },
+;
+
+pub broadcast axiom fn axiom_drop_deallocations_result<T, E>(r: Result<T, E>)
+    ensures
+        #[trigger] drop_deallocations(r) == match r {
+            Ok(t) => drop_deallocations(t),
+            Err(e) => drop_deallocations(e),
+        },
+;
+
+pub broadcast axiom fn axiom_drop_deallocations_tuple2<A, B>(p: (A, B))
+    ensures
+        #[trigger] drop_deallocations(p) == drop_deallocations(p.0) + drop_deallocations(p.1),
+;
+
+pub broadcast axiom fn axiom_drop_deallocations_tuple3<A, B, C>(p: (A, B, C))
+    ensures
+        #[trigger] drop_deallocations(p) == drop_deallocations(p.0) + drop_deallocations(p.1)
+            + drop_deallocations(p.2),
+;
+
+/// Dropping an allocator is the runtime's (see `NoDeallocDrop for Global`)
+pub broadcast axiom fn axiom_allocator_no_dealloc_drop<A: core::alloc::Allocator>()
+    ensures
+        !#[trigger] drop_may_deallocate::<A>(),
+;
+
+/// A `Copy` type has no drop glue
+pub broadcast axiom fn axiom_copy_no_dealloc_drop<T: Copy>()
+    ensures
+        !#[trigger] drop_may_deallocate::<T>(),
+;
+
 pub broadcast group group_alloc_check_axioms {
     axiom_no_dealloc_drop,
     axiom_drop_deallocations_no_dealloc,
     lemma_seq_drop_deallocations_no_dealloc,
+    #[cfg(feature = "alloc")]
+    axiom_drop_deallocations_box,
+    #[cfg(feature = "alloc")]
+    axiom_drop_deallocations_string,
+    #[cfg(feature = "alloc")]
+    axiom_drop_deallocations_rc,
+    #[cfg(feature = "alloc")]
+    axiom_drop_deallocations_arc,
+    axiom_drop_deallocations_option,
+    axiom_drop_deallocations_result,
+    axiom_drop_deallocations_tuple2,
+    axiom_drop_deallocations_tuple3,
+    axiom_allocator_no_dealloc_drop,
+    axiom_copy_no_dealloc_drop,
     group_op_marker_axioms,
 }
 
@@ -314,6 +414,44 @@ unsafe impl<A: NoDeallocDrop, B: NoDeallocDrop> NoDeallocDrop for (A, B) {
 }
 
 unsafe impl<A: NoDeallocDrop, B: NoDeallocDrop, C: NoDeallocDrop> NoDeallocDrop for (A, B, C) {
+
+}
+
+// (no drop glue)
+unsafe impl<T: ?Sized> AllocFreeDrop for core::marker::PhantomData<T> {
+
+}
+
+unsafe impl<T: ?Sized> NoDeallocDrop for core::marker::PhantomData<T> {
+
+}
+
+unsafe impl<T: ?Sized> AllocFreeDrop for core::mem::ManuallyDrop<T> {
+
+}
+
+unsafe impl<T: ?Sized> NoDeallocDrop for core::mem::ManuallyDrop<T> {
+
+}
+
+unsafe impl<T: ?Sized> AllocFreeDrop for *mut T {
+
+}
+
+unsafe impl<T: ?Sized> NoDeallocDrop for *mut T {
+
+}
+
+unsafe impl<T: ?Sized> AllocFreeDrop for *const T {
+
+}
+
+unsafe impl<T: ?Sized> NoDeallocDrop for *const T {
+
+}
+
+#[cfg(feature = "std")]
+unsafe impl NoDeallocDrop for std::hash::RandomState {
 
 }
 

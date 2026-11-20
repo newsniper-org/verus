@@ -574,6 +574,11 @@ pub fn fn_slice_len() -> Fun {
     fun!(CrateId::Vstd => "slice"; "spec_slice_len")
 }
 
+/// -V alloc-check: `vstd::alloc_check::drop_deallocations`, charged for an implicit drop
+pub fn fn_drop_deallocations() -> Fun {
+    fun!(CrateId::Vstd => "alloc_check"; "drop_deallocations")
+}
+
 pub fn fn_slice_index() -> Fun {
     fun!(CrateId::Vstd => "slice"; "spec_slice_index")
 }

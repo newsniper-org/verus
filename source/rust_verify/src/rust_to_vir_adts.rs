@@ -204,6 +204,7 @@ pub(crate) fn check_item_struct<'tcx>(
         user_defined_invariant_fn: None,
         sized_constraint: get_sized_constraint(span, ctxt, &adt_def, None)?,
         destructor: adt_def.destructor(ctxt.tcx).is_some(),
+        drop_glue: get_drop_glue(span, ctxt, &adt_def, None),
     };
     vir.datatypes.push(ctxt.spanned_new(span, datatype));
     Ok(())
@@ -294,6 +295,7 @@ pub(crate) fn check_item_enum<'tcx>(
             user_defined_invariant_fn: None,
             sized_constraint: get_sized_constraint(span, ctxt, &adt_def, None)?,
             destructor: adt_def.destructor(ctxt.tcx).is_some(),
+            drop_glue: get_drop_glue(span, ctxt, &adt_def, None),
         },
     ));
     Ok(())
@@ -398,9 +400,37 @@ pub(crate) fn check_item_union<'tcx>(
             user_defined_invariant_fn: None,
             sized_constraint: get_sized_constraint(span, ctxt, &adt_def, None)?,
             destructor: adt_def.destructor(ctxt.tcx).is_some(),
+            drop_glue: get_drop_glue(span, ctxt, &adt_def, None),
         },
     ));
     Ok(())
+}
+
+/// -V alloc-check: the components of the datatype's drop glue (see `DatatypeX::drop_glue`)
+fn get_drop_glue<'tcx>(
+    span: Span,
+    ctxt: &Context<'tcx>,
+    adt_def: &AdtDef<'tcx>,
+    substs: Option<GenericArgsRef<'tcx>>,
+) -> Option<vir::ast::Typs> {
+    let tcx = ctxt.tcx;
+    let Ok(components) = tcx.adt_drop_tys(adt_def.did()) else {
+        return None;
+    };
+    let mut typs = vec![];
+    for c in components.iter() {
+        let c = match substs {
+            Some(substs) => {
+                rustc_middle::ty::EarlyBinder::bind(tcx, c).instantiate(tcx, substs).skip_norm_wip()
+            }
+            None => c,
+        };
+        match ctxt.mid_ty_to_vir(adt_def.did(), span, &c, None) {
+            Ok(t) => typs.push(t),
+            Err(_) => return None,
+        }
+    }
+    Some(Arc::new(typs))
 }
 
 fn get_sized_constraint<'tcx>(
@@ -697,6 +727,7 @@ pub(crate) fn check_item_external<'tcx>(
             user_defined_invariant_fn: None,
             sized_constraint: get_sized_constraint(span, ctxt, external_adt_def, Some(substs_ref))?,
             destructor: external_adt_def.destructor(ctxt.tcx).is_some(),
+            drop_glue: get_drop_glue(span, ctxt, external_adt_def, Some(substs_ref)),
         };
         vir.datatypes.push(ctxt.spanned_new(span, datatype));
     } else if external_adt_def.is_struct() {
@@ -735,6 +766,7 @@ pub(crate) fn check_item_external<'tcx>(
             user_defined_invariant_fn: None,
             sized_constraint: get_sized_constraint(span, ctxt, external_adt_def, Some(substs_ref))?,
             destructor: external_adt_def.destructor(ctxt.tcx).is_some(),
+            drop_glue: get_drop_glue(span, ctxt, external_adt_def, Some(substs_ref)),
         };
         vir.datatypes.push(ctxt.spanned_new(span, datatype));
     } else {
@@ -786,6 +818,7 @@ pub(crate) fn check_item_external<'tcx>(
             user_defined_invariant_fn: None,
             sized_constraint: get_sized_constraint(span, ctxt, external_adt_def, Some(substs_ref))?,
             destructor: external_adt_def.destructor(ctxt.tcx).is_some(),
+            drop_glue: get_drop_glue(span, ctxt, external_adt_def, Some(substs_ref)),
         };
         vir.datatypes.push(ctxt.spanned_new(span, datatype));
     }

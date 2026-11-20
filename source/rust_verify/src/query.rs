@@ -19,7 +19,7 @@ use vir::ast::{CrateId, Datatype, Fun, Function, FunctionStub, Krate, Path, VirE
 use vir::context::WarningCtx;
 use vir::messages::{MessageLevel, ToAny};
 use vir::modes::ErasureModes;
-use vir::resolution_inference::{ResolutionInfo, krate_infer_resolution};
+use vir::resolution_inference::{DropSites, ResolutionInfo, krate_infer_resolution};
 use vir::traits::{DemoteTraitLookup, MergedTraits};
 use vir::well_formed::{DynCompatabilityChecks, InitialWfResults};
 
@@ -71,7 +71,7 @@ pub(crate) struct State<'tcx> {
     /// Crate that can be exported
     cache_exportable_crate: Option<Res<Krate>>,
     /// Crate with trait demotion, resolution inference, merged with imported crates and pruned
-    cache_merged_crate: Option<Res<(Krate, Arc<WarningCtx>)>>,
+    cache_merged_crate: Option<Res<(Krate, Arc<WarningCtx>, Arc<DropSites>)>>,
 
     /// Errors found along the way
     pub encountered_blocking_vir_error: bool,
@@ -608,7 +608,13 @@ impl<'tcx> Query<'tcx> {
         Ok(cache_or_compute!(self, cache_merged_crate, _compute_merged_crate())?.1)
     }
 
-    pub fn _compute_merged_crate(&self) -> Res<(Krate, Arc<WarningCtx>)> {
+    /// -V alloc-check: the drops that the resolution analysis charged, for each function that
+    /// counts its deallocations (see `vir::resolution_inference::DropSites`)
+    pub fn get_drop_sites(&self) -> Res<Arc<DropSites>> {
+        Ok(cache_or_compute!(self, cache_merged_crate, _compute_merged_crate())?.2)
+    }
+
+    pub fn _compute_merged_crate(&self) -> Res<(Krate, Arc<WarningCtx>, Arc<DropSites>)> {
         let pre_crate = self.get_pre_crate()?;
         let _flush = pre_crate.ctxt.flush_diagnostics_on_drop(&*self.reporter);
         let krate = self.get_exportable_crate()?;
@@ -681,11 +687,17 @@ impl<'tcx> Query<'tcx> {
                 Err(_) => unreachable!(),
             }
         }
-        let krate = krate_infer_resolution(&krate, &res_infos).map_err(|e| self.emit_errors(e))?;
+        let (krate, drop_sites) = krate_infer_resolution(
+            &krate,
+            &res_infos,
+            self.args.alloc_check,
+            self.args.check_api_safety,
+        )
+        .map_err(|e| self.emit_errors(e))?;
 
         vir::well_formed::check_crate_merged(&krate).map_err(|e| self.emit_error(e))?;
 
-        Ok((krate, Arc::new(new_warning_ctx)))
+        Ok((krate, Arc::new(new_warning_ctx), Arc::new(drop_sites)))
     }
 
     //// Erasure modes

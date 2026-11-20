@@ -86,20 +86,26 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "cannot bound the deallocations of this call")
 }
 
+// the implicit drops are counted (S3)
 test_verify_one_file_with_options! {
-    #[test] deallocates_implicit_drop_rejected ["vstd", "-V alloc-check"] => verus_code! {
+    #[test] deallocates_implicit_drop_counted ["vstd", "-V alloc-check"] => verus_code_str! {
         use vstd::prelude::*;
-        fn f(b: Box<u64>) deallocates 5 { }
-    } => Err(err) => assert_vir_error_msg(err, "the implicit drops of a function with a `deallocates` bound must not deallocate")
+        fn f(b: Box<u64>) deallocates 1 { }
+        fn g(b: Box<u64>) deallocates 0 { } // FAILS
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 1)
 }
 
 test_verify_one_file_with_options! {
-    #[test] deallocates_implicit_drop_inherited_rejected ["vstd", "-V alloc-check"] => verus_code! {
+    #[test] deallocates_implicit_drop_inherited_counted ["vstd", "-V alloc-check"] => verus_code_str! {
         use vstd::prelude::*;
         trait T { fn m(&self, b: Box<u64>) deallocates 1; }
         struct S;
         impl T for S { fn m(&self, b: Box<u64>) { } }
-    } => Err(err) => assert_vir_error_msg(err, "the implicit drops of a function with a `deallocates` bound must not deallocate")
+        trait U { fn m(&self, b: Box<u64>) deallocates 0; } // FAILS
+        impl U for S { fn m(&self, b: Box<u64>) { } }
+    }.to_string() => Err(err) => assert_fails(err, 1)
 }
 
 test_verify_one_file_with_options! {
@@ -227,4 +233,221 @@ test_verify_one_file_with_options! {
         use std::collections::HashMap;
         fn f(m: &mut HashMap<u64, u64>) deallocates 1 { m.insert(1, 2); }
     } => Err(err) => assert_vir_error_msg(err, "cannot bound the deallocations of this call")
+}
+
+// S3: the implicit drops are counted
+const DROPS: &str = verus_code_str! {
+    use vstd::prelude::*;
+
+    fn consume(b: Box<u64>) deallocates 1 { }
+
+    // a parameter is dropped at the end of the body
+    fn drop_param(b: Box<u64>) deallocates 1 { }
+
+    // a moved value is not dropped
+    fn pass_param(b: Box<u64>) -> (r: Box<u64>) deallocates 0 { b }
+
+    // a local is dropped at the end of its block
+    fn drop_local() deallocates 1 { let b = Box::new(3u64); }
+
+    fn drop_vec() deallocates 1 {
+        let mut v: Vec<u64> = Vec::new();
+        v.push(1);
+    }
+
+    // moved on one path only (a drop flag)
+    fn cond_move(b: Box<u64>, c: bool) -> (r: Option<Box<u64>>)
+        deallocates deallocates_when(1int, !c)
+    {
+        if c { Some(b) } else { None }
+    }
+
+    // a match that moves the payload
+    fn match_move(o: Option<Box<u64>>) deallocates 1 {
+        match o {
+            Some(b) => consume(b),
+            None => {}
+        }
+    }
+
+    // an early return drops what is in scope
+    fn early(b: Box<u64>, c: bool) deallocates 1 {
+        if c {
+            return;
+        }
+        let x = 1u64;
+    }
+
+    // every iteration drops its locals
+    fn per_iteration(n: u64) deallocates n {
+        let mut i: u64 = 0;
+        while i < n
+            invariant i <= n, deallocated() == i,
+            decreases n - i,
+        {
+            let b = Box::new(i);
+            i = i + 1;
+        }
+    }
+
+    // an assignment drops the old value
+    fn overwrite_local() deallocates 2 {
+        let mut b = Box::new(1u64);
+        b = Box::new(2u64);
+    }
+
+    fn overwrite_through_ref(o: &mut Option<Box<u64>>) deallocates 1 { *o = None; }
+
+    // an unused result is dropped at the end of its statement
+    fn unused_result() deallocates 1 { let _ = Box::new(3u64); }
+
+    // a value whose drop frees nothing
+    fn no_dealloc(x: Option<u64>, p: (u64, bool)) deallocates 0 { }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drops ["vstd", "-V alloc-check"] => DROPS.to_string() => Ok(())
+}
+
+// each of these bounds is one too small
+test_verify_one_file_with_options! {
+    #[test] deallocates_drops_fail ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+        fn consume(b: Box<u64>) deallocates 1 { }
+        fn drop_param(b: Box<u64>) deallocates 0 { } // FAILS
+        fn drop_local() deallocates 0 { let b = Box::new(3u64); } // FAILS
+        fn drop_vec() deallocates 0 { // FAILS
+            let mut v: Vec<u64> = Vec::new();
+            v.push(1);
+        }
+        fn cond_move(b: Box<u64>, c: bool) -> (r: Option<Box<u64>>) deallocates 0 { // FAILS
+            if c { Some(b) } else { None }
+        }
+        fn match_move(o: Option<Box<u64>>) deallocates 0 { // FAILS
+            match o {
+                Some(b) => consume(b),
+                None => {}
+            }
+        }
+        fn early(b: Box<u64>, c: bool) -> (r: Option<Box<u64>>) deallocates 0 { // FAILS
+            if c {
+                return None; // FAILS
+            }
+            Some(b)
+        }
+        fn per_iteration(n: u64) deallocates n {
+            let mut i: u64 = 0;
+            while i < n
+                invariant i <= n, deallocated() == 0, // FAILS
+                decreases n - i,
+            {
+                let b = Box::new(i);
+                i = i + 1;
+            }
+        }
+        fn overwrite_local() deallocates 1 { // FAILS
+            let mut b = Box::new(1u64);
+            b = Box::new(2u64);
+        }
+        fn overwrite_through_ref(o: &mut Option<Box<u64>>) deallocates 0 { *o = None; } // FAILS
+        fn unused_result() deallocates 0 { let _ = Box::new(3u64); } // FAILS
+        fn brk(n: u64) deallocates 0 { // FAILS
+            loop
+                invariant_except_break deallocated() == 0,
+                decreases 1u64,
+            {
+                let b = Box::new(n);
+                break;
+            }
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 11)
+}
+
+// a drop that Verus does not count yet is an error (checked on the compiled program)
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_loop_condition_temporary ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+        fn f() deallocates 100 {
+            let mut i: u64 = 0;
+            while *mk() > i && i < 3
+                invariant i <= 3, deallocated() == 0,
+                decreases 3 - i,
+            {
+                i = i + 1;
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Verus cannot count this drop of a value of type `std::boxed::Box<u64>` yet")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_extended_temporary ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+        fn f() deallocates 1 { let r = &mk(); }
+    } => Err(err) => assert_vir_error_msg(err, "Verus cannot count this drop of a value of type `std::boxed::Box<u64>` yet")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_box_moved_out ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn f(b: Box<Box<u64>>) -> (r: Box<u64>) deallocates 1 { *b }
+    } => Err(err) => assert_vir_error_msg(err, "a `Box` whose contents were moved out of it is freed here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drop_move_closure ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        // (a closure that moves nothing into itself has no drop glue; a `move` closure that only
+        // reads its capture does, which Verus does not count yet)
+        fn no_capture(b: Box<u64>) deallocates 1 {
+            let f = |x: u64| -> (r: u64) requires x < 100 { x + 1 };
+        }
+        fn move_read(b: Box<u64>) deallocates 1 {
+            let f = move |x: u64| -> (r: u64) requires x < 100 && *b < 100 { x + *b };
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Verus cannot count this drop of a value of type `{closure")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_drops_more ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+        fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+
+        // a partial move drops the rest
+        fn partial() -> (r: Box<u64>) deallocates 1 {
+            let p = (mk(), mk());
+            p.0
+        }
+        fn partial_fail() -> (r: Box<u64>) deallocates 0 { // FAILS
+            let p = (mk(), mk());
+            p.0
+        }
+
+        // a generic value
+        fn generic<T>(x: T) deallocates vstd::alloc_check::drop_deallocations(x) { }
+        fn generic_fail<T>(x: T) deallocates 0 { } // FAILS
+        fn no_dealloc_generic<T: vstd::alloc_check::NoDeallocDrop>(x: T) deallocates 0 { }
+
+        // `?` returns early
+        fn question(o: Option<Box<u64>>, b: Box<u64>) -> (r: Option<u64>) deallocates 2 {
+            let x = o?;
+            Some(*x)
+        }
+
+        // `continue` leaves the loop body
+        fn cont(n: u64) deallocates n {
+            let mut i: u64 = 0;
+            while i < n
+                invariant i <= n, deallocated() == i,
+                decreases n - i,
+            {
+                let b = mk();
+                i = i + 1;
+                if i % 2 == 0 { continue; }
+            }
+        }
+    }.to_string() => Err(err) => assert_fails(err, 2)
 }
