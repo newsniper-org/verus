@@ -2541,6 +2541,14 @@ pub(crate) fn finish_function<'tcx>(
     } else {
         attrs
     };
+    // -V alloc-check: the body of an async function is a coroutine, whose drops are not checked
+    // on the compiled program yet
+    if sig.asyncness().is_async() && (vattrs.fip.is_some() || header.deallocations.is_some()) {
+        return err_span(
+            sig.span,
+            "an async function cannot be `#[verifier::fip]` or have a `deallocates` bound yet",
+        );
+    }
     if vattrs.fip.is_some() {
         if !ctxt.cmd_line_args.alloc_check {
             return err_span(sig.span, "`#[verifier::fip]` needs -V alloc-check");

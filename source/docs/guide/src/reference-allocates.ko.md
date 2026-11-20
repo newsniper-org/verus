@@ -462,7 +462,9 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
     - `VecDeque`: 많아야 원소들 + 1.
     - `Rc`와 `Arc`: 많아야 1 + 내용물. 마지막 참조일 때만 해제합니다.
     - `HashMap`과 `HashSet`: 키·값·해시 함수가 해제할 수 없을 때 많아야 1.
-  - 0: 할당기, `Copy` 타입, `NoDeallocDrop` 타입.
+  - 0: `Copy` 타입, `NoDeallocDrop` 타입(`Global`과 `System` 포함).
+  - 컨테이너에 대한 위 사실은 drop이 해제할 수 없는 할당기에서만 성립합니다. `Box<A>`·`Rc<A>`·`Arc<A>`도 `Allocator`를
+    구현하지만, 이것들을 drop하면 블록이 해제됩니다.
   - 그 밖의 타입(타입 매개변수, 사용자 구조체)에는 정의가 없습니다. 필요한 것을 직접 적거나(예: `deallocates
     drop_deallocations(x)`), 타입 매개변수에 `NoDeallocDrop` bound를 겁니다.
 * Verus는 컴파일된 프로그램에서, 해제할 수 있는 drop이 모두 자기가 센 것인지 검사하고 아니면 거부합니다. 지금 거부하는
@@ -472,6 +474,9 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
     match의 팔이나 guard 안에 있으면 그 끝에서 drop합니다.)
   - 내용물을 꺼낸 `Box`.
   - 캡처한 값을 읽기만 하는 `move` 클로저.
+  - 대안마다 값의 다른 부분을 옮기는 or-패턴(예: `(true, x, _) | (false, _, x)`). enum의 서로 다른 variant끼리의
+    대안은 괜찮습니다.
+  - `deallocates` 상한이 있는 async 함수.
 
   값을 지역 변수에 묶거나 옮기면 됩니다.
 * 클로저에도 `deallocates` 상한을 붙일 수 있고, 같은 방식으로 셉니다(자기 drop 포함). 그 클로저를 부르면 그

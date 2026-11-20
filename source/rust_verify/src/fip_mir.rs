@@ -251,6 +251,20 @@ fn implements<'tcx>(
 }
 
 /// Can dropping a value of type `ty` deallocate?
+/// `Box<..>`, `Rc<..>` or `Arc<..>`
+fn is_std_pointer<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        ty::Adt(adt, _) => {
+            adt.is_box()
+                || matches!(
+                    tcx.get_diagnostic_name(adt.did()),
+                    Some(rustc_span::sym::Rc) | Some(rustc_span::sym::Arc)
+                )
+        }
+        _ => false,
+    }
+}
+
 fn drop_may_deallocate<'tcx>(
     tcx: TyCtxt<'tcx>,
     typing_env: TypingEnv<'tcx>,
@@ -260,8 +274,10 @@ fn drop_may_deallocate<'tcx>(
     if !ty.needs_drop(tcx, typing_env) {
         return false;
     }
-    // (an allocator's own drop is the runtime's, see `allocator_runtime`)
-    if is_allocator(tcx, typing_env, allocator_trait(tcx), ty) {
+    // (an allocator's own drop is the runtime's, see `allocator_runtime`; but not std's pointers
+    // that implement `Allocator` by forwarding to an allocator they own or share: dropping
+    // `Box<A>`, `Rc<A>` or `Arc<A>` frees the program's block)
+    if is_allocator(tcx, typing_env, allocator_trait(tcx), ty) && !is_std_pointer(tcx, ty) {
         return false;
     }
     match marker {

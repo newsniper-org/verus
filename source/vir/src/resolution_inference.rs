@@ -2004,6 +2004,16 @@ impl<'a> Builder<'a> {
         bb: BBIndex,
         position: AstPosition,
     ) {
+        if self.counting_drops() {
+            // -V alloc-check: the moves of an or-pattern are those of all its alternatives
+            // together, which would hide the drop of what one alternative leaves in place
+            if let Some(span) = or_pattern_moving_alternatives(pattern, &self.locals.datatypes) {
+                self.errors.push(error(
+                    &span,
+                    "-V alloc-check: Verus cannot count the drops after an or-pattern whose alternatives move different parts of a value yet; use separate arms",
+                ));
+            }
+        }
         match cpt {
             ComputedPlaceTyped::Exact(fpt) => {
                 let places =
@@ -5458,4 +5468,77 @@ fn drop_insertions(
         }
     }
     Ok(out)
+}
+
+/// An or-pattern (its span) whose alternatives move values out, unless they are constructors of
+/// different variants of one enum (whose moves are of different variants, so moving the union is
+/// exact for each value)
+fn or_pattern_moving_alternatives(
+    pattern: &Pattern,
+    datatypes: &HashMap<Path, Datatype>,
+) -> Option<Span> {
+    fn moves(p: &Pattern) -> bool {
+        match &p.x {
+            PatternX::Var(b) => b.by_ref == ByRef::No && !b.copy,
+            PatternX::Binding { binding, sub_pat } => {
+                (binding.by_ref == ByRef::No && !binding.copy) || moves(sub_pat)
+            }
+            PatternX::Constructor(_, _, binders) => binders.iter().any(|b| moves(&b.a)),
+            PatternX::Or(p1, p2) => moves(p1) || moves(p2),
+            PatternX::ImmutRef(_) | PatternX::MutRef(_) => false,
+            PatternX::Slice(pats) => pats.iter().any(moves),
+            PatternX::Wildcard | PatternX::Expr(_) | PatternX::Range(..) => false,
+        }
+    }
+    fn alternatives<'p>(p: &'p Pattern, out: &mut Vec<&'p Pattern>) {
+        match &p.x {
+            PatternX::Or(p1, p2) => {
+                alternatives(p1, out);
+                alternatives(p2, out);
+            }
+            _ => out.push(p),
+        }
+    }
+    match &pattern.x {
+        PatternX::Or(..) => {
+            let mut alts = vec![];
+            alternatives(pattern, &mut alts);
+            if alts.iter().any(|a| moves(a)) {
+                let mut variants: Vec<&Ident> = vec![];
+                let mut dts: Vec<&Dt> = vec![];
+                for a in alts.iter() {
+                    match &a.x {
+                        PatternX::Constructor(dt @ Dt::Path(path), variant, _)
+                            if datatypes.get(path).is_some_and(|d| d.x.variants.len() > 1) =>
+                        {
+                            dts.push(dt);
+                            variants.push(variant);
+                        }
+                        _ => return Some(pattern.span.clone()),
+                    }
+                }
+                let distinct = (0..variants.len())
+                    .all(|i| (0..i).all(|j| variants[i] != variants[j]))
+                    && dts.iter().all(|d| *d == dts[0]);
+                if !distinct {
+                    return Some(pattern.span.clone());
+                }
+            }
+            for a in alts.iter() {
+                if let Some(s) = or_pattern_moving_alternatives(a, datatypes) {
+                    return Some(s);
+                }
+            }
+            None
+        }
+        PatternX::Binding { sub_pat, .. } => or_pattern_moving_alternatives(sub_pat, datatypes),
+        PatternX::Constructor(_, _, binders) => {
+            binders.iter().find_map(|b| or_pattern_moving_alternatives(&b.a, datatypes))
+        }
+        PatternX::ImmutRef(p) | PatternX::MutRef(p) => or_pattern_moving_alternatives(p, datatypes),
+        PatternX::Slice(pats) => {
+            pats.iter().find_map(|p| or_pattern_moving_alternatives(p, datatypes))
+        }
+        PatternX::Var(_) | PatternX::Wildcard | PatternX::Expr(_) | PatternX::Range(..) => None,
+    }
 }

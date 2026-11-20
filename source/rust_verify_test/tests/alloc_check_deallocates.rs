@@ -583,3 +583,49 @@ test_verify_one_file_with_options! {
         }
     }.to_string() => Err(err) => assert_fails(err, 2)
 }
+
+// (review findings) an allocator type's drop is not free in general: `Box`, `Rc` and `Arc`
+// implement `Allocator` by forwarding, and dropping them frees the program's block
+test_verify_one_file_with_options! {
+    #[test] deallocates_allocator_drop_not_free ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+        proof fn no_contradiction(b: Box<&'static std::alloc::System>) ensures false { // FAILS
+            assert(vstd::alloc_check::drop_deallocations(b) >= 0);
+        }
+        fn consume<A: std::alloc::Allocator>(a: A) deallocates 0 { } // FAILS
+        fn consume_global(a: std::alloc::Global) deallocates 0 { }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_or_pattern_moves ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        fn pick(t: (bool, Box<u64>, Box<u64>, Box<u64>)) -> (r: Box<u64>) deallocates 2 {
+            match t {
+                (true, x, _, _) | (false, _, x, _) => x,
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Verus cannot count the drops after an or-pattern whose alternatives move different parts of a value yet")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_or_pattern_variants ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        enum E { A(Box<u64>), B(Box<u64>), C }
+        fn take(e: E) -> (r: Option<Box<u64>>) deallocates 0 {
+            match e {
+                E::A(x) | E::B(x) => Some(x),
+                E::C => None,
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_async_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        async fn f(b: Box<Box<u64>>) -> (r: Box<u64>) deallocates 0 { *b }
+    } => Err(err) => assert_vir_error_msg(err, "an async function cannot be `#[verifier::fip]` or have a `deallocates` bound yet")
+}

@@ -228,14 +228,15 @@ pub open spec fn box_block_deallocations<T>() -> nat {
     }
 }
 
-/// Dropping a `Box` drops its contents and frees its block (through its allocator: dropping the
-/// allocator itself is the runtime's)
+/// Dropping a `Box` drops its contents and frees its block (through its allocator, which it
+/// then drops: for an allocator whose drop cannot deallocate, such as `Global`)
 #[cfg(feature = "alloc")]
 pub broadcast axiom fn axiom_drop_deallocations_box<T, A: core::alloc::Allocator>(
     b: alloc::boxed::Box<T, A>,
 )
     ensures
-        #[trigger] drop_deallocations(b) == drop_deallocations(*b) + box_block_deallocations::<T>(),
+        !drop_may_deallocate::<A>() ==> #[trigger] drop_deallocations(b) == drop_deallocations(*b)
+            + box_block_deallocations::<T>(),
 ;
 
 /// Dropping a `String` frees its buffer, if it has one
@@ -252,7 +253,9 @@ pub broadcast axiom fn axiom_drop_deallocations_rc<T, A: core::alloc::Allocator>
     r: alloc::rc::Rc<T, A>,
 )
     ensures
-        #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(*r),
+        !drop_may_deallocate::<A>() ==> #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(
+            *r,
+        ),
 ;
 
 /// Dropping an `Arc` drops its contents and frees its block when it is the last reference (which
@@ -262,7 +265,9 @@ pub broadcast axiom fn axiom_drop_deallocations_arc<T, A: core::alloc::Allocator
     r: alloc::sync::Arc<T, A>,
 )
     ensures
-        #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(*r),
+        !drop_may_deallocate::<A>() ==> #[trigger] drop_deallocations(r) <= 1 + drop_deallocations(
+            *r,
+        ),
 ;
 
 pub broadcast axiom fn axiom_drop_deallocations_option<T>(o: Option<T>)
@@ -292,12 +297,6 @@ pub broadcast axiom fn axiom_drop_deallocations_tuple3<A, B, C>(p: (A, B, C))
             + drop_deallocations(p.2),
 ;
 
-/// Dropping an allocator is the runtime's (see `NoDeallocDrop for Global`)
-pub broadcast axiom fn axiom_allocator_no_dealloc_drop<A: core::alloc::Allocator>()
-    ensures
-        !#[trigger] drop_may_deallocate::<A>(),
-;
-
 /// A `Copy` type has no drop glue
 pub broadcast axiom fn axiom_copy_no_dealloc_drop<T: Copy>()
     ensures
@@ -320,7 +319,6 @@ pub broadcast group group_alloc_check_axioms {
     axiom_drop_deallocations_result,
     axiom_drop_deallocations_tuple2,
     axiom_drop_deallocations_tuple3,
-    axiom_allocator_no_dealloc_drop,
     axiom_copy_no_dealloc_drop,
     group_op_marker_axioms,
 }

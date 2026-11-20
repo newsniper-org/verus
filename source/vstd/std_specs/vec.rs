@@ -187,11 +187,11 @@ pub open spec fn vec_has_buffer<T, A: Allocator>(v: &Vec<T, A>) -> bool {
     super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(v) > 0
 }
 
-/// Dropping a Vec drops its elements and frees its block (through its allocator: dropping the
-/// allocator itself is the runtime's)
+/// Dropping a Vec drops its elements and frees its block (through its allocator, which it then
+/// drops: for an allocator whose drop cannot deallocate, such as `Global`)
 pub broadcast axiom fn axiom_drop_deallocations_vec<T, A: Allocator>(v: Vec<T, A>)
     ensures
-        #[trigger] super::super::alloc_check::drop_deallocations(v)
+        !super::super::alloc_check::drop_may_deallocate::<A>() ==> #[trigger] super::super::alloc_check::drop_deallocations(v)
             == super::super::alloc_check::seq_drop_deallocations(v@) + if vec_has_buffer(&v) {
             1nat
         } else {

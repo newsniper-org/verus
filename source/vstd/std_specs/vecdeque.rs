@@ -497,10 +497,12 @@ pub assume_specification<'a, T, A: Allocator>[ VecDeque::<T, A>::iter ](
         0,
 ;
 
-/// Dropping a VecDeque drops its elements and frees its block, if it has one
+/// Dropping a VecDeque drops its elements and frees its block, if it has one (and drops its
+/// allocator: for an allocator whose drop cannot deallocate, such as `Global`)
 pub broadcast axiom fn axiom_drop_deallocations_vecdeque<T, A: Allocator>(v: VecDeque<T, A>)
     ensures
-        #[trigger] super::super::alloc_check::drop_deallocations(v)
+        !super::super::alloc_check::drop_may_deallocate::<A>()
+            ==> #[trigger] super::super::alloc_check::drop_deallocations(v)
             <= super::super::alloc_check::seq_drop_deallocations(v@) + 1,
 ;
 

@@ -1849,6 +1849,7 @@ pub broadcast axiom fn axiom_drop_deallocations_hash_map<Key, Value, S, A: Alloc
         !super::super::alloc_check::drop_may_deallocate::<Key>()
             && !super::super::alloc_check::drop_may_deallocate::<Value>()
             && !super::super::alloc_check::drop_may_deallocate::<S>()
+            && !super::super::alloc_check::drop_may_deallocate::<A>()
             ==> #[trigger] super::super::alloc_check::drop_deallocations(m) <= 1,
 ;
 
@@ -1859,6 +1860,7 @@ pub broadcast axiom fn axiom_drop_deallocations_hash_set<Key, S, A: Allocator>(
     ensures
         !super::super::alloc_check::drop_may_deallocate::<Key>()
             && !super::super::alloc_check::drop_may_deallocate::<S>()
+            && !super::super::alloc_check::drop_may_deallocate::<A>()
             ==> #[trigger] super::super::alloc_check::drop_deallocations(m) <= 1,
 ;
 
