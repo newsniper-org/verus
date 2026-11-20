@@ -204,6 +204,11 @@ pub assume_specification<Idx: PartialOrd<Idx>>[ RangeInclusive::<Idx>::is_empty 
 
     allocates
         call_allocations(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end)),
+    deallocates
+        deallocates_when(
+            call_deallocations(<Idx as PartialOrd<Idx>>::le, (&r@.start, &r@.end)),
+            !super::super::alloc_check::partial_ord_is_fip::<Idx, Idx>(),
+        ),
 ;
 
 pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx) -> (ret:
@@ -211,6 +216,8 @@ pub assume_specification<Idx>[ RangeInclusive::<Idx>::new ](start: Idx, end: Idx
     ensures
         ret@ == (RangeInclusiveView { start, end, exhausted: false }),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -370,6 +377,8 @@ pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::start_bound ](
         result == Bound::Included(&range.start),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::end_bound ](
@@ -378,6 +387,8 @@ pub assume_specification<'s, T>[ <Range<T> as RangeBounds<T>>::end_bound ](
     ensures
         result == Bound::Excluded(&range.end),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -388,6 +399,8 @@ pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::start_bo
         result == Bound::Unbounded,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::end_bound ](
@@ -396,6 +409,8 @@ pub assume_specification<'s, T: ?Sized>[ <RangeFull as RangeBounds<T>>::end_boun
     ensures
         result == Bound::Unbounded,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -406,6 +421,8 @@ pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::start_bound ]
         result == Bound::Included(&range.start),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::end_bound ](
@@ -414,6 +431,8 @@ pub assume_specification<'s, T>[ <RangeFrom<T> as RangeBounds<T>>::end_bound ](
     ensures
         result == Bound::Unbounded,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -424,6 +443,8 @@ pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::start_bound ](
         result == Bound::Unbounded,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::end_bound ](
@@ -432,6 +453,8 @@ pub assume_specification<'s, T>[ <RangeTo<T> as RangeBounds<T>>::end_bound ](
     ensures
         result == Bound::Excluded(&range.end),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -459,6 +482,8 @@ pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::start_bo
         result == spec_range_inclusive_start_bound(range),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::end_bound ](
@@ -467,6 +492,8 @@ pub assume_specification<'s, T>[ <RangeInclusive<T> as RangeBounds<T>>::end_boun
     ensures
         result == spec_range_inclusive_end_bound(range),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -477,6 +504,8 @@ pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::start_
         result == Bound::Unbounded,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::end_bound ](
@@ -485,6 +514,8 @@ pub assume_specification<'s, T>[ <RangeToInclusive<T> as RangeBounds<T>>::end_bo
     ensures
         result == Bound::Included(&range.end),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -495,6 +526,8 @@ pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::start
         result == bound_as_ref(&range.0),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::end_bound ](
@@ -503,6 +536,8 @@ pub assume_specification<'s, T>[ <(Bound<T>, Bound<T>) as RangeBounds<T>>::end_b
     ensures
         result == bound_as_ref(&range.1),
     allocates
+        0,
+    deallocates
         0,
 ;
 

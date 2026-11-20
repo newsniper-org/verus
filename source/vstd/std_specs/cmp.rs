@@ -289,7 +289,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::min_by ](
             &&& r == (if o == Ordering::Greater { v2 } else { v1 })
         },
     allocates call_allocations(compare, (&v1, &v2))
-;
+ deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2);
 
 pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
     v1: T,
@@ -304,7 +304,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
             &&& r == (if o == Ordering::Greater { v1 } else { v2 })
         },
     allocates call_allocations(compare, (&v1, &v2))
-;
+ deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2);
 
 // `min_by_key` and `max_by_key` compute the keys `f(&v1)` and `f(&v2)` and
 // compare them with `<`. When neither key is less than the other, `min_by_key`
@@ -355,9 +355,9 @@ impl PartialEqSpecImpl for bool {
     }
 }
 
-pub assume_specification[ <bool as PartialEq<bool>>::eq ](x: &bool, y: &bool) -> bool  allocates 0;
+pub assume_specification[ <bool as PartialEq<bool>>::eq ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
 
-pub assume_specification[ <bool as PartialEq<bool>>::ne ](x: &bool, y: &bool) -> bool  allocates 0;
+pub assume_specification[ <bool as PartialEq<bool>>::ne ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
 
 /* char */
 
@@ -399,75 +399,75 @@ pub uninterp spec fn ge_ensures<A>(x: A, y: A, o: bool) -> bool;
 pub assume_specification[ <f32 as PartialEq<f32>>::eq ](x: &f32, y: &f32) -> (o: bool)
     ensures
         eq_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 // Warning: floating-point ne is not the same as spec !=
 pub assume_specification[ <f32 as PartialEq<f32>>::ne ](x: &f32, y: &f32) -> (o: bool)
     ensures
         ne_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f32 as PartialOrd<f32>>::partial_cmp ](x: &f32, y: &f32) -> (o: Option<Ordering>)
     ensures
         partial_cmp_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f32 as PartialOrd<f32>>::lt ](x: &f32, y: &f32) -> (o: bool)
     ensures
         lt_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f32 as PartialOrd<f32>>::le ](x: &f32, y: &f32) -> (o: bool)
     ensures
         le_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f32 as PartialOrd<f32>>::gt ](x: &f32, y: &f32) -> (o: bool)
     ensures
         gt_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f32 as PartialOrd<f32>>::ge ](x: &f32, y: &f32) -> (o: bool)
     ensures
         ge_ensures::<f32>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 // Warning: floating-point eq is not the same as spec ==
 pub assume_specification[ <f64 as PartialEq<f64>>::eq ](x: &f64, y: &f64) -> (o: bool)
     ensures
         eq_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 // Warning: floating-point ne is not the same as spec !=
 pub assume_specification[ <f64 as PartialEq<f64>>::ne ](x: &f64, y: &f64) -> (o: bool)
     ensures
         ne_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f64 as PartialOrd<f64>>::partial_cmp ](x: &f64, y: &f64) -> (o: Option<Ordering>)
     ensures
         partial_cmp_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f64 as PartialOrd<f64>>::lt ](x: &f64, y: &f64) -> (o: bool)
     ensures
         lt_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f64 as PartialOrd<f64>>::le ](x: &f64, y: &f64) -> (o: bool)
     ensures
         le_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f64 as PartialOrd<f64>>::gt ](x: &f64, y: &f64) -> (o: bool)
     ensures
         gt_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification[ <f64 as PartialOrd<f64>>::ge ](x: &f64, y: &f64) -> (o: bool)
     ensures
         ge_ensures::<f64>(*x, *y, o),  allocates 0
-;
+ deallocates 0;
 
 /* reference types & */
 

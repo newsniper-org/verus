@@ -75,6 +75,8 @@ pub assume_specification[ DefaultHasher::new ]() -> (result: DefaultHasher)
         result@ == Seq::<Seq<u8>>::empty(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // This is the specification of behavior for `DefaultHasher::write(&[u8])`.
@@ -83,6 +85,8 @@ pub assume_specification[ DefaultHasher::write ](state: &mut DefaultHasher, byte
         final(state)@ == old(state)@.push(bytes@),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // This is the specification of behavior for `DefaultHasher::finish()`.
@@ -90,6 +94,8 @@ pub assume_specification[ DefaultHasher::finish ](state: &DefaultHasher) -> (res
     ensures
         result == DefaultHasher::spec_finish(state@),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -444,6 +450,8 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
         },
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// Specifications for the behavior of [`std::collections::HashMap`](https://doc.rust-lang.org/std/collections/struct.HashMap.html).
@@ -622,6 +630,8 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
         len == spec_hash_map_len(m),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::capacity ](
@@ -631,6 +641,8 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
         cap >= spec_hash_map_len(m),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::is_empty ](
@@ -639,6 +651,8 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
     ensures
         res == m@.is_empty(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -664,6 +678,8 @@ pub assume_specification<Key, Value>[ HashMap::<Key, Value>::new ]() -> (m: Hash
         m@ == Map::<Key, Value>::empty(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
@@ -675,6 +691,8 @@ pub assume_specification<K, V, S: core::default::Default>[ <HashMap<
         m@ == Map::<K, V>::empty(),
     allocates
         call_allocations(S::default, ()),
+    deallocates
+        call_deallocations(S::default, ()),
 ;
 
 pub assume_specification<Key, Value>[ HashMap::<Key, Value>::with_capacity ](capacity: usize) -> (m:
@@ -683,6 +701,8 @@ pub assume_specification<Key, Value>[ HashMap::<Key, Value>::with_capacity ](cap
         m@ == Map::<Key, Value>::empty(),
     allocates
         1,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key, Value, S>[ HashMap::<Key, Value, S>::with_hasher ](
@@ -691,6 +711,8 @@ pub assume_specification<Key, Value, S>[ HashMap::<Key, Value, S>::with_hasher ]
     ensures
         m@ == Map::<Key, Value>::empty(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -914,6 +936,12 @@ pub assume_specification<Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, 
         spec_hashmap_allocator(final(m)) == spec_hashmap_allocator(old(m)),
     allocates
         0,
+    deallocates
+        deallocates_when(
+            super::super::alloc_check::drop_deallocations(*old(m)) as int,
+            super::super::alloc_check::drop_may_deallocate::<Key>()
+                || super::super::alloc_check::drop_may_deallocate::<Value>(),
+        ),
 ;
 
 pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::keys ](
@@ -929,6 +957,8 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
         },
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value, S, A>::values ](
@@ -942,6 +972,8 @@ pub assume_specification<'a, Key, Value, S, A: Allocator>[ HashMap::<Key, Value,
             &&& IteratorSpec::decrease(&values) is Some
         },
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1033,6 +1065,8 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::len ](
         len == spec_hash_set_len(m),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::is_empty ](
@@ -1042,12 +1076,16 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::is_empty ]
         res == m@.is_empty(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::new ]() -> (m: HashSet<Key, RandomState>)
     ensures
         m@ == Set::<Key>::empty(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1059,6 +1097,8 @@ pub assume_specification<T, S: core::default::Default>[ <HashSet<
         m@ == Set::<T>::empty(),
     allocates
         call_allocations(S::default, ()),
+    deallocates
+        call_deallocations(S::default, ()),
 ;
 
 pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) -> (m: HashSet<
@@ -1069,6 +1109,8 @@ pub assume_specification<Key>[ HashSet::<Key>::with_capacity ](capacity: usize) 
         m@ == Set::<Key>::empty(),
     allocates
         1,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key, S>[ HashSet::<Key, S>::with_hasher ](hash_builder: S) -> (m: HashSet<
@@ -1078,6 +1120,8 @@ pub assume_specification<Key, S>[ HashSet::<Key, S>::with_hasher ](hash_builder:
     ensures
         m@ == Set::<Key>::empty(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1089,6 +1133,8 @@ pub assume_specification<Key, S>[ HashSet::<Key, S>::with_capacity_and_hasher ](
         m@ == Set::<Key>::empty(),
     allocates
         1,
+    deallocates
+        0,
 ;
 
 pub assume_specification<Key: Eq + Hash, S: BuildHasher, A: Allocator>[ HashSet::<
@@ -1272,6 +1318,11 @@ pub assume_specification<Key, S, A: Allocator>[ HashSet::<Key, S, A>::clear ](
         spec_hashset_allocator(final(m)) == spec_hashset_allocator(old(m)),
     allocates
         0,
+    deallocates
+        deallocates_when(
+            super::super::alloc_check::drop_deallocations(*old(m)) as int,
+            super::super::alloc_check::drop_may_deallocate::<Key>(),
+        ),
 ;
 
 pub assume_specification<'a, Key, S, A: Allocator>[ HashSet::<Key, S, A>::iter ](
@@ -1286,6 +1337,8 @@ pub assume_specification<'a, Key, S, A: Allocator>[ HashSet::<Key, S, A>::iter ]
             &&& IteratorSpec::decrease(&hash_keys) is Some
         },
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1443,6 +1496,8 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ Entry::key ](
         &entry.spec_key(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
@@ -1457,6 +1512,11 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::or_insert ](
         entry.final_value() == Some(*final(value)),
     allocates
         0,
+    deallocates
+        deallocates_when(
+            super::super::alloc_check::drop_deallocations(default) as int,
+            entry.value() is Some,
+        ),
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
@@ -1469,6 +1529,11 @@ pub assume_specification<'a, K, V, A: Allocator>[ Entry::insert_entry ](
         entry.final_value() == occ_entry.final_value(),
     allocates
         0,
+    deallocates
+        match entry.value() {
+            Some(v) => super::super::alloc_check::drop_deallocations(v) as int,
+            None => 0int,
+        },
 ;
 
 //// OccupiedEntry
@@ -1484,6 +1549,8 @@ mod m_occ {
             &entry.spec_key(),
         allocates
             0,
+        deallocates
+            0,
     ;
 
 }
@@ -1497,6 +1564,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove_entry ](
         (*entry.key(), entry.value()),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get ](
@@ -1505,6 +1574,8 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get ](
     ensures
         *value == entry.value(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1518,6 +1589,8 @@ pub assume_specification<'a, 'b, K, V, A: Allocator>[ OccupiedEntry::get_mut ](
         final(entry).final_value() == old(entry).final_value(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::into_mut ](
@@ -1527,6 +1600,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::into_mut ](
         *value == entry.value(),
         entry.final_value() == Some(*final(value)),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1541,6 +1616,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::insert ](
         final(entry).final_value() == old(entry).final_value(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove ](
@@ -1551,6 +1628,8 @@ pub assume_specification<'a, K, V, A: Allocator>[ OccupiedEntry::remove ](
         entry.final_value() == None,
     allocates
         0,
+    deallocates
+        super::super::alloc_check::drop_deallocations(*entry.key()),
 ;
 
 //// VacantEntry
@@ -1566,6 +1645,8 @@ mod m_vac {
             &entry.spec_key(),
         allocates
             0,
+        deallocates
+            0,
     ;
 
 }
@@ -1578,6 +1659,8 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::into_key 
         entry.final_value() == None,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
@@ -1588,6 +1671,8 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert ](
         *value_ref == value,
         entry.final_value() == Some(*final(value_ref)),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1600,6 +1685,8 @@ pub assume_specification<'a, K: 'a, V: 'a, A: Allocator>[ VacantEntry::insert_en
         occ_entry.value() == value,
         entry.final_value() == occ_entry.final_value(),
     allocates
+        0,
+    deallocates
         0,
 ;
 

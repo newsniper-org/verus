@@ -196,6 +196,12 @@ pub assume_specification<T>[ Option::<T>::unwrap_or ](option: Option<T>, default
     no_unwind
     allocates
         0,
+    deallocates
+        if option.is_some() {
+            super::super::alloc_check::drop_deallocations(default)
+        } else {
+            0
+        },
 ;
 
 // expect
@@ -245,6 +251,12 @@ pub assume_specification<T, U, F: FnOnce(T) -> U>[ Option::<T>::map ](a: Option<
         } else {
             0
         },
+    deallocates
+        if a.is_some() {
+            call_deallocations(f, (a.unwrap(),))
+        } else {
+            super::super::alloc_check::drop_deallocations(f)
+        },
 ;
 
 // cloned
@@ -259,6 +271,15 @@ pub assume_specification<'a, T: Clone>[ Option::<&'a T>::cloned ](opt: Option<&'
         } else {
             0
         },
+    deallocates
+        deallocates_when(
+            if opt.is_some() {
+                call_deallocations(T::clone, (opt.unwrap(),))
+            } else {
+                0
+            },
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
 ;
 
 // copied
@@ -270,6 +291,8 @@ pub assume_specification<'a, T: Copy>[ Option::<&'a T>::copied ](opt: Option<&'a
             None => None::<T>,
         },
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -288,6 +311,12 @@ pub assume_specification<T, U, F: FnOnce(T) -> Option<U>>[ Option::<T>::and_then
             call_allocations(f, (option.unwrap(),))
         } else {
             0
+        },
+    deallocates
+        if option.is_some() {
+            call_deallocations(f, (option.unwrap(),))
+        } else {
+            super::super::alloc_check::drop_deallocations(f)
         },
 ;
 
@@ -310,6 +339,12 @@ pub assume_specification<T, E, F: FnOnce() -> E>[ Option::<T>::ok_or_else ](
         } else {
             0
         },
+    deallocates
+        if option.is_none() {
+            call_deallocations(err, ())
+        } else {
+            super::super::alloc_check::drop_deallocations(err)
+        },
 ;
 
 // unwrap_or_default
@@ -325,6 +360,15 @@ pub assume_specification<T: core::default::Default>[ Option::<T>::unwrap_or_defa
         } else {
             0
         },
+    deallocates
+        deallocates_when(
+            if option.is_none() {
+                call_deallocations(T::default, ())
+            } else {
+                0
+            },
+            option.is_none() && call_deallocates(T::default, ()),
+        ),
 ;
 
 // unwrap_or_else
@@ -343,6 +387,12 @@ pub assume_specification<T, F: FnOnce() -> T>[ Option::<T>::unwrap_or_else ](
         } else {
             0
         },
+    deallocates
+        if option.is_none() {
+            call_deallocations(f, ())
+        } else {
+            super::super::alloc_check::drop_deallocations(f)
+        },
 ;
 
 // clone
@@ -358,6 +408,15 @@ pub assume_specification<T: Clone>[ <Option<T> as Clone>::clone ](opt: &Option<T
         } else {
             0
         },
+    deallocates
+        deallocates_when(
+            if opt.is_some() {
+                call_deallocations(T::clone, (&opt.unwrap(),))
+            } else {
+                0
+            },
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
 ;
 
 // PartialEq and Eq
@@ -488,6 +547,12 @@ pub assume_specification<T, E>[ Option::ok_or ](option: Option<T>, err: E) -> (r
         res == spec_ok_or(option, err),
     allocates
         0,
+    deallocates
+        if option.is_some() {
+            super::super::alloc_check::drop_deallocations(err)
+        } else {
+            0
+        },
 ;
 
 #[doc(hidden)]
@@ -512,6 +577,8 @@ pub assume_specification<T>[ Option::as_slice ](option: &Option<T>) -> (res: &[T
         }),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[doc(hidden)]
@@ -528,6 +595,8 @@ pub assume_specification<T>[ Option::as_mut_slice ](option: &mut Option<T>) -> (
         }),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[doc(hidden)]
@@ -537,6 +606,11 @@ pub assume_specification<T>[ Option::insert ](option: &mut Option<T>, value: T) 
         *final(option) == Some(*final(res)),
     allocates
         0,
+    deallocates
+        match *old(option) {
+            Some(x) => super::super::alloc_check::drop_deallocations(x),
+            None => 0,
+        },
 ;
 
 #[doc(hidden)]
@@ -550,6 +624,11 @@ pub assume_specification<T>[ Option::get_or_insert ](option: &mut Option<T>, val
         *final(option) == Some(*final(res)),
     allocates
         0,
+    deallocates
+        match *old(option) {
+            Some(_) => super::super::alloc_check::drop_deallocations(value),
+            None => 0,
+        },
 ;
 
 } // verus!

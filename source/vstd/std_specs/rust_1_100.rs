@@ -57,6 +57,8 @@ pub assume_specification[ bool::toggle ](b: &mut bool)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// `DropGuard<T, F>` runs `f(inner)` when it is dropped. (Under -V alloc-check its drop is not
@@ -80,6 +82,8 @@ pub assume_specification<T, F: FnOnce(T)>[ DropGuard::<T, F>::new ](inner: T, f:
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T, F: FnOnce(T)>[ DropGuard::<T, F>::dismiss ](
@@ -91,6 +95,8 @@ pub assume_specification<T, F: FnOnce(T)>[ DropGuard::<T, F>::dismiss ](
     no_unwind
     allocates
         0,
+    deallocates
+        super::super::alloc_check::drop_deallocations(drop_guard_fn(guard)),
 ;
 
 pub assume_specification<T, F: FnOnce(T)>[ <DropGuard<T, F> as core::ops::Deref>::deref ](
@@ -99,6 +105,8 @@ pub assume_specification<T, F: FnOnce(T)>[ <DropGuard<T, F> as core::ops::Deref>
     ensures
         *r == drop_guard_inner(*guard),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -110,6 +118,8 @@ pub assume_specification<T, F: FnOnce(T)>[ <DropGuard<T, F> as core::ops::DerefM
         drop_guard_inner(*final(guard)) == *final(r),
         drop_guard_fn(*final(guard)) == drop_guard_fn(*old(guard)),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -131,6 +141,8 @@ pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_ref_uncheck
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[verifier::trusted_only]
@@ -140,6 +152,8 @@ pub assume_specification<T: ?Sized>[ core::cell::UnsafeCell::<T>::as_mut_uncheck
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -151,6 +165,8 @@ pub assume_specification<T>[ core::cell::UnsafeCell::<T>::replace ](
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -198,6 +214,8 @@ pub assume_specification[ Layout::size ](l: &Layout) -> (r: usize)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification[ Layout::align ](l: &Layout) -> (r: usize)
@@ -208,6 +226,8 @@ pub assume_specification[ Layout::align ](l: &Layout) -> (r: usize)
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -345,7 +365,7 @@ macro_rules! std_allocator_specs {
                 layout: Layout,
             )
                 allocates 0
-            ;
+ deallocates 1            ;
 
             #[verifier::trusted_only]
             pub assume_specification[ <$a as core::alloc::Allocator>::grow ](
@@ -398,6 +418,8 @@ pub struct ExOnce(std::sync::Once);
 
 pub assume_specification[ <std::sync::Once as core::default::Default>::default ]() -> std::sync::Once
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -460,6 +482,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::allocator ](v: &Vec<T, A
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// -V alloc-check: the allocator of a box (the containers' costs may depend on its value)
@@ -473,6 +497,8 @@ pub assume_specification<T: ?Sized, A: Allocator>[ Box::<T, A>::allocator ](b: &
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// `Box::new_in` allocates `Layout::new::<T>()` with the given allocator (or nothing for a
@@ -483,11 +509,13 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::new_in ](x: T, alloc: A)
         *b == x,
         spec_box_allocator(&b) == alloc,
     allocates
-        if crate::layout::size_of::<T>() == 0 {
+        if super::super::layout::size_of::<T>() == 0 {
             0int
         } else {
             1int
         },
+    deallocates
+        0,
 ;
 
 /// `Box::take` moves the value out and keeps the allocation (with uninitialized contents)
@@ -501,6 +529,8 @@ pub assume_specification<T, A: Allocator>[ Box::<T, A>::take ](boxed: Box<T, A>)
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -523,6 +553,13 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(T) -> U>[ Box::<T, A>::ma
         } else {
             1int
         }) + call_allocations(f, (*this,)),
+    deallocates
+        (if super::super::layout::size_of::<T>() == super::super::layout::size_of::<U>()
+            && super::super::layout::align_of::<T>() == super::super::layout::align_of::<U>() {
+            0int
+        } else {
+            1int
+        }) + call_deallocations(f, (*this,)),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::map::<U> ](
@@ -535,6 +572,8 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::ma
         f.ensures((&*this,), *r),
     allocates
         1 + call_allocations(f, (&*this,)),
+    deallocates
+        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::map::<U> ](
@@ -547,6 +586,8 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::m
         f.ensures((&*this,), *r),
     allocates
         1 + call_allocations(f, (&*this,)),
+    deallocates
+        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)),
 ;
 
 } // verus!

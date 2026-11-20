@@ -32,12 +32,16 @@ pub assume_specification<T>[ ManuallyDrop::<T>::new ](value: T) -> (res: Manuall
         res@ == value,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T>[ ManuallyDrop::<T>::into_inner ](m: ManuallyDrop<T>) -> T
     returns
         m@,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -54,6 +58,8 @@ pub assume_specification<T: ?Sized>[ <ManuallyDrop<T> as Deref>::deref ](
     returns
         m.view_ref(),
     allocates
+        0,
+    deallocates
         0,
 ;
 

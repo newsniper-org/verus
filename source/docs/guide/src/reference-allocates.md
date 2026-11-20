@@ -472,10 +472,18 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * The earlier form `allocates deallocates_when(n, c)` (a condition without a number) is no longer
   accepted: write `allocates n deallocates deallocates_when(d, c)`.
 * vstd's specifications of std functions state their deallocations: those that may free memory
-  do it with a count (`Vec::push` 1 where it grows an existing buffer, `Vec::clear` and
-  `truncate` the drops of the removed elements, a comparison or `clone` that calls the user's
-  code what those calls deallocate). A specification that does not state it yet cannot be
-  called from a function with a `deallocates` bound (nor from a fip function).
+  do it with a count (`Vec::push` 1 where it grows an existing buffer, `String::push_str` 1,
+  `Vec::clear` and `truncate` the drops of the removed elements, a comparison or `clone` that
+  calls the user's code what those calls deallocate). A function that drops a value it was
+  given counts `vstd::alloc_check::drop_deallocations(v)` (`Option::unwrap_or` drops `default`
+  when the option is `Some`, `Option::insert` drops the old contents); for a sequence of values
+  it is `seq_drop_deallocations(s)`. `drop_deallocations` is 0 for a type whose drop cannot
+  deallocate (`NoDeallocDrop`), and not defined yet for the others.
+* A few specifications state no bound, because they run user code whose deallocations vstd
+  cannot name yet: the `HashMap` and `HashSet` operations that hash a key (`insert`, `get`,
+  `remove`, `contains_key`, `entry`, `reserve`, ...), `to_string`, `format!` and
+  `Formatter::write_fmt`, `Vec::from_fn`, and `Iterator::next` (so a `for` loop). Such a function
+  cannot be called from a function with a `deallocates` bound (nor from a fip function).
 
 ## Fully in-place functions: `#[verifier::fip]`
 

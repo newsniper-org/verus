@@ -37,15 +37,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for usize {
     }
 }
 
-pub assume_specification<T>[ <usize as SliceIndex<[T]>>::get ](i: usize, slice: &[T]) -> Option<&T>  allocates 0;
+pub assume_specification<T>[ <usize as SliceIndex<[T]>>::get ](i: usize, slice: &[T]) -> Option<&T>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <usize as SliceIndex<[T]>>::index ](i: usize, slice: &[T]) -> &T  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <usize as SliceIndex<[T]>>::get_mut ](i: usize, slice: &mut [T]) -> Option<&mut T>  allocates 0;
+pub assume_specification<T>[ <usize as SliceIndex<[T]>>::get_mut ](i: usize, slice: &mut [T]) -> Option<&mut T>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <usize as SliceIndex<[T]>>::index_mut ](i: usize, slice: &mut [T]) -> (output: &mut T)  allocates 0
-;
+ deallocates 0;
 
 pub open spec fn generic_slice_in_bounds<R: RangeBoundsSpec<usize>, T>(
     range: &R,
@@ -101,15 +101,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for Range<usize> {
     }
 }
 
-pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::get ](i: Range<usize>, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::get ](i: Range<usize>, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::index ](i: Range<usize>, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::get_mut ](i: Range<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::get_mut ](i: Range<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::index_mut ](i: Range<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeTo<usize> {
     open spec fn in_bounds(&self, slice: &[T]) -> bool {
@@ -131,15 +131,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeTo<usize> {
     }
 }
 
-pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::get ](i: RangeTo<usize>, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::get ](i: RangeTo<usize>, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::index ](i: RangeTo<usize>, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::get_mut ](i: RangeTo<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::get_mut ](i: RangeTo<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeTo<usize> as SliceIndex<[T]>>::index_mut ](i: RangeTo<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeFrom<usize> {
     open spec fn in_bounds(&self, slice: &[T]) -> bool {
@@ -161,15 +161,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeFrom<usize> {
     }
 }
 
-pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::get ](i: RangeFrom<usize>, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::get ](i: RangeFrom<usize>, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::index ](i: RangeFrom<usize>, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::get_mut ](i: RangeFrom<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::get_mut ](i: RangeFrom<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::index_mut ](i: RangeFrom<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeToInclusive<usize> {
     open spec fn in_bounds(&self, slice: &[T]) -> bool {
@@ -191,15 +191,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeToInclusive<usize>
     }
 }
 
-pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::get ](i: RangeToInclusive<usize>, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::get ](i: RangeToInclusive<usize>, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::index ](i: RangeToInclusive<usize>, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::get_mut ](i: RangeToInclusive<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::get_mut ](i: RangeToInclusive<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeToInclusive<usize> as SliceIndex<[T]>>::index_mut ](i: RangeToInclusive<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeFull {
     open spec fn in_bounds(&self, slice: &[T]) -> bool {
@@ -221,15 +221,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeFull {
     }
 }
 
-pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::get ](i: RangeFull, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::get ](i: RangeFull, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::index ](i: RangeFull, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::get_mut ](i: RangeFull, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::get_mut ](i: RangeFull, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeFull as SliceIndex<[T]>>::index_mut ](i: RangeFull, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 // Indexing with an empty range doesn't verify, since std doesn't say whether it
 // panics. `get` still verifies and returns `None` or an empty slice.
@@ -271,15 +271,15 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeInclusive<usize> {
     }
 }
 
-pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::get ](i: RangeInclusive<usize>, slice: &[T]) -> Option<&[T]>  allocates 0;
+pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::get ](i: RangeInclusive<usize>, slice: &[T]) -> Option<&[T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::index ](i: RangeInclusive<usize>, slice: &[T]) -> (r: &[T])  allocates 0
-;
+ deallocates 0;
 
-pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::get_mut ](i: RangeInclusive<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0;
+pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::get_mut ](i: RangeInclusive<usize>, slice: &mut [T]) -> Option<&mut [T]>  allocates 0 deallocates 0;
 
 pub assume_specification<T>[ <RangeInclusive<usize> as SliceIndex<[T]>>::index_mut ](i: RangeInclusive<usize>, slice: &mut [T]) -> (r: &mut [T])  allocates 0
-;
+ deallocates 0;
 
 /// -V alloc-check: the sum of the `allocates` bounds of `a[i] != b[i]` for `i < n`. rustc 1.99.1
 /// compares slices element by element with `!=` (`SlicePartialEq::equal_same_length`).
@@ -636,7 +636,7 @@ pub assume_specification<T, I, const N: usize>[ <[T; N]>::index_mut ](array: &mu
 pub assume_specification[ core::hint::unreachable_unchecked ]() -> !
     requires
         false,  allocates 0
-;
+ deallocates 0;
 
 // slice == slice
 pub assume_specification<T: PartialEq<U>, U>[ <[T] as PartialEq<[U]>>::eq ](
@@ -644,7 +644,7 @@ pub assume_specification<T: PartialEq<U>, U>[ <[T] as PartialEq<[U]>>::eq ](
     right: &[U],
 ) -> bool
     allocates seq_eq_allocates(left@, right@)
-;
+ deallocates deallocates_when(seq_eq_deallocations(left@, right@), !super::super::alloc_check::partial_eq_is_fip::<T, U>());
 
 impl<T, U> super::cmp::PartialEqSpecImpl<[U]> for [T] where T: PartialEq<U> + super::cmp::PartialEqSpec<U> {
     open spec fn obeys_eq_spec() -> bool {
@@ -777,7 +777,7 @@ pub assume_specification<T: Ord>[ <[T]>::binary_search ](slice: &[T], x: &T) -> 
 pub assume_specification<T>[ <[T]>::reverse ](slice: &mut [T])
     ensures
         final(slice)@ == old(slice)@.reverse(),  allocates 0
-;
+ deallocates 0;
 
 // swap
 #[verifier::alloc_check_skip_drops]
@@ -846,7 +846,7 @@ pub assume_specification<'a, T>[ <[T]>::iter ](s: &'a [T]) -> (iter: Iter<'a, T>
         IteratorSpec::remaining(&iter) == s@.as_ref(),
         into_iter_elts(iter) == IteratorSpec::remaining(&iter).unref(),
         IteratorSpec::decrease(&iter) is Some,  allocates 0
-;
+ deallocates 0;
 
 pub assume_specification<'a, T> [<&'a [T] as core::iter::IntoIterator>::into_iter] (s: &'a [T]) ->
     (iter: Iter<'a, T>)
@@ -854,7 +854,7 @@ pub assume_specification<'a, T> [<&'a [T] as core::iter::IntoIterator>::into_ite
         IteratorSpec::remaining(&iter) == s@.as_ref(),
         into_iter_elts(iter) == IteratorSpec::remaining(&iter).unref(),
         IteratorSpec::decrease(&iter) is Some,  allocates 0
-;
+ deallocates 0;
 
 /***********************************************************************************************
  * Definitions for `slice::IterMut` (the iterator behind `<[T]>::iter_mut` and `Vec::iter_mut`)
@@ -915,7 +915,7 @@ pub assume_specification<'a, T>[ <[T]>::iter_mut ](slice: &'a mut [T]) -> (iter:
         IteratorSpec::obeys_prophetic_iter_laws(&iter),
         IteratorSpec::produces(&iter).all(|p: bool| p),
         IteratorSpec::decrease(&iter) is Some,  allocates 0
-;
+ deallocates 0;
 
 #[verifier::alloc_check_skip_drops]
 pub assume_specification<T> [ <[T]>::first ](slice: &[T]) -> (res: Option<&T>)
@@ -1119,7 +1119,7 @@ pub assume_specification<T: Copy>[ <[T]>::copy_from_slice ](dst: &mut [T], src: 
         old(dst)@.len() == src@.len(),
     ensures
         final(dst)@ == src@,  allocates 0
-;
+ deallocates 0;
 
 /// The sequence resulting from copying `old_slice[src_start..src_end]` to start
 /// at index `dest`, leaving all other positions unchanged. Reads are taken from
@@ -1160,7 +1160,7 @@ pub assume_specification<T: Copy, R: core::ops::RangeBounds<usize>>[ <[T]>::copy
             slice_range_end(&src, old(slice)@.len()),
             dest as int,
         ),  allocates 0
-;
+ deallocates super::super::alloc_check::drop_deallocations(src) + call_deallocations(<R as core::ops::RangeBounds<usize>>::start_bound, (&src,)) + call_deallocations(<R as core::ops::RangeBounds<usize>>::end_bound, (&src,));
 
 // The `chunks` method of a `[T]` returns an iterator of type `Chunks<'_, T>`,
 // so we specify that type here.
@@ -1231,6 +1231,6 @@ pub assume_specification<'a, T>[ <[T]>::chunks ](s: &'a [T], chunk_size: usize) 
                 IteratorSpec::remaining(&iter)[i]@ == s@.subrange(start, end)
             },
         IteratorSpec::decrease(&iter) is Some,  allocates 0
-;
+ deallocates 0;
 
 } // verus!

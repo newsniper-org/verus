@@ -114,6 +114,8 @@ pub assume_specification[ str::is_ascii ](s: &str) -> (b: bool)
         b == is_ascii(s),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -125,6 +127,8 @@ pub assume_specification[ str::to_owned ](s: &str) -> (res: String)
         s@ == res@,
     allocates
         1,
+    deallocates
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -134,6 +138,8 @@ pub assume_specification[ str::as_bytes ](s: &str) -> (b: &[u8])
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -146,6 +152,8 @@ pub assume_specification[ str::len ](s: &str) -> usize
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -157,6 +165,8 @@ pub assume_specification[ str::is_empty ](s: &str) -> bool
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -165,6 +175,8 @@ pub assume_specification[ str::is_char_boundary ](s: &str, index: usize) -> bool
     returns
         is_char_boundary(s.spec_bytes(), index as int),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -177,6 +189,8 @@ pub assume_specification[ str::split_at ](s: &str, mid: usize) -> (res: (&str, &
         res.1.spec_bytes() =~= s.spec_bytes()[mid..],
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -186,6 +200,8 @@ pub assume_specification[ str::from_utf8_unchecked ](v: &[u8]) -> (res: &str)
     ensures
         res.spec_bytes() =~= v@,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -422,6 +438,8 @@ pub assume_specification<'a>[ String::as_str ](s: &'a String) -> (res: &'a str)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // same as above
@@ -431,6 +449,8 @@ pub assume_specification<'a>[ <String as core::ops::Deref>::deref ](s: &'a Strin
         res@ == s@,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -439,6 +459,8 @@ pub assume_specification[ <String as Clone>::clone ](s: &String) -> (res: String
         res == s,
     allocates
         1,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -446,6 +468,8 @@ pub assume_specification[ <String as PartialEq>::eq ](s: &String, other: &String
     ensures
         res == (s@ == other@),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -455,6 +479,8 @@ pub assume_specification[ String::new ]() -> (res: String)
         res@ == Seq::<char>::empty(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -462,6 +488,8 @@ pub assume_specification[ String::push ](s: &mut String, c: char)
     ensures
         final(s)@ == old(s)@.push(c),
     allocates
+        1,
+    deallocates
         1,
 ;
 
@@ -472,6 +500,8 @@ pub assume_specification[ String::pop ](s: &mut String) -> (res: Option<char>)
         old(s)@.len() > 0 ==> res == Some(old(s)@.last()) && final(s)@ == old(s)@.drop_last(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -479,6 +509,8 @@ pub assume_specification[ String::push_str ](s: &mut String, other: &str)
     ensures
         final(s)@ == old(s)@ + other@,
     allocates
+        1,
+    deallocates
         1,
 ;
 
@@ -490,6 +522,8 @@ pub assume_specification[ String::is_empty ](s: &String) -> (res: bool)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -498,6 +532,8 @@ pub assume_specification[ String::clear ](s: &mut String)
         final(s)@ == Seq::<char>::empty(),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(feature = "alloc", not(verus_verify_core)))]
@@ -505,6 +541,8 @@ pub assume_specification[ <String as core::default::Default>::default ]() -> (r:
     ensures
         r@ == Seq::<char>::empty(),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -580,6 +618,8 @@ pub assume_specification[ str::chars ](s: &str) -> (iter: Chars<'_>)
         IteratorSpec::remaining(&iter) == s@,
         IteratorSpec::decrease(&iter) is Some,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -702,6 +742,8 @@ pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::get
 ) -> (r: Option<&str>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -710,6 +752,8 @@ pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::ind
     s: &str,
 ) -> (r: &str)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -720,6 +764,8 @@ pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::get
 ) -> (r: Option<&mut str>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -728,6 +774,8 @@ pub assume_specification[ <(Bound<usize>, Bound<usize>) as SliceIndex<str>>::ind
     s: &mut str,
 ) -> (r: &mut str)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -763,6 +811,8 @@ pub assume_specification[ <Range<usize> as SliceIndex<str>>::get ](i: Range<usiz
     Option<&<Range<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -771,6 +821,8 @@ pub assume_specification[ <Range<usize> as SliceIndex<str>>::index ](
     s: &str,
 ) -> (r: &<Range<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -781,6 +833,8 @@ pub assume_specification[ <Range<usize> as SliceIndex<str>>::get_mut ](
 ) -> (r: Option<&mut <Range<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -789,6 +843,8 @@ pub assume_specification[ <Range<usize> as SliceIndex<str>>::index_mut ](
     s: &mut str,
 ) -> (r: &mut <Range<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -826,6 +882,8 @@ pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::get ](
 ) -> (r: Option<&<RangeFrom<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -834,6 +892,8 @@ pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::index ](
     s: &str,
 ) -> (r: &<RangeFrom<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -844,6 +904,8 @@ pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::get_mut ](
 ) -> (r: Option<&mut <RangeFrom<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -852,6 +914,8 @@ pub assume_specification[ <RangeFrom<usize> as SliceIndex<str>>::index_mut ](
     s: &mut str,
 ) -> (r: &mut <RangeFrom<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -887,12 +951,16 @@ pub assume_specification[ <RangeFull as SliceIndex<str>>::get ](i: RangeFull, s:
     Option<&<RangeFull as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
 pub assume_specification[ <RangeFull as SliceIndex<str>>::index ](i: RangeFull, s: &str) -> (r:
     &<RangeFull as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -903,6 +971,8 @@ pub assume_specification[ <RangeFull as SliceIndex<str>>::get_mut ](
 ) -> (r: Option<&mut <RangeFull as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -911,6 +981,8 @@ pub assume_specification[ <RangeFull as SliceIndex<str>>::index_mut ](
     s: &mut str,
 ) -> (r: &mut <RangeFull as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -969,6 +1041,8 @@ pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::get ](
 ) -> (r: Option<&<RangeInclusive<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -977,6 +1051,8 @@ pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::index ](
     s: &str,
 ) -> (r: &<RangeInclusive<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -987,6 +1063,8 @@ pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::get_mut ](
 ) -> (r: Option<&mut <RangeInclusive<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -995,6 +1073,8 @@ pub assume_specification[ <RangeInclusive<usize> as SliceIndex<str>>::index_mut 
     s: &mut str,
 ) -> (r: &mut <RangeInclusive<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1032,6 +1112,8 @@ pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::get ](
 ) -> (r: Option<&<RangeTo<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -1040,6 +1122,8 @@ pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::index ](
     s: &str,
 ) -> (r: &<RangeTo<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1050,6 +1134,8 @@ pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::get_mut ](
 ) -> (r: Option<&mut <RangeTo<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -1058,6 +1144,8 @@ pub assume_specification[ <RangeTo<usize> as SliceIndex<str>>::index_mut ](
     s: &mut str,
 ) -> (r: &mut <RangeTo<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1095,6 +1183,8 @@ pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::get ](
 ) -> (r: Option<&<RangeToInclusive<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -1103,6 +1193,8 @@ pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::index ](
     s: &str,
 ) -> (r: &<RangeToInclusive<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -1113,6 +1205,8 @@ pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::get_mut 
 ) -> (r: Option<&mut <RangeToInclusive<usize> as SliceIndex<str>>::Output>)
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(all(verus_keep_ghost, not(verus_verify_core)))]
@@ -1121,6 +1215,8 @@ pub assume_specification[ <RangeToInclusive<usize> as SliceIndex<str>>::index_mu
     s: &mut str,
 ) -> (r: &mut <RangeToInclusive<usize> as SliceIndex<str>>::Output)
     allocates
+        0,
+    deallocates
         0,
 ;
 

@@ -125,7 +125,7 @@ pub uninterp spec fn spec_vec_capacity<T, A: Allocator>(v: &Vec<T, A>) -> usize;
 pub broadcast proof fn axiom_spec_capacity<T, A: Allocator>(v: &Vec<T, A>)
     ensures
         #[trigger] spec_vec_capacity(v) >= v@.len(),
-        crate::layout::size_of::<T>() == 0 ==> spec_vec_capacity(v) == usize::MAX,
+        super::super::layout::size_of::<T>() == 0 ==> spec_vec_capacity(v) == usize::MAX,
 {
     admit();
 }
@@ -155,7 +155,7 @@ pub open spec fn vec_amortized_cap<T>(cap: int, len: int, additional: int) -> in
     } else {
         len + additional
     };
-    let m = vec_min_non_zero_cap(crate::layout::size_of::<T>());
+    let m = vec_min_non_zero_cap(super::super::layout::size_of::<T>());
     if m >= c {
         m
     } else {
@@ -178,14 +178,14 @@ pub open spec fn vec_reserve_cost<T, A: Allocator>(v: &Vec<T, A>, additional: in
 /// reallocates its existing buffer (`grow`, which frees the old block); growing a vector that has
 /// no buffer yet only allocates
 pub open spec fn vec_regrows<T, A: Allocator>(v: &Vec<T, A>, additional: int) -> bool {
-    crate::layout::size_of::<T>() > 0 && spec_vec_capacity(v) > 0 && spec_vec_capacity(v)
+    super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(v) > 0 && spec_vec_capacity(v)
         - v@.len() < additional
 }
 
 /// After `v` made room for `additional` more elements (if it had to grow, and grew), its capacity
 /// is the one that std's growth policy picks
 pub open spec fn vec_reserved<T, A: Allocator>(old_v: &Vec<T, A>, new_v: &Vec<T, A>, additional: int) -> bool {
-    crate::layout::size_of::<T>() > 0 && spec_vec_capacity(old_v) - old_v@.len() < additional
+    super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(old_v) - old_v@.len() < additional
         ==> spec_vec_capacity(new_v) == vec_amortized_cap::<T>(
         spec_vec_capacity(old_v) as int,
         old_v@.len() as int,
@@ -210,7 +210,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::capacity ](vec: &Vec<T, 
 pub assume_specification<T>[ Vec::<T>::new ]() -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
-        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+        super::super::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
     allocates
         0int,
     deallocates
@@ -220,16 +220,16 @@ pub assume_specification<T>[ Vec::<T>::new ]() -> (v: Vec<T>)
 pub assume_specification<T>[ <Vec<T> as core::default::Default>::default ]() -> (v: Vec<T>)
     ensures
         v@ == Seq::<T>::empty(),
-        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+        super::super::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
     allocates 0
-;
+ deallocates 0;
 
 #[verifier::alloc_check_skip_drops]
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::new_in ](alloc: A) -> (v: Vec<T, A>)
     ensures
         v@ == Seq::<T>::empty(),
         spec_vec_allocator(&v) == alloc,
-        crate::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
+        super::super::layout::size_of::<T>() > 0 ==> spec_vec_capacity(&v) == 0,
     allocates
         0int,
     deallocates
@@ -253,7 +253,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::with_capacity_in ](capac
         spec_vec_allocator(&v) == alloc,
     // `RawVecInner::try_allocate_in`: one `allocate` of the array layout, unless it is empty
     allocates
-        if capacity == 0 || crate::layout::size_of::<T>() == 0 {
+        if capacity == 0 || super::super::layout::size_of::<T>() == 0 {
         0int
     } else {
         1int
@@ -313,7 +313,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::try_reserve_exact ](
         spec_vec_capacity(old(vec)) - old(vec)@.len() >= additional
             ==> spec_vec_capacity(final(vec)) == spec_vec_capacity(old(vec)),
         // `RawVecInner::grow_exact`: exactly the room asked for
-        result is Ok && crate::layout::size_of::<T>() > 0 && spec_vec_capacity(old(vec))
+        result is Ok && super::super::layout::size_of::<T>() > 0 && spec_vec_capacity(old(vec))
             - old(vec)@.len() < additional ==> spec_vec_capacity(final(vec)) == old(vec)@.len()
             + additional,
     allocates
@@ -399,7 +399,7 @@ pub assume_specification<T: core::clone::Clone, A: Allocator>[ Vec::<T, A>::exte
             },
     // `reserve(other.len())` (at most one growth), then one `T::clone` per element
     allocates vec_reserve_cost(old(vec), other@.len() as int) + seq_clone_allocates(other@, other@.len())
-;
+ deallocates deallocates_when((if vec_regrows(old(vec), other@.len() as int) { 1int } else { 0int }) + seq_clone_deallocations(other@, other@.len()), vec_regrows(old(vec), other@.len() as int) || !super::super::alloc_check::clone_is_fip::<T>());
 
 impl<T: Sized, I: SliceIndex<[T]>, A: Allocator> super::core::IndexSpecImpl<I> for Vec<T, A> {
     open spec fn index_req(&self, index: &I) -> bool {
@@ -516,8 +516,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::clear ](vec: &mut Vec<T,
         0int,
     deallocates
         deallocates_when(
-            crate::alloc_check::seq_drop_deallocations(old(vec)@),
-            old(vec)@.len() > 0 && crate::alloc_check::drop_may_deallocate::<T>(),
+            super::super::alloc_check::seq_drop_deallocations(old(vec)@),
+            old(vec)@.len() > 0 && super::super::alloc_check::drop_may_deallocate::<T>(),
         )
 ;
 
@@ -541,7 +541,7 @@ pub assume_specification<T, A: Allocator>[ <Vec<T, A> as core::convert::AsRef<[T
     opens_invariants none
     no_unwind
     allocates 0
-;
+ deallocates 0;
 
 #[doc(hidden)]
 #[verifier::alloc_check_skip_drops]
@@ -596,7 +596,7 @@ pub assume_specification<T, A: Allocator + core::clone::Clone>[ Vec::<T, A>::spl
         return_value@ == old(vec)@[at..],
     // the returned vector's buffer (cloning the allocator is the runtime's)
     allocates 1int
-;
+ deallocates 0;
 
 pub open spec fn vec_clone_trigger<T, A: Allocator>(v1: Vec<T, A>, v2: Vec<T, A>) -> bool {
     true
@@ -613,7 +613,7 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Vec<T, A> as Clone>::
         vec_clone_trigger(*vec, res),
         vec@ =~= res@ ==> vec@ == res@,
     allocates (if vec@.len() == 0 { 0int } else { 1int }) + seq_clone_allocates(vec@, vec@.len())
-;
+ deallocates deallocates_when(seq_clone_deallocations(vec@, vec@.len()), !super::super::alloc_check::clone_is_fip::<T>());
 
 // std 1.100 `alloc/src/slice.rs`, `ConvertVec::to_vec`: `with_capacity_in(len, Global)` and one
 // `T::clone` per element (bitwise copies instead for `TrivialClone` types, which `cloned` allows).
@@ -724,8 +724,8 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::truncate ](vec: &mut Vec
         0int,
     deallocates
         deallocates_when(
-            crate::alloc_check::seq_drop_deallocations(old(vec)@.subrange(len as int, old(vec)@.len() as int)),
-            len < old(vec)@.len() && crate::alloc_check::drop_may_deallocate::<T>(),
+            super::super::alloc_check::seq_drop_deallocations(old(vec)@.subrange(len as int, old(vec)@.len() as int)),
+            len < old(vec)@.len() && super::super::alloc_check::drop_may_deallocate::<T>(),
         )
 ;
 
@@ -749,7 +749,7 @@ pub assume_specification<T: Clone, A: Allocator>[ Vec::<T, A>::resize ](
         vec_reserve_cost(old(vec), len - old(vec)@.len())
             + (len - old(vec)@.len()) * call_allocations(T::clone, (&value,))
     }
-;
+ deallocates deallocates_when(if len <= old(vec)@.len() { (super::super::alloc_check::seq_drop_deallocations(old(vec)@.subrange(len as int, old(vec)@.len() as int)) + super::super::alloc_check::drop_deallocations(value)) as int } else { (if vec_regrows(old(vec), len - old(vec)@.len()) { 1int } else { 0int }) + (len - old(vec)@.len()) * call_deallocations(T::clone, (&value,)) }, !super::super::alloc_check::clone_is_fip::<T>() || (len > old(vec)@.len() && vec_regrows(old(vec), len - old(vec)@.len())));
 
 pub broadcast proof fn axiom_vec_index_decreases<A>(v: Vec<A>, i: int)
     requires
@@ -765,7 +765,7 @@ pub assume_specification<T: PartialEq<U>, U, A1: Allocator, A2: Allocator>[ <Vec
     y: &Vec<U, A2>,
 ) -> bool
     allocates super::slice::seq_eq_allocates(x@, y@)
-;
+ deallocates deallocates_when(super::slice::seq_eq_deallocations(x@, y@), !super::super::alloc_check::partial_eq_is_fip::<T, U>());
 
 impl<T: super::cmp::PartialEqSpec<U>, U, A1: Allocator, A2: Allocator> super::cmp::PartialEqSpecImpl<Vec<U, A2>> for Vec<T, A1> {
     open spec fn obeys_eq_spec() -> bool {
@@ -844,7 +844,7 @@ pub assume_specification<T: Clone>[ alloc::vec::from_elem ](elem: T, n: usize) -
         v.len() == n,
         forall |i| 0 <= i < n ==> cloned(elem, #[trigger] v@[i])
     // `with_capacity(n)` (one buffer), then at most one `T::clone` per element
-    allocates (if n == 0 { 0int } else { 1int }) + n * call_allocations(T::clone, (&elem,));
+    allocates (if n == 0 { 0int } else { 1int }) + n * call_allocations(T::clone, (&elem,)) deallocates deallocates_when((if n == 0 { super::super::alloc_check::drop_deallocations(elem) as int } else { 0int }) + n * call_deallocations(T::clone, (&elem,)), !super::super::alloc_check::clone_is_fip::<T>());
 
 pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_iter ](vec: Vec<T, A>) -> (iter: <Vec<
     T,
@@ -855,7 +855,7 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_iter ](vec: Vec<T, 
         into_iter_elts(iter) == IteratorSpec::remaining(&iter),
         IteratorSpec::decrease(&iter) is Some,
     allocates 0
-;
+ deallocates 0;
 
 pub assume_specification<'a, T, A: Allocator> [<&'a Vec<T, A> as core::iter::IntoIterator>::into_iter] (vec: &'a Vec<T, A>) ->
     (iter: <&'a Vec<T, A> as core::iter::IntoIterator>::IntoIter)
@@ -863,7 +863,7 @@ pub assume_specification<'a, T, A: Allocator> [<&'a Vec<T, A> as core::iter::Int
         IteratorSpec::remaining(&iter) == vec@.as_ref(),
         super::slice::into_iter_elts(iter) == IteratorSpec::remaining(&iter).unref(),
         IteratorSpec::decrease(&iter) is Some,    allocates 0
-;
+ deallocates 0;
 
 impl<T>  FromIteratorSpecImpl<T> for Vec<T> {
     open spec fn from_iter_ensures(remaining: Seq<T>, produces: Seq<bool>, s: Self) -> bool {

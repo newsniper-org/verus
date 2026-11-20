@@ -20,6 +20,8 @@ pub assume_specification<T, const N: usize>[ alloc::boxed::box_assume_init_into_
         vals.mem_contents() matches MemContents::Init(array) && result@ == array@,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(feature = "alloc")]
@@ -32,6 +34,8 @@ pub assume_specification<T>[ alloc::intrinsics::write_box_via_move ](
         result.mem_contents() == MemContents::Init(v),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(feature = "alloc")]
@@ -41,6 +45,8 @@ pub assume_specification<T>[ alloc::boxed::Box::<T>::new_uninit ]() -> alloc::bo
 >
     allocates
         1,
+    deallocates
+        0,
 ;
 
 } // verus!

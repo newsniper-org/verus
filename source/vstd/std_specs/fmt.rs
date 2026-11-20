@@ -152,7 +152,7 @@ macro_rules! def_fmt_trait {
                 ensures
                     fmt_arg_allocates(arg) == call_allocations(<T as $trait>::fmt, (x, fmt_witness_formatter())),
                 allocates 0
-            ;
+ deallocates 0            ;
         }
 };
 }
@@ -188,6 +188,8 @@ pub assume_specification<'a, 'b, T: core::fmt::Debug>[ rt::Argument::<'a>::new_d
         ),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[doc(hidden)]
@@ -200,12 +202,16 @@ pub assume_specification<'a, 'b>[ rt::Argument::<'a>::from_usize ](x: &'b usize)
         fmt_arg_allocates(arg) == 0,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a>[ Arguments::<'a>::from_str ](s: &'static str) -> (args: Arguments<'a>)
     ensures
         fmt_allocates(args) == 0,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -214,6 +220,8 @@ pub assume_specification<'a>[ Arguments::<'a>::from_str_nonconst ](s: &'static s
     ensures
         fmt_allocates(args) == 0,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -241,6 +249,8 @@ pub assume_specification<'a, const N: usize, const M: usize>[ arguments_new ](
             0 <= i < M ==> #[trigger] fmt_arg_allocates_at(args, i) == fmt_arg_allocates(args[i]),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // The sink's own allocations are charged to whoever owns the sink.
@@ -257,6 +267,8 @@ pub assume_specification<'a>[ Formatter::<'a>::write_str ](
     data: &str,
 ) -> Result<(), Error>
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -398,7 +410,7 @@ macro_rules! def_fmt_prim_alloc {
             $crate::vstd::prelude::verus! {
                 pub assume_specification[ <$ty as $trait>::fmt ](x: &$ty, f: &mut Formatter<'_>) -> Result<(), Error>
                     allocates 0
-                ;
+ deallocates 0                ;
             }
         )+
 };

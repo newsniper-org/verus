@@ -63,6 +63,8 @@ pub assume_specification<T: core::default::Default>[ <Box<
         T::default.ensures((), *res),
     allocates
         1 + call_allocations(T::default, ()),
+    deallocates
+        deallocates_when(call_deallocations(T::default, ()), call_deallocates(T::default, ())),
 ;
 
 pub assume_specification<T>[ Rc::<T>::new ](t: T) -> (v: Rc<T>)
@@ -70,6 +72,8 @@ pub assume_specification<T>[ Rc::<T>::new ](t: T) -> (v: Rc<T>)
         *v == t,
     allocates
         1,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T: core::default::Default>[ <Rc<
@@ -79,6 +83,8 @@ pub assume_specification<T: core::default::Default>[ <Rc<
         T::default.ensures((), *res),
     allocates
         1 + call_allocations(T::default, ()),
+    deallocates
+        deallocates_when(call_deallocations(T::default, ()), call_deallocates(T::default, ())),
 ;
 
 pub assume_specification<T>[ Arc::<T>::new ](t: T) -> (v: Arc<T>)
@@ -86,6 +92,8 @@ pub assume_specification<T>[ Arc::<T>::new ](t: T) -> (v: Arc<T>)
         *v == t,
     allocates
         1,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T: core::default::Default>[ <Arc<
@@ -95,6 +103,8 @@ pub assume_specification<T: core::default::Default>[ <Arc<
         T::default.ensures((), *res),
     allocates
         1 + call_allocations(T::default, ()),
+    deallocates
+        deallocates_when(call_deallocations(T::default, ()), call_deallocates(T::default, ())),
 ;
 
 pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::clone ](
@@ -104,6 +114,11 @@ pub assume_specification<T: Clone, A: Allocator + Clone>[ <Box<T, A> as Clone>::
         cloned::<T>(**b, *res),
     allocates
         1 + call_allocations(T::clone, (&**b,)),
+    deallocates
+        deallocates_when(
+            call_deallocations(T::clone, (&**b,)),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>) -> (result: Result<
@@ -117,6 +132,8 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::try_unwrap ](v: Rc<T, A>)
         },
     allocates
         0,
+    deallocates
+        1,
 ;
 
 pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>) -> (result: Option<
@@ -126,6 +143,8 @@ pub assume_specification<T, A: Allocator>[ Rc::<T, A>::into_inner ](v: Rc<T, A>)
         result matches Some(t) ==> t == *v,
     allocates
         0,
+    deallocates
+        1,
 ;
 
 // Cloning an `Rc`/`Arc` increments its reference count and clones its allocator (the runtime's)
@@ -137,6 +156,8 @@ pub assume_specification<T: ?Sized, A: core::alloc::AllocatorClone>[ <Rc<T, A> a
         res == *r,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(not(verus_verify_core))]
@@ -146,6 +167,8 @@ pub assume_specification<T: ?Sized, A: core::alloc::AllocatorClone>[ <Arc<T, A> 
     ensures
         res == *r,
     allocates
+        0,
+    deallocates
         0,
 ;
 

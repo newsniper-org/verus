@@ -9,6 +9,11 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T; N] as Partial
 ) -> bool
     allocates
         super::slice::seq_eq_allocates(left@, right@),
+    deallocates
+        deallocates_when(
+            super::slice::seq_eq_deallocations(left@, right@),
+            !super::super::alloc_check::partial_eq_is_fip::<T, U>(),
+        ),
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for [T; N] where
@@ -31,6 +36,11 @@ pub assume_specification<'a, T: PartialEq<U>, U, const N: usize>[ <&'a [T] as Pa
 >>::eq ](left: &&'a [T], right: &[U; N]) -> bool
     allocates
         super::slice::seq_eq_allocates((*left)@, right@),
+    deallocates
+        deallocates_when(
+            super::slice::seq_eq_deallocations((*left)@, right@),
+            !super::super::alloc_check::partial_eq_is_fip::<T, U>(),
+        ),
 ;
 
 impl<'a, T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for &'a [T] where
@@ -58,6 +68,11 @@ pub assume_specification<'a, T: PartialEq<U>, U, const N: usize>[ <[T; N] as Par
 ) -> bool
     allocates
         super::slice::seq_eq_allocates(left@, (*right)@),
+    deallocates
+        deallocates_when(
+            super::slice::seq_eq_deallocations(left@, (*right)@),
+            !super::super::alloc_check::partial_eq_is_fip::<T, U>(),
+        ),
 ;
 
 impl<'a, T, U, const N: usize> super::cmp::PartialEqSpecImpl<&'a [U]> for [T; N] where
@@ -85,6 +100,11 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T] as PartialEq<
 ) -> bool
     allocates
         super::slice::seq_eq_allocates(left@, right@),
+    deallocates
+        deallocates_when(
+            super::slice::seq_eq_deallocations(left@, right@),
+            !super::super::alloc_check::partial_eq_is_fip::<T, U>(),
+        ),
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U; N]> for [T] where
@@ -112,6 +132,11 @@ pub assume_specification<T: PartialEq<U>, U, const N: usize>[ <[T; N] as Partial
 ) -> bool
     allocates
         super::slice::seq_eq_allocates(left@, right@),
+    deallocates
+        deallocates_when(
+            super::slice::seq_eq_deallocations(left@, right@),
+            !super::super::alloc_check::partial_eq_is_fip::<T, U>(),
+        ),
 ;
 
 impl<T, U, const N: usize> super::cmp::PartialEqSpecImpl<[U]> for [T; N] where

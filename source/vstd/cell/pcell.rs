@@ -144,7 +144,7 @@ impl<T: ?Sized> PCell<T> {
             pt.1@.id() == pt.0.id() && pt.1@.value() == v
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         let p = PCell { ucell: ManuallyDrop::new(UnsafeCell::new(v)) };
         (p, Tracked::assume_new())
@@ -159,7 +159,7 @@ impl<T: ?Sized> PCell<T> {
             v == perm.value(),
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         // SAFETY: We can take a shared reference since we have the shared PointsTo
         unsafe { &(*(*self.ucell).get()) }
@@ -176,7 +176,7 @@ impl<T: ?Sized> PCell<T> {
             final(perm).id() == self.id(),
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         // SAFETY: We can take a mutable reference since we have the mutable PointsTo
         unsafe { &mut (*(*self.ucell).get()) }
@@ -192,7 +192,7 @@ impl<T: ?Sized> PCell<T> {
             v == *perm.value(),
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         // Note that for an UnsafeCell, intro_inner is a safe operation, whereas for PCell,
         // we require the Tracked permission.
@@ -214,7 +214,7 @@ impl<T: ?Sized> PCell<T> {
             out_v == *old(perm).value(),
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         let mut v = in_v;
         core::mem::swap(&mut v, self.borrow_mut(Tracked(perm)));
@@ -245,7 +245,7 @@ impl<T: ?Sized> PCell<T> {
             *perm.value()
         opens_invariants none
         no_unwind
-        allocates 0
+        allocates 0 deallocates 0
     {
         *self.borrow(Tracked(perm))
     }

@@ -138,6 +138,8 @@ pub assume_specification<T, E>[ Result::<T, E>::is_ok ](r: &Result<T, E>) -> (b:
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // is_err
@@ -153,6 +155,8 @@ pub assume_specification<T, E>[ Result::<T, E>::is_err ](r: &Result<T, E>) -> (b
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // as_ref
@@ -167,6 +171,8 @@ pub assume_specification<T, E>[ Result::<T, E>::as_ref ](result: &Result<T, E>) 
         r is Err ==> result->Err_0 == r->Err_0,
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -189,6 +195,8 @@ pub assume_specification<T, E: core::fmt::Debug>[ Result::<T, E>::unwrap ](
         t == result->Ok_0,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // unwrap_err
@@ -209,6 +217,8 @@ pub assume_specification<T: core::fmt::Debug, E>[ Result::<T, E>::unwrap_err ](
     ensures
         e == result->Err_0,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -232,6 +242,8 @@ pub assume_specification<T, E: core::fmt::Debug>[ Result::<T, E>::expect ](
         t == result->Ok_0,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // map
@@ -253,6 +265,12 @@ pub assume_specification<T, E, U, F: FnOnce(T) -> U>[ Result::<T, E>::map ](
         } else {
             0
         },
+    deallocates
+        if result.is_ok() {
+            call_deallocations(op, (result->Ok_0,))
+        } else {
+            super::super::alloc_check::drop_deallocations(op)
+        },
 ;
 
 // map_err
@@ -270,7 +288,7 @@ pub assume_specification<T, E, F, O: FnOnce(E) -> F>[Result::<T, E>::map_err](re
         call_allocations(op, (result->Err_0,))
     } else {
         0
-    };
+    } deallocates if result.is_err() { call_deallocations(op, (result->Err_0,)) } else { super::super::alloc_check::drop_deallocations(op) };
 
 // ok
 #[verifier::inline]
@@ -288,6 +306,12 @@ pub assume_specification<T, E>[ Result::<T, E>::ok ](result: Result<T, E>) -> (o
     no_unwind
     allocates
         0,
+    deallocates
+        if result.is_err() {
+            super::super::alloc_check::drop_deallocations(result->Err_0)
+        } else {
+            0
+        },
 ;
 
 // err
@@ -306,6 +330,12 @@ pub assume_specification<T, E>[ Result::<T, E>::err ](result: Result<T, E>) -> (
     no_unwind
     allocates
         0,
+    deallocates
+        if result.is_ok() {
+            super::super::alloc_check::drop_deallocations(result->Ok_0)
+        } else {
+            0
+        },
 ;
 
 } // verus!

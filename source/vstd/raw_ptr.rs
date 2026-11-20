@@ -203,6 +203,8 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*mut T as PartialEq<*m
         res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(verus_keep_ghost)]
@@ -227,6 +229,8 @@ pub assume_specification<T: core::marker::PointeeSized>[ <*const T as PartialEq<
     ensures
         res <==> (x@.addr == y@.addr) && (x@.metadata == y@.metadata),
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -411,6 +415,8 @@ pub assume_specification<
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// Constructs a mutable null pointer.
@@ -434,6 +440,8 @@ pub assume_specification<
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// `core::ptr::slice_from_raw_parts_mut`: a slice pointer with `data`'s address and provenance
@@ -450,6 +458,8 @@ pub assume_specification<T>[ core::ptr::slice_from_raw_parts_mut ](
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -719,7 +729,7 @@ macro_rules! pointer_specs {
             pub assume_specification<T: ::core::marker::PointeeSized>[<*$mu T>::addr](p: *$mu T) -> (addr: usize)
                 ensures addr == spec_addr(p)
                 opens_invariants none
-                no_unwind  allocates 0;
+                no_unwind  allocates 0 deallocates 0;
 
             pub open spec fn spec_with_addr<T: ::core::marker::PointeeSized>(p: *$mu T, addr: usize) -> *$mu T {
                 $ptr_from_data(PtrData::<T> { addr: addr, .. p@ })
@@ -730,7 +740,7 @@ macro_rules! pointer_specs {
             pub assume_specification<T: ::core::marker::PointeeSized>[<*$mu T>::with_addr](p: *$mu T, addr: usize) -> (q: *$mu T)
                 ensures q == spec_with_addr(p, addr)
                 opens_invariants none
-                no_unwind  allocates 0;
+                no_unwind  allocates 0 deallocates 0;
 
             }
         }

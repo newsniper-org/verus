@@ -106,6 +106,11 @@ pub assume_specification<T: Clone, const N: usize>[ <[T; N] as Clone>::clone ](a
         a@ =~= res@ ==> a@ == res@,
     allocates
         seq_clone_allocates(a@, N as nat),
+    deallocates
+        deallocates_when(
+            seq_clone_deallocations(a@, N as nat),
+            !super::super::alloc_check::clone_is_fip::<T>(),
+        ),
 ;
 
 /*
@@ -125,12 +130,16 @@ pub assume_specification<T: Copy>[ <Tracked<T> as Clone>::clone ](b: &Tracked<T>
         res == b,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T>[ <Ghost<T> as Clone>::clone ](b: &Ghost<T>) -> (res: Ghost<T>)
     ensures
         res == b,
     allocates
+        0,
+    deallocates
         0,
 ;
 

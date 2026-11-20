@@ -24,6 +24,8 @@ pub assume_specification<T, E>[ Result::<T, E>::branch ](result: Result<T, E>) -
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T>[ Option::<T>::branch ](option: Option<T>) -> (cf: ControlFlow<
@@ -38,6 +40,8 @@ pub assume_specification<T>[ Option::<T>::branch ](option: Option<T>) -> (cf: Co
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T>[ Option::<T>::from_residual ](option: Option<Infallible>) -> (option2:
@@ -47,6 +51,8 @@ pub assume_specification<T>[ Option::<T>::from_residual ](option: Option<Infalli
         option2.is_none(),
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -72,6 +78,11 @@ pub assume_specification<T, E, F: From<E>>[ Result::<T, F>::from_residual ](
     allocates
         match result {
             Err(e) => call_allocations(F::from, (e,)),
+            _ => 0,
+        },
+    deallocates
+        match result {
+            Err(e) => call_deallocations(F::from, (e,)),
             _ => 0,
         },
 ;

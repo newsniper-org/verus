@@ -174,19 +174,54 @@ pub broadcast axiom fn axiom_no_dealloc_drop<T: NoDeallocDrop + ?Sized>()
         !#[trigger] drop_may_deallocate::<T>(),
 ;
 
-/// -V alloc-check: the number of deallocations of dropping the values of `s` (in order). Not
-/// defined yet (counting implicit drops is still to come); 0 for a type whose drop cannot
-/// deallocate.
-pub uninterp spec fn seq_drop_deallocations<T>(s: Seq<T>) -> nat;
+/// -V alloc-check: the number of deallocations of dropping the value `v` (running its drop glue).
+/// Not defined for most types yet (counting implicit drops is still to come); 0 for a type whose
+/// drop cannot deallocate.
+pub uninterp spec fn drop_deallocations<T>(v: T) -> nat;
 
-pub broadcast axiom fn axiom_seq_drop_deallocations_no_dealloc<T>(s: Seq<T>)
+pub broadcast axiom fn axiom_drop_deallocations_no_dealloc<T>(v: T)
+    ensures
+        !drop_may_deallocate::<T>() ==> #[trigger] drop_deallocations(v) == 0,
+;
+
+/// -V alloc-check: the number of deallocations of dropping the values of `s` (in order)
+pub open spec fn seq_drop_deallocations<T>(s: Seq<T>) -> nat {
+    seq_prefix_drop_deallocations(s, s.len())
+}
+
+/// -V alloc-check: the number of deallocations of dropping the first `n` values of `s`
+pub open spec fn seq_prefix_drop_deallocations<T>(s: Seq<T>, n: nat) -> nat
+    decreases n,
+{
+    if n == 0 {
+        0
+    } else {
+        seq_prefix_drop_deallocations(s, (n - 1) as nat) + drop_deallocations(s[n - 1])
+    }
+}
+
+pub proof fn lemma_seq_prefix_drop_deallocations_no_dealloc<T>(s: Seq<T>, n: nat)
+    ensures
+        !drop_may_deallocate::<T>() ==> seq_prefix_drop_deallocations(s, n) == 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_seq_prefix_drop_deallocations_no_dealloc(s, (n - 1) as nat);
+        axiom_drop_deallocations_no_dealloc(s[n - 1]);
+    }
+}
+
+pub broadcast proof fn lemma_seq_drop_deallocations_no_dealloc<T>(s: Seq<T>)
     ensures
         !drop_may_deallocate::<T>() ==> #[trigger] seq_drop_deallocations(s) == 0,
-;
+{
+    lemma_seq_prefix_drop_deallocations_no_dealloc(s, s.len());
+}
 
 pub broadcast group group_alloc_check_axioms {
     axiom_no_dealloc_drop,
-    axiom_seq_drop_deallocations_no_dealloc,
+    axiom_drop_deallocations_no_dealloc,
+    lemma_seq_drop_deallocations_no_dealloc,
     group_op_marker_axioms,
 }
 

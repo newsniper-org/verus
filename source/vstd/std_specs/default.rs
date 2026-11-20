@@ -17,7 +17,7 @@ macro_rules! assume_default_value {
             pub assume_specification [ <$t as core::default::Default>::default ]() -> (r: $t)
                 ensures
                     r == $default_value,  allocates 0
-            ;
+ deallocates 0            ;
         }
     };
 }
@@ -48,12 +48,16 @@ pub assume_specification<T>[ <Option<T> as core::default::Default>::default ]() 
         r == Option::<T>::None,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<'a>[ <&'a str as core::default::Default>::default ]() -> (r: &'a str)
     ensures
         r == "",
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -63,6 +67,8 @@ pub assume_specification<T: PointeeSized>[ <core::marker::PhantomData<
     ensures
         r == core::marker::PhantomData::<T>,
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -75,6 +81,11 @@ pub assume_specification<U: core::default::Default, T: core::default::Default>[ 
         call_ensures(T::default, (), r.1),
     allocates
         call_allocations(U::default, ()) + call_allocations(T::default, ()),
+    deallocates
+        deallocates_when(
+            call_deallocations(U::default, ()) + call_deallocations(T::default, ()),
+            call_deallocates(U::default, ()) || call_deallocates(T::default, ()),
+        ),
 ;
 
 pub assume_specification<
@@ -90,6 +101,13 @@ pub assume_specification<
         call_allocations(V::default, ()) + call_allocations(U::default, ()) + call_allocations(
             T::default,
             (),
+        ),
+    deallocates
+        deallocates_when(
+            call_deallocations(V::default, ()) + call_deallocations(U::default, ())
+                + call_deallocations(T::default, ()),
+            call_deallocates(V::default, ()) || call_deallocates(U::default, ())
+                || call_deallocates(T::default, ()),
         ),
 ;
 

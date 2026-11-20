@@ -108,6 +108,8 @@ pub assume_specification<T>[ <[T]>::is_empty ](slice: &[T]) -> (b: bool)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[cfg(feature = "alloc")]

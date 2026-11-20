@@ -78,6 +78,8 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new ](n: T) -> (re
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new_unchecked ](n: T) -> (ret:
@@ -89,6 +91,8 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::new_unchecked ](n:
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -104,6 +108,8 @@ pub assume_specification<T: ZeroablePrimitive>[ NonZero::<T>::get ](n: NonZero<T
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -172,6 +178,8 @@ pub assume_specification<T: ZeroablePrimitive>[ <NonZero<T> as Clone>::clone ](
     returns
         nz,
     allocates
+        0,
+    deallocates
         0,
 ;
 

@@ -449,8 +449,15 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * 이전 형태 `allocates deallocates_when(n, c)`(횟수 없는 조건)는 더는 받지 않습니다.
   `allocates n deallocates deallocates_when(d, c)`로 씁니다.
 * std 함수에 대한 vstd 명세는 해제를 적습니다. 메모리를 놓을 수 있는 함수는 횟수로 적습니다(`Vec::push`는 기존 버퍼를
-  키울 때 1, `Vec::clear`와 `truncate`는 지운 원소들의 drop, 사용자 코드를 부르는 비교나 `clone`은 그 호출들이 해제하는
-  만큼). 아직 적지 않은 명세는 `deallocates` 상한이 있는 함수(그리고 fip 함수)에서 부를 수 없습니다.
+  키울 때 1, `String::push_str`은 1, `Vec::clear`와 `truncate`는 지운 원소들의 drop, 사용자 코드를 부르는 비교나
+  `clone`은 그 호출들이 해제하는 만큼). 받은 값을 drop하는 함수는 `vstd::alloc_check::drop_deallocations(v)`를 셉니다
+  (`Option::unwrap_or`는 옵션이 `Some`이면 `default`를, `Option::insert`는 원래 내용을 drop합니다). 값들의 열에는
+  `seq_drop_deallocations(s)`를 씁니다. `drop_deallocations`는 drop이 해제할 수 없는 타입(`NoDeallocDrop`)에서는 0이고,
+  다른 타입에는 아직 정의가 없습니다.
+* 몇몇 명세는 상한을 적지 않습니다. vstd가 아직 해제 횟수를 이름 붙일 수 없는 사용자 코드를 부르기 때문입니다. 키를
+  해시하는 `HashMap`·`HashSet` 연산(`insert`, `get`, `remove`, `contains_key`, `entry`, `reserve` 등), `to_string`,
+  `format!`과 `Formatter::write_fmt`, `Vec::from_fn`, 그리고 `Iterator::next`(그래서 `for` 루프)입니다. 이런 함수는
+  `deallocates` 상한이 있는 함수(그리고 fip 함수)에서 부를 수 없습니다.
 
 ## 완전한 제자리 함수: `#[verifier::fip]`
 

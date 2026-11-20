@@ -11,6 +11,8 @@ pub assume_specification[ char::len_utf8 ](c: char) -> usize
         encode_scalar(c as u32).len() as usize,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 /// Unicode's `White_Space` property:
@@ -29,6 +31,8 @@ pub assume_specification[ char::is_whitespace ](c: char) -> (res: bool)
     returns
         is_white_space(c),
     allocates
+        0,
+    deallocates
         0,
 ;
 

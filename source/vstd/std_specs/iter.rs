@@ -474,7 +474,7 @@ pub open spec fn iter_into_iter_spec<I: Iterator>(i: I) -> I {
 pub assume_specification<I: Iterator>[ <I as IntoIterator>::into_iter ](i: I) -> (r: I)
     ensures
         r == i,  allocates 0
-;
+ deallocates 0;
 
 #[verifier::external_trait_specification]
 #[verifier::external_trait_extension(FromIteratorSpec via FromIteratorSpecImpl)]
@@ -1005,7 +1005,7 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
             s.iter == iter,
             s.history@ == Seq::<I::Item>::empty(),
             s.wf(),
-        allocates 0
+        allocates 0 deallocates 0
     {
         broadcast use group_seq_lemmas;
         proof {

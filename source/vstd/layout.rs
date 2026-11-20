@@ -81,6 +81,8 @@ pub assume_specification<V>[ core::mem::size_of::<V> ]() -> (u: usize)
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[verifier::when_used_as_spec(align_of_as_usize)]
@@ -90,6 +92,8 @@ pub assume_specification<V>[ core::mem::align_of::<V> ]() -> (u: usize)
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 
@@ -101,6 +105,8 @@ pub assume_specification<V: ?Sized>[ core::mem::size_of_val::<V> ](val: &V) -> (
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 ;
 
 #[verifier::when_used_as_spec(align_of_val_as_usize)]
@@ -110,6 +116,8 @@ pub assume_specification<V: ?Sized>[ core::mem::align_of_val::<V> ](val: &V) -> 
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 

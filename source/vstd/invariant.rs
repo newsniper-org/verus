@@ -322,6 +322,8 @@ pub fn create_open_invariant_credit() -> Tracked<OpenInvariantCredit>
     no_unwind
     allocates
         0,
+    deallocates
+        0,
 {
     Tracked::<OpenInvariantCredit>::assume_new()
 }
@@ -343,6 +345,8 @@ pub fn spend_open_invariant_credit(
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 {
     proof {

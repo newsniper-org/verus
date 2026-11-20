@@ -114,6 +114,8 @@ pub assume_specification<
         IteratorSpec::decrease(&iter) is Some,
     allocates
         0,
+    deallocates
+        0,
 ;
 
 // Referenced by Verus' internal encoding for array -> slice coercion
@@ -142,6 +144,8 @@ pub assume_specification<T, const N: usize>[ <[T; N]>::as_slice ](ar: &[T; N]) -
     opens_invariants none
     no_unwind
     allocates
+        0,
+    deallocates
         0,
 ;
 

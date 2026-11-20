@@ -176,3 +176,55 @@ test_verify_one_file_with_options! {
         impl T for U { fn m(&mut self) encapsulates alloc(0, 2) { } }
     } => Err(err) => assert_vir_error_msg(err, "may count more deallocations than the trait method's")
 }
+
+// the vstd specifications state their deallocations (S2b)
+const STD_CALLS: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn unwrap_u64(o: Option<u64>) -> (r: u64) deallocates 0 { o.unwrap_or(3) }
+
+    fn unwrap_box(o: Option<Box<u64>>, d: Box<u64>) -> (r: Box<u64>)
+        deallocates vstd::alloc_check::drop_deallocations(d)
+    {
+        o.unwrap_or(d)
+    }
+
+    fn unwrap_box_some(o: Option<Box<u64>>) -> (r: Box<u64>)
+        requires o.is_none(),
+        deallocates 0
+    {
+        o.unwrap_or(Box::new(3))
+    }
+
+    fn push_str(s: &mut String) deallocates 1 { s.push_str("a"); }
+
+    fn atomic(a: &AtomicU64) -> (r: u64) deallocates 0 {
+        a.store(1, Ordering::SeqCst);
+        a.load(Ordering::SeqCst)
+    }
+
+    fn insert_u64(o: &mut Option<u64>) deallocates 0 { let _ = o.insert(3); }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_std_specs ["vstd", "-V alloc-check"] => STD_CALLS.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_std_specs_fail ["vstd", "-V alloc-check"] => STD_CALLS.to_string() + verus_code_str! {
+        fn unwrap_box_bad(o: Option<Box<u64>>, d: Box<u64>) -> (r: Box<u64>) deallocates 0 { o.unwrap_or(d) } // FAILS
+        fn push_str_bad(s: &mut String) deallocates 0 { s.push_str("a"); } // FAILS
+        fn insert_box_bad(o: &mut Option<Box<u64>>) deallocates 0 { let _ = o.insert(Box::new(3)); } // FAILS
+
+        fn after() {}
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_std_spec_unbounded ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        use std::collections::HashMap;
+        fn f(m: &mut HashMap<u64, u64>) deallocates 1 { m.insert(1, 2); }
+    } => Err(err) => assert_vir_error_msg(err, "cannot bound the deallocations of this call")
+}
