@@ -1149,6 +1149,93 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "Multiple #[verus_spec] attributes are not allowed.")
 }
 
+// A closure type that rustc finds `Copy` (under its function's bounds) is `Copy` for the solver
+// too, so a value holding the closure is `NoDeallocDrop` by an impl bounded by `Copy`; and in a
+// generic function, where the closure type is boxed, the closure has its type, so what is known
+// about the drop of a value of the type applies to it (portable-fip, 2026-11-22)
+const CLOSURE_COPY: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use vstd::alloc_check::*;
+
+    pub struct W<C> { pub f: C }
+    #[allow(unsafe_code)] unsafe impl<C: Copy> AllocFreeDrop for W<C> {}
+    #[allow(unsafe_code)] unsafe impl<C: Copy> NoDeallocDrop for W<C> {}
+
+    pub fn eat<F>(f: F) deallocates drop_deallocations(f) { }
+
+    pub fn no_capture() deallocates 0 {
+        let c = |x: u64| -> (y: u64) deallocates 0 { x };
+        eat(W { f: c });
+    }
+
+    pub fn ref_capture(v: &Vec<u64>) deallocates 0 {
+        let c = |i: usize| -> (y: usize) deallocates 0 { v.len() };
+        eat(W { f: c });
+    }
+
+    pub fn generic_direct<T: Copy>(t: T) deallocates 0 {
+        let c = |x: u64| -> (y: u64) deallocates 0 { x };
+        eat(c);
+    }
+
+    pub fn generic_copy_capture<T: Copy>(t: T) deallocates 0 {
+        let c = move |x: u64| -> (y: u64) deallocates 0 { let u = t; x };
+        eat(W { f: c });
+    }
+
+    pub struct Holder<T> { pub t: T }
+
+    impl<T: Copy> Holder<T> {
+        pub fn method(&self) deallocates 0 {
+            let t = self.t;
+            let c = move |x: u64| -> (y: u64) deallocates 0 { let u = t; x };
+            eat(W { f: c });
+        }
+    }
+
+    // (a function item is `Copy` too)
+    fn id(x: u64) -> u64 { x }
+    fn gid<T: Copy>(x: T) -> T { x }
+
+    pub fn fn_item() deallocates 0 {
+        eat(W { f: id });
+        eat(W { f: gid::<u8> });
+    }
+
+    pub fn generic_fn_item<T: Copy>(t: T) deallocates 0 {
+        eat(W { f: gid::<T> });
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure_copy ["vstd", "-V alloc-check"] => CLOSURE_COPY.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure_copy_fail ["vstd", "-V alloc-check"] => CLOSURE_COPY.to_string() + verus_code_str! {
+        pub fn box_capture(b: Box<u64>) deallocates 0 { // FAILS
+            let c = move |x: u64| -> (y: u64) { let v = &b; x };
+            eat(W { f: c });
+        }
+
+        pub fn clone_capture<T: Clone>(t: T) deallocates 0 { // FAILS
+            let c = move |x: u64| -> (y: u64) deallocates 0 { let u = &t; x };
+            eat(W { f: c });
+        }
+
+        pub fn clone_capture_direct<T: Clone>(t: T) deallocates 0 { // FAILS
+            let c = move |x: u64| -> (y: u64) deallocates 0 { let u = &t; x };
+            eat(c);
+        }
+
+        pub fn no_contradiction<T: Copy>(t: T) -> (r: bool) ensures r { // FAILS
+            let c = move |x: u64| -> (y: u64) deallocates 0 { let u = t; x };
+            eat(W { f: c });
+            false
+        }
+    } => Err(err) => assert_fails(err, 4)
+}
+
 // Rust 2024 drops temporaries earlier: those of a block's tail expression at its end (before the
 // block's locals), and the scrutinee of an `if let` at the end of the then-branch or before the
 // else-branch; Verus counts them where rustc drops them (portable-fip, 2026-11-22)

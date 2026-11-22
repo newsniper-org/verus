@@ -1249,6 +1249,9 @@ pub enum ExprX {
         /// `-V alloc-check`: rustc found that the closure has no drop glue (it captures nothing,
         /// or only references and `Copy` values), so dropping it frees nothing
         drop_no_dealloc: bool,
+        /// `-V alloc-check`: rustc found that the closure type is `Copy` (under the enclosing
+        /// function's bounds), so it implements `Copy` for the solver too
+        copy: bool,
         ret: VarBinder<Typ>,
         /// The 'external spec' is an Option because it gets filled in during
         /// ast_simplify. It contains the assumptions that surrounding context

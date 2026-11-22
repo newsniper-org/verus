@@ -2910,6 +2910,7 @@ pub(crate) fn expr_to_stm_opt(
             fip,
             unwind_spec,
             drop_no_dealloc: _,
+            copy: _,
             ret,
             external_spec,
         } => {
@@ -2955,6 +2956,13 @@ pub(crate) fn expr_to_stm_opt(
             state.pop_scope();
 
             all_stms.push(Spanned::new(expr.span.clone(), StmX::Assume(cexp)));
+            if ctx.global.alloc_check {
+                // -V alloc-check: the closure object has its type (in a generic function the
+                // closure type is boxed, and the facts about values of the type, e.g. that one
+                // whose drop cannot deallocate deallocates nothing when dropped, are stated for
+                // values that have it)
+                all_stms.push(assume_has_typ(&uid, &expr.typ, &expr.span));
+            }
 
             let v = mk_exp(ExpX::Var(uid));
 

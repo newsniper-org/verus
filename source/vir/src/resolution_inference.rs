@@ -1337,6 +1337,7 @@ impl<'a> Builder<'a> {
                 fip,
                 unwind_spec: _,
                 drop_no_dealloc: _,
+                copy: _,
                 ret: _,
                 external_spec: _,
             } => {

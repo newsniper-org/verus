@@ -516,7 +516,10 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   (it cannot state `deallocates`).
 * Dropping a closure drops what it owns. `drop_deallocations` of a closure is 0 when it has no
   drop glue (it captures nothing, or only references and `Copy` values), and of a function item
-  always. A function that takes a closure by value may drop it: vstd's specifications of std
+  always. A closure type that rustc finds `Copy` (in a generic function, under the function's
+  bounds) is `Copy` to Verus too, and so is a function item, so an impl bounded by `Copy`
+  applies to a value that holds one (`unsafe impl<C: Copy> NoDeallocDrop for W<C> {}` makes
+  `W { f: c }` deallocate nothing when dropped). A function that takes a closure by value may drop it: vstd's specifications of std
   functions that do (`Option::map`, `and_then`, `ok_or_else`, `unwrap_or_else`, `Result::map`,
   `map_err`, `bool::then`, `cmp::min_by`, `max_by`, `Box::map`, ...) count
   `drop_deallocations(f)` besides the call, and so does `f(x)` for `f: F` with `F: FnOnce(..)`

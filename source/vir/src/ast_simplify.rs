@@ -59,6 +59,8 @@ struct State {
     fndef_typs: HashSet<Fun>,
     // -V alloc-check: `vstd::alloc_check::drop_may_deallocate` is in the crate
     drop_may_deallocate_fn: bool,
+    // -V alloc-check: the closures whose types rustc found `Copy` (their datatypes' paths)
+    copy_closures: HashSet<Path>,
 }
 
 impl State {
@@ -71,6 +73,7 @@ impl State {
             closure_typs: HashMap::new(),
             fndef_typs: HashSet::new(),
             drop_may_deallocate_fn: false,
+            copy_closures: HashSet::new(),
         }
     }
 
@@ -668,10 +671,26 @@ fn simplify_one_expr(
             fip,
             unwind_spec,
             drop_no_dealloc,
+            copy,
             ret,
             external_spec,
         } => {
             assert!(external_spec.is_none());
+
+            if ctx.alloc_check && *copy {
+                // (the closure's type, or the datatype that already stands for it)
+                let path = match &*expr.typ {
+                    TypX::AnonymousClosure(_, _, _, id) => crate::def::prefix_closure_type(*id),
+                    TypX::Datatype(Dt::Path(path), _, _) => path.clone(),
+                    _ => {
+                        return Err(crate::messages::internal_error(
+                            &expr.span,
+                            format!("unexpected closure type {:?}", expr.typ),
+                        ));
+                    }
+                };
+                state.copy_closures.insert(path);
+            }
 
             let closure_var_ident = state.next_temp();
             let closure_var = SpannedTyped::new(
@@ -717,6 +736,7 @@ fn simplify_one_expr(
                     fip: *fip,
                     unwind_spec: unwind_spec.clone(),
                     drop_no_dealloc: *drop_no_dealloc,
+                    copy: *copy,
                     ret: ret.clone(),
                     external_spec,
                 },
@@ -1553,6 +1573,7 @@ fn add_fndef_axioms_to_function(
     state: &mut State,
     function: &Function,
     fn_once_trait_in_scope: bool,
+    copy_trait_in_scope: bool,
     alloc_check: bool,
 ) -> Result<(Function, Vec<TraitImpl>, Option<AssocTypeImpl>), VirErr> {
     state.reset_for_function();
@@ -1598,7 +1619,7 @@ fn add_fndef_axioms_to_function(
     // We emit a TraitImpl for each of the three Fn-family traits (not just Fn), because
     // code that mentions only one through an associated-type projection (e.g. `Map::Item = F::Output`)
     // never creates a Fn term for the Fn-related axioms to trigger on.
-    let (trait_impls_out, assoc_type_impl) = if fn_once_trait_in_scope {
+    let (mut trait_impls_out, assoc_type_impl) = if fn_once_trait_in_scope {
         let self_typ = Arc::new(TypX::FnDef(fun.clone(), typ_args.clone(), None));
         let arg_typs: Vec<Typ> = params.iter().map(|p| p.a.clone()).collect();
         let tuple_dt = state.tuple_type_name(arg_typs.len());
@@ -1638,6 +1659,29 @@ fn add_fndef_axioms_to_function(
     } else {
         (Vec::new(), None)
     };
+
+    // -V alloc-check: `FnDef: Copy` (a function item is always `Copy`), so that a bound
+    // `C: Copy` (e.g. that of an impl of `NoDeallocDrop` for a type holding a `C`) holds for it
+    if alloc_check && copy_trait_in_scope {
+        let copy_path = crate::path![CrateId::Core => "marker", "Copy"];
+        let self_typ = Arc::new(TypX::FnDef(fun.clone(), typ_args.clone(), None));
+        let trait_implx = crate::ast::TraitImplX {
+            impl_path: crate::def::impl_fndef_marker_path(
+                &function.x.name,
+                copy_path.segments.last().unwrap(),
+            ),
+            typ_params: function.x.typ_params.clone(),
+            typ_bounds: function.x.typ_bounds.clone(),
+            trait_path: copy_path,
+            trait_typ_args: Arc::new(vec![self_typ]),
+            trait_typ_arg_impls: Spanned::new(function.span.clone(), Arc::new(vec![])),
+            owning_module: None,
+            auto_imported: true,
+            has_auto_trait_bounds: false,
+            external_trait_blanket: false,
+        };
+        trait_impls_out.push(Spanned::new(function.span.clone(), trait_implx));
+    }
 
     let mut fndef_axioms = vec![];
 
@@ -2363,6 +2407,8 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
 
     let fn_once_trait_path = ClosureKind::FnOnce.trait_path();
     let fn_once_trait_in_scope = traits.iter().any(|t| t.x.name == fn_once_trait_path);
+    let copy_trait_path = crate::path![CrateId::Core => "marker", "Copy"];
+    let copy_trait_in_scope = traits.iter().any(|t| t.x.name == copy_trait_path);
 
     // -V alloc-check: calls through a trait method are charged with `call_allocates`, so every
     // function with an `allocates` bound (and the trait method it implements) needs FnDef axioms
@@ -2433,6 +2479,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
                 &mut state,
                 f,
                 fn_once_trait_in_scope,
+                copy_trait_in_scope,
                 ctx.alloc_check,
             )?;
             trait_impls.extend(tis);
@@ -2507,6 +2554,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         //add_tuple_auto_impl(ctx, &traits, &mut trait_impls, arity, true, unpin_path);
     }
 
+    let copy_closures = state.copy_closures;
     let mut closures: Vec<_> = state.closure_typs.into_iter().collect();
     closures.sort_by_key(|kv| kv.0);
     for (id, closure) in closures {
@@ -2609,6 +2657,34 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
             };
             assoc_type_impls.push(Spanned::new(ctx.no_span.clone(), assoc_typ_implx));
         }
+
+        // -V alloc-check: `ClosureType: Copy`, where rustc found it under the enclosing function's
+        // bounds (as for tuples, see `add_tuple_auto_impl`), so that a bound `C: Copy` (e.g. that
+        // of an impl of `NoDeallocDrop` for a type holding a `C`) holds for it
+        let copy_path = crate::path![CrateId::Core => "marker", "Copy"];
+        if copy_closures.contains(&closure.path) && traits.iter().any(|t| &t.x.name == &copy_path)
+        {
+            let impl_path = Arc::new(crate::ast::PathX {
+                krate: CrateId::Internal,
+                segments: Arc::new(vec![crate::def::impl_closure_marker(
+                    copy_path.segments.last().unwrap(),
+                    id,
+                )]),
+            });
+            let trait_implx = crate::ast::TraitImplX {
+                impl_path,
+                typ_params: function.x.typ_params.clone(),
+                typ_bounds: function.x.typ_bounds.clone(),
+                trait_path: copy_path,
+                trait_typ_args: Arc::new(vec![self_typ.clone()]),
+                trait_typ_arg_impls: Spanned::new(ctx.no_span.clone(), Arc::new(vec![])),
+                owning_module: None,
+                auto_imported: true,
+                has_auto_trait_bounds: false,
+                external_trait_blanket: false,
+            };
+            trait_impls.push(Spanned::new(ctx.no_span.clone(), trait_implx));
+        }
     }
 
     let traits = traits.clone();
@@ -2648,6 +2724,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         ctx.report_long_running,
     )?;
     ctx.alloc_exec_typs = Arc::new(alloc_exec_typs);
+    ctx.alloc_copy_closures = Arc::new(copy_closures);
     ctx.alloc_dyn_drops_on_mir = alloc_dyn_drops_on_mir;
     Ok(krate)
 }

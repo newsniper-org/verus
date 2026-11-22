@@ -681,6 +681,18 @@ pub(crate) fn impl_closure(kind: ClosureKind, id: usize) -> Segment {
     Segment::T(Arc::new(format!("{}{}{}", PREFIX_IMPL_CLOSURE, kind, id)), 0)
 }
 
+/// A closure type's impl of a marker trait (`Copy`), by the trait's last segment
+pub(crate) fn impl_closure_marker(trait_suffix: &Segment, id: usize) -> Segment {
+    let name = trait_suffix.name().expect("impl_closure_marker trait name");
+    Segment::T(Arc::new(format!("{}{}{}", PREFIX_IMPL_CLOSURE, name, id)), 0)
+}
+
+/// A function item type's impl of a marker trait (`Copy`), by the trait's last segment
+pub(crate) fn impl_fndef_marker_path(fun: &Fun, trait_suffix: &Segment) -> Path {
+    let name = trait_suffix.name().expect("impl_fndef_marker_path trait name");
+    fun.path.push_segment(Segment::T(Arc::new(format!("{}{}", PREFIX_IMPL_FNDEF, name)), 0))
+}
+
 pub(crate) fn impl_fndef_path(fun: &Fun, kind: ClosureKind) -> Path {
     fun.path.push_segment(Segment::T(Arc::new(format!("{}{}", PREFIX_IMPL_FNDEF, kind)), 0))
 }

@@ -452,6 +452,9 @@ struct DropGlueCheck<'a> {
     copy_impls: &'a CopyImpls,
     /// Type parameters bounded by `Copy` in the function being checked
     copy_params: HashSet<Ident>,
+    /// The closures whose types rustc found `Copy` (under their function's bounds), by their
+    /// datatypes' paths (`GlobalCtx::alloc_copy_closures`)
+    copy_closures: Option<&'a HashSet<crate::ast::Path>>,
     /// For opaque datatypes whose `Copy`-ness depends on trait bounds of their arguments (a
     /// bounded `derive(Copy)`): the bounds the verifier must show; `None` where no such
     /// obligation can be checked (then the type is rejected)
@@ -508,6 +511,7 @@ impl<'a> DropGlueCheck<'a> {
             copy_datatypes,
             copy_impls,
             copy_params,
+            copy_closures: None,
             copy_obligations: if copy_obligations { Some(vec![]) } else { None },
             alloc_free_params: alloc_free_typ_params(bounds),
             allocator_dts,
@@ -563,6 +567,13 @@ impl<'a> DropGlueCheck<'a> {
                 ts.first().is_some_and(|t| self.is_copy(t, fuel - 1))
             }
             TypX::Datatype(Dt::Tuple(_), args, _) => args.iter().all(|t| self.is_copy(t, fuel - 1)),
+            // (a closure type occurs only in its function, where that function's bounds hold)
+            TypX::AnonymousClosure(_, _, _, id) => self
+                .copy_closures
+                .is_some_and(|c| c.contains(&crate::def::prefix_closure_type(*id))),
+            TypX::Datatype(Dt::Path(path), _, _) if crate::def::is_closure_type_path(path) => {
+                self.copy_closures.is_some_and(|c| c.contains(path))
+            }
             TypX::Datatype(dt, args, _) => {
                 self.copy_datatypes.contains(dt) && args.iter().all(|t| self.is_copy(t, fuel - 1))
             }
@@ -998,6 +1009,7 @@ pub(crate) fn check_bound_drop_at_call(
         &caller.x.typ_bounds,
         &ctx.global.allocator_dts,
     );
+    checker.copy_closures = Some(&ctx.global.alloc_copy_closures);
     checker.alloc_free_params.extend(marked_params(&caller.x.require));
     checker.check(span, typ)
 }
@@ -1016,6 +1028,7 @@ pub(crate) fn check_drop_glue(
         &function.x.typ_bounds,
         &ctx.global.allocator_dts,
     );
+    checker.copy_closures = Some(&ctx.global.alloc_copy_closures);
     // (`T: Tr with { fn drop allocates 0; }`)
     checker.alloc_free_params.extend(marked_params(&function.x.require));
     // (the MIR check sees which `dyn` values the body really drops)
@@ -1190,6 +1203,7 @@ pub(crate) fn check_closures_with_bounds(
             &function.x.typ_bounds,
             &ctx.global.allocator_dts,
         );
+        checker.copy_closures = Some(&ctx.global.alloc_copy_closures);
         // Dropping a value of a closure type drops that closure's captures. The bounded closure's
         // own captures are uses inside its body, but a capture may itself be (or contain) another
         // closure of the enclosing function, whose captures are only visible in that closure's

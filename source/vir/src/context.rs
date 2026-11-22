@@ -97,6 +97,9 @@ pub struct GlobalCtx {
     pub(crate) alloc_datatypes: Arc<HashMap<Dt, crate::ast::Datatype>>,
     /// -V alloc-check: per exec function, the types of its body's exec code (set by ast_simplify)
     pub(crate) alloc_exec_typs: Arc<HashMap<Fun, Vec<(Span, crate::ast::Typ)>>>,
+    /// -V alloc-check: the closures whose types rustc found `Copy`, by the paths of the
+    /// datatypes that stand for them (set by ast_simplify)
+    pub(crate) alloc_copy_closures: Arc<std::collections::HashSet<crate::ast::Path>>,
     pub axiom_usage_info: bool,
     pub no_bv_simplify: bool,
     pub report_long_running: bool,
@@ -826,6 +829,7 @@ impl GlobalCtx {
             allocator_dts: Arc::new(allocator_dts),
             alloc_datatypes: Arc::new(alloc_datatypes),
             alloc_exec_typs: Arc::new(HashMap::new()),
+            alloc_copy_closures: Arc::new(std::collections::HashSet::new()),
             axiom_usage_info,
             no_bv_simplify,
             report_long_running,
@@ -867,6 +871,7 @@ impl GlobalCtx {
             allocator_dts: self.allocator_dts.clone(),
             alloc_datatypes: self.alloc_datatypes.clone(),
             alloc_exec_typs: self.alloc_exec_typs.clone(),
+            alloc_copy_closures: self.alloc_copy_closures.clone(),
             axiom_usage_info: self.axiom_usage_info,
             no_bv_simplify: self.no_bv_simplify,
             report_long_running: self.report_long_running,

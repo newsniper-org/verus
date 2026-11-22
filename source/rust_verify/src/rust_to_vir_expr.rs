@@ -4966,6 +4966,13 @@ pub(crate) fn closure_to_vir<'tcx>(
                     let cty = bctx.types.node_type(closure_expr.hir_id);
                     !cty.needs_drop(tcx, TypingEnv::post_analysis(tcx, bctx.fun_id))
                 };
+            // (and whether the closure type is `Copy`, under the function's bounds: its captures
+            // are references or `Copy` values)
+            let copy = bctx.ctxt.cmd_line_args.alloc_check && proof_fn_modes.is_none() && {
+                let tcx = bctx.ctxt.tcx;
+                let cty = bctx.types.node_type(closure_expr.hir_id);
+                tcx.type_is_copy_modulo_regions(TypingEnv::post_analysis(tcx, bctx.fun_id), cty)
+            };
 
             ExprX::NonSpecClosure {
                 params: Arc::new(params),
@@ -4979,6 +4986,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 fip: closure_fip.is_some(),
                 unwind_spec,
                 drop_no_dealloc,
+                copy,
                 ret: ret,
                 external_spec: None, // filled in by ast_simplify
             }

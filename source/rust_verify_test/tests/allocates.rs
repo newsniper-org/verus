@@ -2236,6 +2236,31 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
 }
 
+test_verify_one_file_with_options! {
+    // a closure type that rustc finds `Copy` meets a `Copy` bound of the drop rule
+    // (portable-fip, 2026-11-22)
+    #[test] alloc_check_copy_bound_with_closure_type ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+        verus! {
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(C)]
+        pub struct W<C>(C);
+        #[verifier::external_body]
+        pub fn mk<C: Copy>(c: C) -> (w: W<C>) allocates 0 { W(c) }
+        pub fn f() allocates 0 {
+            let c = |x: u64| -> (y: u64) { x };
+            let _w = mk(c);
+        }
+        pub fn g<T: Copy>(t: T) allocates 0 {
+            let c = move |x: u64| -> (y: u64) { let u = t; x };
+            let _w = mk(c);
+        }
+        }
+        impl<C: Copy> Clone for W<C> { fn clone(&self) -> Self { *self } }
+        impl<C: Copy> Copy for W<C> { }
+    } => Ok(())
+}
+
 // Adversarial round on the fixes above (2026-11-05)
 
 test_verify_one_file_with_options! {

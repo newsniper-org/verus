@@ -495,7 +495,10 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * 클로저에도 `deallocates` 상한을 붙일 수 있고, 같은 방식으로 셉니다(자기 drop 포함). 그 클로저를 부르면 그
   `call_deallocations`를 셉니다. `#[verifier::fip]` 클로저는 해제하지 않으므로 `deallocates`를 적을 수 없습니다.
 * 클로저를 drop하면 클로저가 소유한 것이 drop됩니다. drop glue가 없는 클로저(아무것도 캡처하지 않거나 참조와
-  `Copy` 값만 캡처한 클로저)의 `drop_deallocations`는 0이고, 함수 항목은 늘 0입니다. 클로저를 값으로 받는 함수는
+  `Copy` 값만 캡처한 클로저)의 `drop_deallocations`는 0이고, 함수 항목은 늘 0입니다. rustc가 `Copy`로 판정한
+  클로저 타입(제네릭 함수에서는 그 함수의 경계 아래에서)과 함수 항목은 Verus에서도 `Copy`이므로, `Copy`를 경계로
+  하는 impl이 그것을 담은 값에 적용됩니다(`unsafe impl<C: Copy> NoDeallocDrop for W<C> {}`이면 `W { f: c }`는 drop될 때
+  해제하지 않습니다). 클로저를 값으로 받는 함수는
   그것을 drop할 수 있습니다. 그런 std 함수(`Option::map`, `and_then`, `ok_or_else`, `unwrap_or_else`,
   `Result::map`, `map_err`, `bool::then`, `cmp::min_by`, `max_by`, `Box::map` 등)의 vstd 명세는 호출과 함께
   `drop_deallocations(f)`를 세고, `F: FnOnce(..)`인 `f: F`에 대한 `f(x)`도 그렇습니다(종류가 `Fn`인 클로저를

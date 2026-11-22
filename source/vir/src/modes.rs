@@ -2385,6 +2385,7 @@ fn check_expr(
             fip: _,
             unwind_spec,
             drop_no_dealloc: _,
+            copy: _,
             body,
             external_spec,
         } => {
