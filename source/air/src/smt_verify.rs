@@ -437,7 +437,7 @@ pub(crate) fn smt_get_rlimit_count(context: &mut Context) -> Result<u64, Validit
     let rlimit_count = match stats_map.get("rlimit-count") {
         None => 0,
         Some(value) => {
-            let Some(count) = value.parse().ok() else {
+            let Some(count) = parse_rlimit_count(value) else {
                 return Err(ValidityResult::UnexpectedOutput(format!(
                     "expected rlimit-count in smt statistics"
                 )));
@@ -446,6 +446,16 @@ pub(crate) fn smt_get_rlimit_count(context: &mut Context) -> Result<u64, Validit
         }
     };
     Ok(rlimit_count)
+}
+
+/// The value of `rlimit-count` in Z3's statistics. The count is cumulative over the solver
+/// process, and once it no longer fits in 32 bits Z3 prints it as a decimal, `4296729942.00`
+/// (one query that uses up an rlimit near `u32::MAX`, e.g. `--rlimit 2000`, gets there).
+pub(crate) fn parse_rlimit_count(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().or_else(|| {
+        let count = value.parse::<f64>().ok()?;
+        (count.is_finite() && count >= 0.0).then(|| count as u64)
+    })
 }
 
 /// Check whether the assertion with label `infos[i].label` is violated on its own:

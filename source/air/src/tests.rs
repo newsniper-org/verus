@@ -2337,3 +2337,15 @@ fn parse_solver_version() {
     assert_eq!(parse_version_response("(:version \"1.3.1\")\r"), Some("1.3.1"));
     assert_eq!(parse_version_response("(:status sat)"), None);
 }
+
+#[test]
+fn parse_rlimit_count() {
+    use crate::smt_verify::parse_rlimit_count;
+    assert_eq!(parse_rlimit_count("905043"), Some(905043));
+    // (Z3 prints a count past 32 bits as a decimal)
+    assert_eq!(parse_rlimit_count("4296729942.00"), Some(4296729942));
+    assert_eq!(parse_rlimit_count("1.5e10"), Some(15000000000));
+    assert_eq!(parse_rlimit_count("-1.00"), None);
+    assert_eq!(parse_rlimit_count("nan"), None);
+    assert_eq!(parse_rlimit_count("sat"), None);
+}
