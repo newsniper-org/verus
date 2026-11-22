@@ -3121,6 +3121,104 @@ test_verify_one_file_with_options! {
     } => Ok(())
 }
 
+// A closure bound to a local first has kind `Fn` (its body takes `&self`). `map` calls it
+// through `FnOnce::call_once`, whose compiler shim calls the body and then drops the closure's
+// environment: a closure that owns a `Box` frees it there, which neither the closure's checks
+// nor its `deallocates` cover (portable-fip, 2026-11-22)
+test_verify_one_file_with_options! {
+    #[test] fip_closure_owning_box_handed_over_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn f(o: Option<u64>, b: Box<u64>) -> (r: Option<u64>)
+            requires
+                o is Some,
+        {
+            let c = #[verifier::fip] move |x: u64| -> (y: u64) { *b };
+            o.map(c)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "takes a closure (of type")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_owning_box_handed_over_routes ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn r_then(b: Box<u64>) -> (r: Option<u64>) {
+            let c = #[verifier::fip] move || -> (y: u64) { *b };
+            true.then(c)
+        }
+
+        #[verifier::fip]
+        pub fn r_map_err(r: Result<u64, u64>, b: Box<u64>) -> (o: Result<u64, u64>)
+            requires
+                r is Err,
+        {
+            let c = #[verifier::fip] move |e: u64| -> (y: u64) { *b };
+            r.map_err(c)
+        }
+
+        #[verifier::fip]
+        pub fn r_unwrap_or_else(o: Option<u64>, b: Box<u64>) -> (r: u64)
+            requires
+                o is None,
+        {
+            let c = #[verifier::fip] move || -> (y: u64) { *b };
+            o.unwrap_or_else(c)
+        }
+
+        #[verifier::fip(strict)]
+        pub fn r_strict(o: Option<u64>, b: Box<u64>) -> (r: Option<u64>)
+            requires
+                o is Some,
+        {
+            let c = #[verifier::fip(strict)] move |x: u64| -> (y: u64) { *b };
+            o.map(c)
+        }
+    } => Err(err) => assert_vir_error_msgs(err, &[
+        "this call of `core::bool::<impl bool>::then` takes a closure",
+        "this call of `std::result::Result::<T, E>::map_err` takes a closure",
+        "this call of `std::option::Option::<T>::unwrap_or_else` takes a closure",
+        "this call of `std::option::Option::<T>::map` takes a closure",
+    ])
+}
+
+// a closure that owns nothing whose drop may deallocate (it captures a reference, or a `u64`)
+test_verify_one_file_with_options! {
+    #[test] fip_closure_capturing_refs_handed_over ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn g1(o: Option<u64>, b: &Box<u64>) -> (r: Option<u64>)
+            requires
+                o is Some,
+        {
+            let c = #[verifier::fip] move |x: u64| -> (y: u64) { **b };
+            o.map(c)
+        }
+
+        #[verifier::fip]
+        pub fn g2(o: Option<u64>, k: u64) -> (r: Option<u64>)
+            requires
+                o is Some,
+        {
+            let c = #[verifier::fip] move |x: u64| -> (y: u64) { k };
+            o.map(c)
+        }
+
+        #[verifier::fip]
+        pub fn g3(o: Option<u64>, b: Box<u64>) -> (r: (Option<u64>, Box<u64>))
+            requires
+                o is Some,
+        {
+            let c = #[verifier::fip] |x: u64| -> (y: u64) { *b };
+            let r = o.map(c);
+            (r, b)
+        }
+    } => Ok(())
+}
+
 // `encapsulates alloc(a, d)`: a function that encapsulates an allocator of its own API (a pool,
 // a slab): each call counts as `a` allocations and may deallocate where `d > 0`; its body is the
 // runtime's

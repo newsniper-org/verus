@@ -570,7 +570,12 @@ Two things are checked:
   generic call only through an operator trait's strict marker: otherwise its callee's stack use
   is not known. It may call a strict closure it knows.) A call of a function
   of std, vstd or another crate is also checked, on the MIR, for the functions of this crate it
-  may call back (see "Callbacks from other crates" below).
+  may call back (see "Callbacks from other crates" below). Such a call must not take by value a
+  closure whose drop may deallocate (one that owns a `Box`, say): std may drop it, and a
+  closure of kind `Fn` or `FnMut` (one bound to a local first) called through `FnOnce`, as
+  `Option::map` does, runs a compiler shim that calls the body and then drops the closure's
+  environment, which neither the closure's checks nor its bound cover. Capture by reference
+  instead.
 * **Drops.** The compiler inserts drops that do not appear in the source. They are checked on
   the MIR of the compiled program, after ghost code is erased and after drop elaboration. A value
   may be dropped on a path that returns normally only if its type has no drop glue at all, or

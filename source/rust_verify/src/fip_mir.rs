@@ -403,6 +403,74 @@ fn report<'tcx>(tcx: TyCtxt<'tcx>, span: Span, fip: bool, what: String) {
     );
 }
 
+/// A closure owned by a value of type `ty` (the value itself, or a part that is not behind a
+/// reference) whose drop may deallocate
+fn owned_closure_may_deallocate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    marker: Option<DefId>,
+    ty: Ty<'tcx>,
+) -> Option<Ty<'tcx>> {
+    match ty.kind() {
+        ty::Closure(..) | ty::CoroutineClosure(..) => {
+            if drop_may_deallocate(tcx, typing_env, marker, ty) { Some(ty) } else { None }
+        }
+        ty::Tuple(ts) => {
+            ts.iter().find_map(|t| owned_closure_may_deallocate(tcx, typing_env, marker, t))
+        }
+        ty::Adt(_, args) => {
+            args.types().find_map(|t| owned_closure_may_deallocate(tcx, typing_env, marker, t))
+        }
+        ty::Array(t, _) | ty::Slice(t) => {
+            owned_closure_may_deallocate(tcx, typing_env, marker, *t)
+        }
+        _ => None,
+    }
+}
+
+/// In a fip function, a call that hands over (by value) a closure whose drop may deallocate:
+/// unless the callee is a function of this crate (whose own checks see the closure's drop), it
+/// may drop the closure, which nothing counts. In particular a closure of kind `Fn` or `FnMut`
+/// (e.g. one bound to a local first) called through `FnOnce::call_once` (as `Option::map` does)
+/// runs a compiler shim that calls the closure's body and then drops its environment: the
+/// closure's own checks and its `deallocates` bound cover only its body.
+fn check_closures_handed_over<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    marker: Option<DefId>,
+    body: &rustc_middle::mir::Body<'tcx>,
+    func: &rustc_middle::mir::Operand<'tcx>,
+    call_args: &[rustc_span::Spanned<rustc_middle::mir::Operand<'tcx>>],
+    span: Span,
+) {
+    if call_target(tcx, typing_env, func).is_some_and(|(t, _)| t.is_local()) {
+        return;
+    }
+    for arg in call_args.iter() {
+        let place = match &arg.node {
+            rustc_middle::mir::Operand::Move(p) | rustc_middle::mir::Operand::Copy(p) => p,
+            _ => continue,
+        };
+        let ty = place.ty(&body.local_decls, tcx).ty;
+        if let Some(cty) = owned_closure_may_deallocate(tcx, typing_env, marker, ty) {
+            let target = match call_target(tcx, typing_env, func) {
+                Some((t, _)) => tcx.def_path_str(t),
+                None => match func.const_fn_def() {
+                    Some((d, _)) => tcx.def_path_str(d),
+                    None => "a function".to_string(),
+                },
+            };
+            tcx.dcx().span_err(
+                span,
+                format!(
+                    "-V alloc-check: a `#[verifier::fip]` function must not deallocate, but this call of `{}` takes a closure (of type `{}`) by value, and dropping the closure may deallocate what it owns: the callee may drop it (e.g. after calling it through `FnOnce`), which Verus does not count yet (capture what the closure needs by reference instead)",
+                    target, cty
+                ),
+            );
+        }
+    }
+}
+
 /// In a (non-strict) fip function, a call of another crate's function: the functions of this
 /// crate that it may call back must be `#[verifier::fip]`
 fn check_callbacks<'tcx>(
@@ -532,12 +600,24 @@ fn check_fip_body<'tcx>(
                     );
                 }
             }
-            TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
+            TerminatorKind::Call { func, args: call_args, .. }
+            | TerminatorKind::TailCall { func, args: call_args, .. } => {
                 let Some((callee, args)) = func.const_fn_def() else { continue };
                 // (drop elaboration calls `Drop::drop` directly, e.g. for a `Box` whose contents
                 // were moved out, which frees the box)
                 let is_drop_method =
                     drop_trait.is_some() && tcx.trait_of_assoc(callee) == drop_trait;
+                if counted.is_none() && !is_drop_method && Some(callee) != drop_in_place {
+                    check_closures_handed_over(
+                        tcx,
+                        typing_env,
+                        marker,
+                        &body,
+                        func,
+                        call_args,
+                        span,
+                    );
+                }
                 // another crate's code may call back into this crate's (a strict function's
                 // callbacks are checked by `strict_edges`)
                 // (a function with a `deallocates` bound counts what its calls deallocate, callbacks

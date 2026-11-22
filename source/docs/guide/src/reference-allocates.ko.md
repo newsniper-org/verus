@@ -545,7 +545,11 @@ fn push_spare(v: &mut Vec<u64>)
   할당도 하지 않습니다. 제네릭 함수는 이것을 `requires !f.deallocates(x)`로 요구할 수 있습니다. (strict 함수는
   연산자 trait의 strict 표시 trait을 통해서만 제네릭 호출을 할 수 있습니다. 그 밖에는 호출 대상의 스택 사용을
   알 수 없기 때문입니다. 알고 있는 strict 클로저는 부를 수 있습니다.) std, vstd, 다른 crate의 함수 호출은 그 함수가 이
-  crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른 crate에서 오는 콜백" 참고).
+  crate의 어떤 함수를 되부를 수 있는지도 MIR에서 검사합니다(아래 "다른 crate에서 오는 콜백" 참고). 이런 호출에는
+  drop하면 해제될 수 있는 클로저(예: `Box`를 소유한 클로저)를 값으로 넘길 수 없습니다. std가 그 클로저를 drop할 수
+  있기 때문입니다. 특히 종류가 `Fn`이나 `FnMut`인 클로저(먼저 지역 변수에 묶은 클로저)를 `Option::map`처럼
+  `FnOnce`로 부르면, 컴파일러가 만든 shim이 본문을 부른 뒤 클로저의 환경을 drop합니다. 이 drop은 클로저의 검사도
+  상한도 다루지 않습니다. 대신 참조로 캡처하십시오.
 * **drop.** 컴파일러는 소스에 나타나지 않는 drop을 넣습니다. 이 drop은 컴파일되는 프로그램의 MIR에서
   검사합니다. ghost 코드를 지우고 drop elaboration을 마친 뒤의 MIR입니다. 정상 반환하는 경로에서
   drop되는 값은 타입에 drop glue가 아예 없거나, unsafe 표시 trait `vstd::alloc_check::NoDeallocDrop`을
