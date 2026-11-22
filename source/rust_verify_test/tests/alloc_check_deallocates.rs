@@ -1068,3 +1068,114 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "a `Box` whose contents were moved out of it is freed here")
 }
+
+// Rust 2024 drops temporaries earlier: those of a block's tail expression at its end (before the
+// block's locals), and the scrutinee of an `if let` at the end of the then-branch or before the
+// else-branch; Verus counts them where rustc drops them (portable-fip, 2026-11-22)
+const EDITION_DROPS: &str = verus_code_str! {
+    use vstd::prelude::*;
+
+    pub fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+    pub fn consume(b: Box<u64>) deallocates 1 { }
+    pub fn peek(b: &Box<u64>) -> (r: u64) deallocates 0 { 1 }
+
+    pub fn tail(c: bool) -> (r: u64) deallocates 1 {
+        if c { peek(&mk()) } else { 0 }
+    }
+
+    pub fn tail_with_local() -> (r: u64) deallocates 2 {
+        let a = mk();
+        peek(&mk())
+    }
+
+    pub fn nested_block() -> (r: u64) deallocates 2 {
+        let k = { let a = mk(); peek(&mk()) };
+        k
+    }
+
+    pub fn closure_tail() -> (r: u64) deallocates 1 {
+        let f = || -> (y: u64) deallocates 1 { peek(&mk()) };
+        f()
+    }
+
+    pub fn if_let_else(v: &mut Vec<(Box<u64>, bool)>) deallocates 1 {
+        if let Some((x, true)) = v.pop() { consume(x); } else { }
+    }
+
+    pub fn if_let_no_else(v: &mut Vec<(Box<u64>, bool)>) deallocates 1 {
+        if let Some((x, true)) = v.pop() { consume(x); }
+    }
+
+    pub fn if_let_value(v: &mut Vec<(Box<u64>, bool)>) -> (r: u64) deallocates 1 {
+        let r = if let Some((x, true)) = v.pop() { consume(x); 1 } else { 0 };
+        r
+    }
+
+    pub fn if_let_returns(v: &mut Vec<(Box<u64>, bool)>) -> (r: u64) deallocates 1 {
+        if let Some((x, true)) = v.pop() { consume(x); return 1; } else { }
+        0
+    }
+
+    pub fn else_if_let(v: &mut Vec<(Box<u64>, bool)>, w: &mut Vec<(Box<u64>, bool)>) deallocates 2 {
+        if let Some((x, true)) = v.pop() { consume(x); } else if let Some((y, true)) = w.pop() { consume(y); } else { }
+    }
+
+    pub fn while_let(v: &mut Vec<(Box<u64>, Box<u64>)>)
+        requires old(v)@.len() <= 100,
+        deallocates 200
+    {
+        while let Some((x, _)) = v.pop()
+            invariant_except_break deallocated() + 2 * v@.len() <= 200,
+            ensures deallocated() <= 200,
+            decreases v@.len(),
+        {
+            consume(x);
+        }
+    }
+
+    pub fn for_range(n: u64) deallocates 0 {
+        for i in 0..n
+            invariant deallocated() == 0,
+        {
+        }
+    }
+};
+
+const EDITION_DROPS_LOW: &str = verus_code_str! {
+    use vstd::prelude::*;
+
+    pub fn mk() -> (r: Box<u64>) deallocates 0 { Box::new(1) }
+    pub fn consume(b: Box<u64>) deallocates 1 { }
+    pub fn peek(b: &Box<u64>) -> (r: u64) deallocates 0 { 1 }
+
+    pub fn tail(c: bool) -> (r: u64) deallocates 0 { // FAILS
+        if c { peek(&mk()) } else { 0 }
+    }
+
+    pub fn nested_block() -> (r: u64) deallocates 1 { // FAILS
+        let k = { let a = mk(); peek(&mk()) };
+        k
+    }
+
+    pub fn if_let_else(v: &mut Vec<(Box<u64>, bool)>) deallocates 0 { // FAILS
+        if let Some((x, true)) = v.pop() { consume(x); } else { }
+    }
+
+    pub fn else_if_let(v: &mut Vec<(Box<u64>, bool)>, w: &mut Vec<(Box<u64>, bool)>) deallocates 1 { // FAILS
+        if let Some((x, true)) = v.pop() { consume(x); } else if let Some((y, true)) = w.pop() { consume(y); } else { }
+    }
+
+    fn after() {}
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_edition_2024 ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_DROPS.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_edition_2021 ["vstd", "-V alloc-check", "--edition 2021"] => EDITION_DROPS.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_edition_2024_low ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_DROPS_LOW.to_string() => Err(err) => assert_fails(err, 4)
+}

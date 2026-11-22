@@ -477,10 +477,12 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * `drop(x)`(`core::mem::drop`)는 스코프 끝과 같이 `drop_deallocations(x)`로 셉니다.
 * Verus는 컴파일된 프로그램에서, 해제할 수 있는 drop이 모두 자기가 센 것인지 검사하고 아니면 거부합니다. 지금 거부하는
   것은 이렇습니다.
-  - `&&`나 `||`의 피연산자 안의 임시값, `let r = &f();`로 살아 있는 임시값. `--edition 2024`에서, `else`가 있는
-    (또는 블록 끝에 있는) `if let`의 대상이 drop될 때 남아 있는 경우.
+  - `&&`나 `||`의 피연산자 안의 임시값, `let r = &f();`로 살아 있는 임시값.
     (rustc처럼 Verus도 임시값을 문장의 끝에서 drop합니다. if의 조건이나 갈래, 루프의 조건이나 본문(반복마다),
-    match의 팔이나 guard 안에 있으면 그 끝에서 drop합니다.)
+    match의 팔이나 guard 안에 있으면 그 끝에서 drop합니다. Rust 2024에서는(rustc처럼 코드의 edition으로 정합니다)
+    블록 꼬리 식의 임시값을 그 식의 끝에서, 블록의 지역 변수보다 먼저 drop하고, `if let`의 대상은 then 갈래의 끝이나
+    else 갈래 직전에 drop합니다. 그래서 edition이 중요합니다. 크레이트의 edition을 넘기십시오(`--edition 2024`.
+    없으면 Rust 2021로 컴파일하고, `-V alloc-check`에서는 경고합니다).)
   - 내용물을 꺼낸 `Box`.
   - 캡처한 값을 읽기만 하는 `move` 클로저.
   - 대안마다 값의 다른 부분을 옮기는 or-패턴(예: `(true, x, _) | (false, _, x)`). enum의 서로 다른 variant끼리의

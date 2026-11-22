@@ -495,9 +495,7 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * `drop(x)` (`core::mem::drop`) is counted `drop_deallocations(x)`, like the end of a scope.
 * Verus checks on the compiled program that each drop that may deallocate is one it counted,
   and rejects any other: for now, a temporary in an operand of `&&` or `||`, or kept alive by
-  `let r = &f();`; with `--edition 2024`, the scrutinee of an `if let` with an `else` (or at the
-  end of a block) that is still there when it is dropped; a `Box` whose contents were moved out
-  of it; and a
+  `let r = &f();`; a `Box` whose contents were moved out of it; and a
   `move` closure that captures a value it only reads. Bind the value to a local, or move it.
   An or-pattern whose alternatives move different parts of a value (e.g.
   `(true, x, _) | (false, _, x)`) is rejected too (alternatives that are different variants of
@@ -505,7 +503,12 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   element through indexing (`v[i] = x`) is rejected too: write `let r = &mut v[i]; *r = x;`, or
   `v.set(i, x)`.
   (Like rustc, Verus drops a temporary at the end of its statement, or of the condition or branch
-  of an `if`, the condition or body of a loop (every iteration), or a match arm or guard.)
+  of an `if`, the condition or body of a loop (every iteration), or a match arm or guard. As in
+  Rust 2024 (by the edition of the code, as rustc decides), the temporaries of a block's tail
+  expression are dropped at its end, before the block's locals, and the scrutinee of an `if let`
+  at the end of the then-branch or before the else-branch. The edition matters: give Verus the
+  crate's (`--edition 2024`; without one, Verus compiles as Rust 2021 and warns under
+  `-V alloc-check`).)
 * A closure can have a `deallocates` bound, counted the same way (its own drops included); a
   call of it counts `call_deallocations` of it. A `#[verifier::fip]` closure deallocates nothing
   (it cannot state `deallocates`).

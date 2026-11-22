@@ -346,11 +346,14 @@ pub struct CountedBody {
 /// -V alloc-check: for each function, the bodies in it that count their implicit drops
 pub type DropSites = HashMap<Fun, Vec<CountedBody>>;
 
+/// (`edition_2024`: the expressions where rustc uses the drop scopes of Rust 2024, see
+/// `Builder::edition_2024`)
 pub fn krate_infer_resolution(
     krate: &Krate,
     infos: &HashMap<Fun, Arc<ResolutionInfo>>,
     alloc_check: bool,
     check_api_safety: bool,
+    edition_2024: &HashSet<AstId>,
 ) -> Result<(Krate, DropSites), Vec<VirErr>> {
     let mut datatypes = HashMap::new();
     for datatype in krate.datatypes.iter() {
@@ -390,6 +393,7 @@ pub fn krate_infer_resolution(
                 &rtypes,
                 alloc_check && !res_info.dual_mode,
                 count_drops,
+                edition_2024,
             );
             match new_body {
                 Ok((new_body, bodies)) => {
@@ -423,6 +427,7 @@ fn infer_resolution(
     rtypes: &ResolutionTypes,
     alloc_check: bool,
     count_drops: bool,
+    edition_2024: &HashSet<AstId>,
 ) -> Result<(Expr, Vec<CountedBody>), VirErr> {
     let (
         cfg,
@@ -441,6 +446,7 @@ fn infer_resolution(
         &info.temporary_modes,
         alloc_check,
         count_drops,
+        edition_2024,
     )?;
     //println!("{:}", pretty_cfg(&cfg));
     let resolutions = if info.dual_mode { vec![] } else { get_resolutions(&cfg, rtypes, asserts) };
@@ -684,6 +690,13 @@ struct Builder<'a> {
 
     /// -V alloc-check: the implicit drops of a function with a `deallocates` bound
     drop_counting: Option<DropCounting>,
+
+    /// The expressions where rustc uses the drop scopes of Rust 2024 (by the edition of their
+    /// span, as rustc decides): a block whose tail expression is a temporary scope of its own
+    /// (its temporaries are dropped at its end, before the block's locals), and an `if let`
+    /// (a `Match`) whose scrutinee's temporaries are dropped at the end of the then-branch, or
+    /// before the else-branch
+    edition_2024: &'a HashSet<AstId>,
 }
 
 /// -V alloc-check, `deallocates d`: the function's implicit drops, which are charged to its
@@ -845,6 +858,7 @@ fn new_cfg<'a>(
     temporary_modes: &'a HashMap<AstId, Mode>,
     alloc_check: bool,
     count_drops: bool,
+    edition_2024: &'a HashSet<AstId>,
 ) -> Result<
     (
         CFG<'a>,
@@ -883,6 +897,7 @@ fn new_cfg<'a>(
             no_drop_closures: HashSet::new(),
         },
         read_kind_finals,
+        edition_2024,
         drop_counting: if alloc_check {
             Some(DropCounting {
                 frame: None,
@@ -1666,7 +1681,15 @@ impl<'a> Builder<'a> {
                     }
                 }
                 if let Some(e) = e_opt {
-                    bb = match self.build(e, bb) {
+                    // (Rust 2024: the tail expression is a temporary scope of its own, dropped
+                    // before the block's locals; before, its temporaries belonged to the
+                    // enclosing statement)
+                    let tail = if self.edition_2024.contains(&span_id) {
+                        self.build_temp_scope(e, bb, &e.span)
+                    } else {
+                        self.build(e, bb)
+                    };
+                    bb = match tail {
                         Maybe::Some(bb) => bb,
                         Maybe::Never => {
                             for _i in 0..scope_count {
@@ -2140,7 +2163,29 @@ impl<'a> Builder<'a> {
         } else {
             TypInv::No
         };
-        let (cpt, bb) = unwrap!(self.build_place_typed(place, bb, tinv));
+        // Rust 2024 `if let` (rustc's `IfThenRescope`): the scrutinee's temporaries are dropped
+        // at the end of the then-branch, or before the else-branch, both at the end of the
+        // then-branch; before, they belonged to the enclosing statement or temporary scope
+        let rescope = if self.counting_drops()
+            && self.edition_2024.contains(&expr.span.id)
+            && arms.len() == 2
+            && !arms[0].x.has_guard()
+        {
+            let site = arms[0].x.body.span.clone();
+            self.frame_mut().stmts.push((site, vec![]));
+            Some(self.frame().stmts.len() - 1)
+        } else {
+            None
+        };
+        let (cpt, bb) = match self.build_place_typed(place, bb, tinv) {
+            Maybe::Some(r) => r,
+            Maybe::Never => {
+                if rescope.is_some() {
+                    self.frame_mut().stmts.pop().unwrap();
+                }
+                return Maybe::Never;
+            }
+        };
 
         if arms.len() == 0 {
             return Maybe::Never;
@@ -2162,6 +2207,13 @@ impl<'a> Builder<'a> {
             if is_irrefut {
                 let arm_bb = self.new_bb(AstPosition::Before(arm.x.body.span.id), false);
                 self.basic_blocks[cur_bb].successors.push(arm_bb);
+                if let Some(k) = rescope {
+                    // (the else-branch: the scrutinee's temporaries are dropped before it)
+                    let n_scopes = self.frame().scopes.len();
+                    let position = AstPosition::Before(arm.x.body.span.id);
+                    self.drop_scopes_and_temps(arm_bb, position, n_scopes, k, false);
+                    self.frame_mut().stmts.pop().unwrap();
+                }
                 let arm_bb_end = self.build_arm_after_checks(&cpt, arm, arm_bb);
                 if let Maybe::Some(arm_bb_end) = arm_bb_end {
                     arm_bb_ends.push(arm_bb_end);
@@ -2170,6 +2222,12 @@ impl<'a> Builder<'a> {
             } else {
                 let (continue_bb, arm_bb_end) = self.build_arm_before_checks(&cpt, arm, cur_bb);
                 if let Maybe::Some(arm_bb_end) = arm_bb_end {
+                    if let Some(k) = rescope {
+                        // (the end of the then-branch)
+                        let n_scopes = self.frame().scopes.len();
+                        let position = AstPosition::After(arm.x.body.span.id);
+                        self.drop_scopes_and_temps(arm_bb_end, position, n_scopes, k, false);
+                    }
                     arm_bb_ends.push(arm_bb_end);
                 }
                 match continue_bb {

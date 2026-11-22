@@ -1207,9 +1207,16 @@ pub(crate) fn block_to_vir<'tcx>(
         vir_stmts.append(&mut some_stmts);
     }
     let vir_expr = block.expr.map(|expr| expr_to_vir_consume(bctx, &expr)).transpose()?;
+    // (Rust 2024: the tail expression is a temporary scope of its own; rustc decides by the
+    // edition of the block's span)
+    let tail_rescoped = vir_expr.is_some() && block.span.at_least_rust_2024();
 
     let x = ExprX::Block(Arc::new(vir_stmts), vir_expr);
-    Ok(bctx.spanned_typed_new(span.clone(), ty, x))
+    let e = bctx.spanned_typed_new(span.clone(), ty, x);
+    if tail_rescoped {
+        bctx.ctxt.edition_2024_scopes.borrow_mut().insert(e.span.id);
+    }
+    Ok(e)
 }
 
 /// Prefix of the verified twin `_VERUS_VERIFIED_f` of a `#[verus_spec(with ...)]` function `f`
@@ -3573,13 +3580,22 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                             cond.span,
                         )
                     };
-                    mk_expr(cond_let_expr_to_vir_match(
+                    let m = mk_expr(cond_let_expr_to_vir_match(
                         cond,
                         expr_to_vir_consume(bctx, &lhs)?,
                         lhs.span,
                         rhs_vir,
                         rhs_span,
-                    )?)
+                    )?)?;
+                    // (Rust 2024: the scrutinee's temporaries are dropped at the end of the
+                    // then-branch, or before the else-branch; rustc decides by the edition of the
+                    // `if`'s span)
+                    if expr.span.at_least_rust_2024() {
+                        if let ExprOrPlace::Expr(e) = &m {
+                            bctx.ctxt.edition_2024_scopes.borrow_mut().insert(e.span.id);
+                        }
+                    }
+                    Ok(m)
                 }
                 _ => {
                     let vir_cond = expr_to_vir_consume(bctx, cond)?;

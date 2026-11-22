@@ -687,11 +687,13 @@ impl<'tcx> Query<'tcx> {
                 Err(_) => unreachable!(),
             }
         }
+        let edition_2024 = pre_crate.ctxt.edition_2024_scopes.borrow().clone();
         let (krate, drop_sites) = krate_infer_resolution(
             &krate,
             &res_infos,
             self.args.alloc_check,
             self.args.check_api_safety,
+            &edition_2024,
         )
         .map_err(|e| self.emit_errors(e))?;
 

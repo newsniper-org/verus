@@ -61,6 +61,10 @@ pub struct ContextX<'tcx> {
     pub(crate) crate_name: CrateId,
     pub(crate) name_def_id_map: Rc<RefCell<HashMap<Path, DefId>>>,
     pub(crate) next_read_kind_id: AtomicU64,
+    /// The VIR expressions where rustc uses the drop scopes of Rust 2024, by the edition of
+    /// their spans (a block with a tail expression, an `if let`): see
+    /// `vir::resolution_inference::krate_infer_resolution`
+    pub(crate) edition_2024_scopes: RefCell<std::collections::HashSet<vir::messages::AstId>>,
 }
 
 /// Warnings and notes collected while translating HIR to VIR, waiting to be reported.
@@ -184,6 +188,7 @@ impl<'tcx> ContextX<'tcx> {
             crate_name,
             name_def_id_map: Rc::new(RefCell::new(HashMap::new())),
             next_read_kind_id: AtomicU64::new(0),
+            edition_2024_scopes: RefCell::new(std::collections::HashSet::new()),
         }
     }
 
