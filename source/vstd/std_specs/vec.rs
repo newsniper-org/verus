@@ -20,7 +20,7 @@ use core::option::Option;
 use core::option::Option::None;
 use core::slice::SliceIndex;
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 use verus as verus_skip_verusfmt;
 verus_skip_verusfmt! {
 
@@ -814,6 +814,12 @@ pub broadcast axiom fn axiom_next_cost_vec_into_iter<T, A: Allocator>(i: &IntoIt
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_vec_into_iter<T, A: Allocator>(i: &IntoIter<T, A>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_vec_into_iter<T, A: Allocator>()
     ensures
@@ -948,6 +954,7 @@ pub broadcast axiom fn axiom_vec_decreases_to_view<T>(v: Vec<T>)
 
 pub broadcast group group_vec_axioms {
     axiom_next_cost_vec_into_iter,
+    axiom_next_deallocations_vec_into_iter,
     axiom_aux_alloc_free_vec_into_iter,
     axiom_next_back_cost_vec_into_iter,
     axiom_spec_len,

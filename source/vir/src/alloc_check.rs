@@ -1386,8 +1386,11 @@ pub(crate) fn check_unverified_impls_of_bounded_decls(krate: &Krate) -> Result<(
         krate.functions.iter().filter(|f| f.x.deallocates.is_some()).map(|f| &f.x.name).collect();
     for f in krate.functions.iter() {
         let crate::ast::FunctionKind::TraitMethodImpl { method, .. } = &f.x.kind else { continue };
+        // (`deallocates 0` cannot contradict the declaration's bound or condition: it frees
+        // nothing, and the bounds are clamped at 0)
         if f.x.deallocates.is_some()
             && decl_has_dealloc.contains(method)
+            && !f.x.deallocations.as_ref().is_some_and(is_literal_zero)
             && (f.x.attrs.is_external_body || f.x.proxy.is_some())
             && !f.x.proxy.as_ref().is_some_and(|px| px.x.is_vstd_path())
         {

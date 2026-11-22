@@ -28,7 +28,7 @@ use core::marker::PhantomData;
 use core::ops::Bound;
 use core::option::Option;
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 verus! {
 
 /// Whether the `Key` type obeys the cmp spec, required for [`BTreeMap`]
@@ -79,6 +79,12 @@ pub broadcast axiom fn axiom_next_cost_btree_keys<'a, K, V>(i: &Keys<'a, K, V>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_btree_keys<'a, K, V>(i: &Keys<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_btree_keys<'a, K, V>()
     ensures
@@ -123,6 +129,12 @@ pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>)
 pub broadcast axiom fn axiom_next_cost_btree_values<'a, K, V>(i: &Values<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_btree_values<'a, K, V>(i: &Values<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -171,6 +183,12 @@ pub uninterp spec fn into_iter<'a, Key, Value>(i: btree_map::Iter<'a, Key, Value
 pub broadcast axiom fn axiom_next_cost_btree_map_iter<'a, K, V>(i: &btree_map::Iter<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_btree_map_iter<'a, K, V>(i: &btree_map::Iter<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -1082,6 +1100,12 @@ pub broadcast axiom fn axiom_next_cost_btree_set_iter<'a, T>(i: &btree_set::Iter
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_btree_set_iter<'a, T>(i: &btree_set::Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_btree_set_iter<'a, T>()
     ensures
@@ -1338,12 +1362,16 @@ pub broadcast axiom fn axiom_btree_set_decreases<Key, A: AllocatorClone>(m: BTre
 
 pub broadcast group group_btree_axioms {
     axiom_next_cost_btree_set_iter,
+    axiom_next_deallocations_btree_set_iter,
     axiom_aux_alloc_free_btree_set_iter,
     axiom_next_cost_btree_map_iter,
+    axiom_next_deallocations_btree_map_iter,
     axiom_aux_alloc_free_btree_map_iter,
     axiom_next_cost_btree_values,
+    axiom_next_deallocations_btree_values,
     axiom_aux_alloc_free_btree_values,
     axiom_next_cost_btree_keys,
+    axiom_next_deallocations_btree_keys,
     axiom_aux_alloc_free_btree_keys,
     axiom_key_obeys_cmp_spec_meaning,
     axiom_increasing_seq_meaning,

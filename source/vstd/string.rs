@@ -389,6 +389,7 @@ pub broadcast group group_string_axioms {
     is_ascii_spec_bytes,
     is_ascii_concat,
     axiom_next_cost_chars,
+    axiom_next_deallocations_chars,
     axiom_aux_alloc_free_chars,
 }
 
@@ -628,6 +629,14 @@ pub assume_specification[ str::chars ](s: &str) -> (iter: Chars<'_>)
 pub broadcast axiom fn axiom_next_cost_chars<'a>(i: &Chars<'a>)
     ensures
         #[trigger] super::std_specs::iter::iter_next_cost(i) == 0,
+;
+
+#[cfg(verus_keep_ghost)]
+#[cfg(feature = "alloc")]
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_chars<'a>(i: &Chars<'a>)
+    ensures
+        #[trigger] super::std_specs::iter::iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing

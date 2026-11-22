@@ -11,7 +11,7 @@ use core::ops::{Index, IndexMut};
 use core::option::Option;
 use core::option::Option::None;
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 verus! {
 
 #[verifier::external_type_specification]
@@ -440,6 +440,12 @@ pub broadcast axiom fn axiom_next_cost_vecdeque_iter<'a, T: 'a>(i: &Iter<'a, T>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_vecdeque_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_vecdeque_iter<'a, T: 'a>()
     ensures
@@ -509,6 +515,7 @@ pub broadcast axiom fn axiom_drop_deallocations_vecdeque<T, A: Allocator>(v: Vec
 pub broadcast group group_vec_dequeue_axioms {
     axiom_drop_deallocations_vecdeque,
     axiom_next_cost_vecdeque_iter,
+    axiom_next_deallocations_vecdeque_iter,
     axiom_aux_alloc_free_vecdeque_iter,
     axiom_next_back_cost_vecdeque_iter,
     axiom_spec_len,

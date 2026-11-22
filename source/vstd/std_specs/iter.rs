@@ -50,6 +50,12 @@ pub uninterp spec fn iter_next_cost<I: ?Sized>(i: &I) -> int;
 /// The same for `DoubleEndedIterator::next_back`
 pub uninterp spec fn iter_next_back_cost<I: ?Sized>(i: &I) -> int;
 
+/// -V alloc-check: the deallocation bound of one call to `Iterator::next` on `i` (like
+/// `iter_next_cost`: every implementation must stay within it, so a call through the trait is
+/// charged this much). vstd states it 0 for std's iterators whose `next` frees nothing (ranges
+/// of std integers, the borrowing iterators of slices and collections, `vec::IntoIter`).
+pub uninterp spec fn iter_next_deallocations<I: ?Sized>(i: &I) -> int;
+
 pub broadcast axiom fn axiom_iter_next_cost_nonneg<I: ?Sized>(i: &I)
     ensures
         #[trigger] iter_next_cost(i) >= 0,
@@ -58,6 +64,11 @@ pub broadcast axiom fn axiom_iter_next_cost_nonneg<I: ?Sized>(i: &I)
 pub broadcast axiom fn axiom_iter_next_back_cost_nonneg<I: ?Sized>(i: &I)
     ensures
         #[trigger] iter_next_back_cost(i) >= 0,
+;
+
+pub broadcast axiom fn axiom_iter_next_deallocations_nonneg<I: ?Sized>(i: &I)
+    ensures
+        #[trigger] iter_next_deallocations(i) >= 0,
 ;
 
 #[verifier::external_trait_specification]
@@ -106,6 +117,7 @@ pub trait ExIterator {
             final(self).obeys_prophetic_iter_laws() && old(self).remaining().len() > 0 && final(self).decrease() is Some ==>
                 decreases_to!(old(self).decrease()->0 => final(self).decrease()->0),
         allocates iter_next_cost(&*self)
+        deallocates iter_next_deallocations(&*self)
     ;
 
     /******* Mechanisms that support ergonomic `for` loops *********/
@@ -1041,8 +1053,9 @@ impl <I: Iterator> VerusForLoopWrapper<I> {
             // All of the standard Iterator::next guarantees still hold
             exists |m: &mut I| #![auto] (I::next).ensures((m,), ret) && *m == old(self).iter && *final(m) == final(self).iter,
         allocates iter_next_cost(&self.iter)
+        deallocates iter_next_deallocations(&self.iter)
     {
-        broadcast use axiom_iter_next_cost_nonneg;
+        broadcast use axiom_iter_next_cost_nonneg, axiom_iter_next_deallocations_nonneg;
         let ghost old_history = self.history@;
         let ret = self.iter.next();
         if ret.is_some() {
@@ -1271,6 +1284,7 @@ pub broadcast axiom fn axiom_aux_alloc_free_filter<I: Iterator, P: for<'a> FnOnc
 
 pub broadcast group group_iter_axioms {
     axiom_iter_next_cost_nonneg,
+    axiom_iter_next_deallocations_nonneg,
     axiom_iter_adapter_cost,
     axiom_aux_alloc_free_rev,
     axiom_aux_alloc_free_skip,

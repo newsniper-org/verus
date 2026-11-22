@@ -120,6 +120,23 @@ macro_rules! num_specs {
             deallocates
                 0;
 
+            // (core's integer `Ord` impls define `clamp`, and since Rust 1.100 `min` and `max`:
+            // they compare and return one of their arguments)
+            pub assume_specification[<$uN as Ord>::min](x: $uN, y: $uN) -> $uN  allocates
+                0int,
+            deallocates
+                0;
+
+            pub assume_specification[<$uN as Ord>::max](x: $uN, y: $uN) -> $uN  allocates
+                0int,
+            deallocates
+                0;
+
+            pub assume_specification[<$uN as Ord>::clamp](x: $uN, min: $uN, max: $uN) -> $uN  allocates
+                0int,
+            deallocates
+                0;
+
             #[verifier::allow_in_spec]
             #[cfg(not(verus_verify_core))]
             pub assume_specification[<$uN>::wrapping_add](x: $uN, y: $uN) -> $uN
@@ -464,6 +481,23 @@ macro_rules! num_specs {
                 0;
 
             pub assume_specification[<$iN as PartialOrd<$iN>>::ge](x: &$iN, y: &$iN) -> bool  allocates
+                0int,
+            deallocates
+                0;
+
+            // (core's integer `Ord` impls define `clamp`, and since Rust 1.100 `min` and `max`:
+            // they compare and return one of their arguments)
+            pub assume_specification[<$iN as Ord>::min](x: $iN, y: $iN) -> $iN  allocates
+                0int,
+            deallocates
+                0;
+
+            pub assume_specification[<$iN as Ord>::max](x: $iN, y: $iN) -> $iN  allocates
+                0int,
+            deallocates
+                0;
+
+            pub assume_specification[<$iN as Ord>::clamp](x: $iN, min: $iN, max: $iN) -> $iN  allocates
                 0int,
             deallocates
                 0;

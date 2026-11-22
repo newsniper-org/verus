@@ -38,7 +38,7 @@ use std::collections::hash_map::{
 use std::collections::hash_set;
 use std::collections::{HashMap, HashSet};
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 verus! {
 
 /// Specifications for the behavior of
@@ -295,6 +295,12 @@ pub broadcast axiom fn axiom_next_cost_hash_keys<'a, K, V>(i: &Keys<'a, K, V>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_hash_keys<'a, K, V>(i: &Keys<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_hash_keys<'a, K, V>()
     ensures
@@ -339,6 +345,12 @@ pub uninterp spec fn into_iter_values<'a, Key, Value>(i: Values<'a, Key, Value>)
 pub broadcast axiom fn axiom_next_cost_hash_values<'a, K, V>(i: &Values<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_hash_values<'a, K, V>(i: &Values<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -387,6 +399,12 @@ pub uninterp spec fn into_iter<'a, Key, Value>(i: hash_map::Iter<'a, Key, Value>
 pub broadcast axiom fn axiom_next_cost_hash_map_iter<'a, K, V>(i: &hash_map::Iter<'a, K, V>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_hash_map_iter<'a, K, V>(i: &hash_map::Iter<'a, K, V>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -998,6 +1016,12 @@ pub uninterp spec fn into_iter_hash_keys<'a, Key>(i: hash_set::Iter::<'a, Key>) 
 pub broadcast axiom fn axiom_next_cost_hash_set_iter<'a, K>(i: &hash_set::Iter<'a, K>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_hash_set_iter<'a, K>(i: &hash_set::Iter<'a, K>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -1894,12 +1918,16 @@ pub broadcast group group_hash_axioms {
     axiom_hash_free_char,
     axiom_hash_free_string,
     axiom_next_cost_hash_set_iter,
+    axiom_next_deallocations_hash_set_iter,
     axiom_aux_alloc_free_hash_set_iter,
     axiom_next_cost_hash_map_iter,
+    axiom_next_deallocations_hash_map_iter,
     axiom_aux_alloc_free_hash_map_iter,
     axiom_next_cost_hash_values,
+    axiom_next_deallocations_hash_values,
     axiom_aux_alloc_free_hash_values,
     axiom_next_cost_hash_keys,
+    axiom_next_deallocations_hash_keys,
     axiom_aux_alloc_free_hash_keys,
     axiom_box_key_removed,
     axiom_contains_deref_key,

@@ -510,8 +510,18 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * A few specifications state no bound, because they run user code whose deallocations vstd
   cannot name yet: the `HashMap` and `HashSet` operations that hash a key (`insert`, `get`,
   `remove`, `contains_key`, `entry`, `reserve`, ...), `to_string`, `format!` and
-  `Formatter::write_fmt`, `Vec::from_fn`, and `Iterator::next` (so a `for` loop). Such a function
-  cannot be called from a function with a `deallocates` bound (nor from a fip function).
+  `Formatter::write_fmt`, and `Vec::from_fn`. Such a function cannot be called from a function
+  with a `deallocates` bound (nor from a fip function).
+* `Iterator::next` (so a `for` loop) is bounded by `iter_next_deallocations(&*self)`, a
+  per-implementation term like `iter_next_cost`. vstd states it 0 for std's iterators whose
+  `next` frees nothing: ranges of std integers (`0..n`, `0..=n`), the iterators of slices
+  (`iter()`, `iter_mut()`, `chunks`) and so of `&Vec`, the borrowing iterators of `VecDeque`,
+  `HashMap`, `HashSet`, `BTreeMap` and `BTreeSet`, `Chars`, and `vec::IntoIter`. As for
+  `allocates`, a loop must keep the counter in its invariant (`invariant deallocated() == 0`;
+  in a fip function, `invariant allocated() == 0`). A loop over an owning iterator (`for x in v`
+  for a `Vec` `v`) is still rejected: dropping the iterator frees its buffer, which is not
+  counted yet. Under `-V alloc-check` a verified `impl Iterator` is counted against the bound
+  too: its `next` must free nothing, unless an axiom states its `iter_next_deallocations`.
 
 ## Fully in-place functions: `#[verifier::fip]`
 
@@ -819,7 +829,9 @@ fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
 
 These are `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable` and `binary_search`,
 `Option`'s `eq`, `partial_cmp` and `cmp`, the comparisons of references, `Range::contains` and
-`RangeInclusive::contains`, and `cmp::min` and `cmp::max`. All but the last two drop nothing
+`RangeInclusive::contains`, and `cmp::min` and `cmp::max`. (The integers', `bool`'s and `char`'s
+`min`, `max` and `clamp` methods are specified directly, `allocates 0 deallocates 0`; `clamp`
+requires `min <= max`, since core panics otherwise.) All but the last two drop nothing
 (`#[verifier::alloc_check_skip_drops]`), so a strict function may call them too, through
 `FipStrictOp`. (`sort_unstable`'s result is a permutation of its input, and
 sorted by `cmp_spec` when `T`'s comparisons are a total order, `vstd::laws_cmp::obeys_cmp::<T>()`.

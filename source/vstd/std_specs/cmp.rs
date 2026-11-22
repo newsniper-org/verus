@@ -359,6 +359,26 @@ pub assume_specification[ <bool as PartialEq<bool>>::eq ](x: &bool, y: &bool) ->
 
 pub assume_specification[ <bool as PartialEq<bool>>::ne ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
 
+// (core's `PartialOrd` and `Ord` impls for `bool` and `char` define these methods: they compare
+// and return a `bool`, an `Ordering` or one of their arguments)
+pub assume_specification[ <bool as PartialOrd<bool>>::partial_cmp ](x: &bool, y: &bool) -> Option<Ordering>  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as PartialOrd<bool>>::lt ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as PartialOrd<bool>>::le ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as PartialOrd<bool>>::gt ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as PartialOrd<bool>>::ge ](x: &bool, y: &bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as Ord>::cmp ](x: &bool, y: &bool) -> Ordering  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as Ord>::min ](x: bool, y: bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as Ord>::max ](x: bool, y: bool) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <bool as Ord>::clamp ](x: bool, min: bool, max: bool) -> bool  allocates 0 deallocates 0;
+
 /* char */
 
 impl PartialEqSpecImpl for char {
@@ -370,6 +390,28 @@ impl PartialEqSpecImpl for char {
         *self == *other
     }
 }
+
+pub assume_specification[ <char as PartialEq<char>>::eq ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialEq<char>>::ne ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialOrd<char>>::partial_cmp ](x: &char, y: &char) -> Option<Ordering>  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialOrd<char>>::lt ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialOrd<char>>::le ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialOrd<char>>::gt ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as PartialOrd<char>>::ge ](x: &char, y: &char) -> bool  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as Ord>::cmp ](x: &char, y: &char) -> Ordering  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as Ord>::min ](x: char, y: char) -> char  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as Ord>::max ](x: char, y: char) -> char  allocates 0 deallocates 0;
+
+pub assume_specification[ <char as Ord>::clamp ](x: char, min: char, max: char) -> char  allocates 0 deallocates 0;
 
 /* floating point */
 

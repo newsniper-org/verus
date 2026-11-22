@@ -12,7 +12,7 @@ use core::ops::{
 };
 use core::slice::{Chunks, Iter, IterMut, SliceIndex};
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 use verus as verus_skip_verusfmt;
 verus_skip_verusfmt! {
 
@@ -413,11 +413,14 @@ pub broadcast proof fn lemma_seq_contains_deallocations_zero<T: PartialEq<T>>(
 
 pub broadcast group group_std_slice_alloc_axioms {
     axiom_next_cost_chunks,
+    axiom_next_deallocations_chunks,
     axiom_aux_alloc_free_chunks,
     axiom_next_cost_slice_iter_mut,
+    axiom_next_deallocations_slice_iter_mut,
     axiom_aux_alloc_free_slice_iter_mut,
     axiom_next_back_cost_slice_iter_mut,
     axiom_next_cost_slice_iter,
+    axiom_next_deallocations_slice_iter,
     axiom_aux_alloc_free_slice_iter,
     axiom_next_back_cost_slice_iter,
     lemma_seq_ne_allocates_zero,
@@ -809,6 +812,12 @@ pub broadcast axiom fn axiom_next_cost_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_slice_iter<'a, T: 'a>(i: &Iter<'a, T>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_slice_iter<'a, T: 'a>()
     ensures
@@ -869,6 +878,12 @@ pub struct ExIterMut<'a, T: 'a>(IterMut<'a, T>);
 pub broadcast axiom fn axiom_next_cost_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_slice_iter_mut<'a, T: 'a>(i: &IterMut<'a, T>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
@@ -1177,6 +1192,12 @@ pub uninterp spec fn after_chunks_elts<'a, T: 'a>(i: Chunks<'a, T>) -> Seq<&'a [
 pub broadcast axiom fn axiom_next_cost_chunks<'a, T: 'a>(i: &Chunks<'a, T>)
     ensures
         #[trigger] iter_next_cost(i) == 0,
+;
+
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_chunks<'a, T: 'a>(i: &Chunks<'a, T>)
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
 ;
 
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing

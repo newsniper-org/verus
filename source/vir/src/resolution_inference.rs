@@ -2565,6 +2565,13 @@ impl<'a> Builder<'a> {
             return;
         }
         let position = AstPosition::BeforeAssignWrite(assign_id);
+        // (an old value whose type has no drop glue, e.g. `Ghost<..>`, frees nothing; rustc has
+        // no drop for it either, which the MIR cross-check confirms)
+        if matches!(p, ComputedPlace::Exact(_) | ComputedPlace::Partial(_))
+            && !typ_may_need_drop(&place.typ, self.locals.datatypes, &self.locals.no_drop_closures)
+        {
+            return;
+        }
         match p {
             ComputedPlace::Exact(fp)
                 if fp.has_deref() || self.locals.locals[fp.local].name.is_temp() =>

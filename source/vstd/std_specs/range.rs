@@ -7,7 +7,7 @@ use core::ops::{
     Bound, Range, RangeBounds, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
-use super::iter::{iter_next_back_cost, iter_next_cost};
+use super::iter::{iter_next_back_cost, iter_next_cost, iter_next_deallocations};
 verus! {
 
 #[verifier::external_type_specification]
@@ -127,7 +127,7 @@ pub uninterp spec fn spec_range_next<A>(a: Range<A>) -> (Range<A>, Option<A>);
 pub uninterp spec fn obeys_range_step_spec<A>() -> bool;
 
 /// -V alloc-check: `A` is a std `Step` type (the primitive integers, `char`), whose `Step`,
-/// `PartialOrd` and `Clone` methods allocate nothing
+/// `PartialOrd` and `Clone` methods allocate and free nothing
 pub uninterp spec fn std_step_alloc_free<A>() -> bool;
 
 /// Range::contains method is valid and safe to use only when cmp operations are implemented to satisfy
@@ -232,6 +232,14 @@ pub broadcast axiom fn axiom_next_cost_range<A: core::iter::Step>(i: &Range<A>)
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_range<A: core::iter::Step>(i: &Range<A>)
+    requires
+        std_step_alloc_free::<A>(),
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_range<A: core::iter::Step>()
     requires
@@ -291,6 +299,14 @@ pub broadcast axiom fn axiom_next_cost_range_inclusive<A: core::iter::Step>(i: &
         #[trigger] iter_next_cost(i) == 0,
 ;
 
+/// -V alloc-check: its `next` frees nothing
+pub broadcast axiom fn axiom_next_deallocations_range_inclusive<A: core::iter::Step>(i: &RangeInclusive<A>)
+    requires
+        std_step_alloc_free::<A>(),
+    ensures
+        #[trigger] iter_next_deallocations(i) == 0,
+;
+
 /// std's other `Iterator` methods for this type (`nth`, `find`, `try_fold`, ...) allocate nothing
 pub broadcast axiom fn axiom_aux_alloc_free_range_inclusive<A: core::iter::Step>()
     requires
@@ -337,7 +353,7 @@ pub assume_specification<A: core::iter::Step>[ <Range<A> as Iterator>::next ](
             *old(range),
         ),
 // (its cost is the trait method's `iter_next_cost(range)`, which is 0 for the std `Step` types
-// by `axiom_next_cost_range`)
+// by `axiom_next_cost_range`; likewise `iter_next_deallocations(range)`)
 
 ;
 
@@ -847,8 +863,10 @@ verus! {
 
 pub broadcast group group_range_axioms {
     axiom_next_cost_range_inclusive,
+    axiom_next_deallocations_range_inclusive,
     axiom_aux_alloc_free_range_inclusive,
     axiom_next_cost_range,
+    axiom_next_deallocations_range,
     axiom_aux_alloc_free_range,
     axiom_range_inclusive_out_of_order,
     axiom_range_inclusive_empty_contains,

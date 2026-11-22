@@ -492,8 +492,16 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   `seq_drop_deallocations(s)`를 씁니다(`drop_deallocations`는 위 항목 참고).
 * 몇몇 명세는 상한을 적지 않습니다. vstd가 아직 해제 횟수를 이름 붙일 수 없는 사용자 코드를 부르기 때문입니다. 키를
   해시하는 `HashMap`·`HashSet` 연산(`insert`, `get`, `remove`, `contains_key`, `entry`, `reserve` 등), `to_string`,
-  `format!`과 `Formatter::write_fmt`, `Vec::from_fn`, 그리고 `Iterator::next`(그래서 `for` 루프)입니다. 이런 함수는
-  `deallocates` 상한이 있는 함수(그리고 fip 함수)에서 부를 수 없습니다.
+  `format!`과 `Formatter::write_fmt`, `Vec::from_fn`입니다. 이런 함수는 `deallocates` 상한이 있는 함수(그리고 fip
+  함수)에서 부를 수 없습니다.
+* `Iterator::next`(그래서 `for` 루프)의 상한은 `iter_next_deallocations(&*self)`입니다. `iter_next_cost`처럼 구현마다
+  정해지는 항입니다. vstd는 `next`가 아무것도 해제하지 않는 std 반복자에 대해 이 값을 0으로 둡니다. std 정수의
+  범위(`0..n`, `0..=n`), slice의 반복자(`iter()`, `iter_mut()`, `chunks`, 따라서 `&Vec`), `VecDeque`·`HashMap`·
+  `HashSet`·`BTreeMap`·`BTreeSet`의 빌려 쓰는 반복자, `Chars`, `vec::IntoIter`입니다. `allocates`와 마찬가지로 루프는
+  불변식에 카운터를 적어야 합니다(`invariant deallocated() == 0`, fip 함수에서는 `invariant allocated() == 0`).
+  값을 소유하는 반복자를 도는 루프(`Vec`인 `v`에 대한 `for x in v`)는 여전히 거부합니다. 반복자를 drop할 때 버퍼가
+  해제되는데, 이것은 아직 세지 못합니다. `-V alloc-check`에서는 검증되는 `impl Iterator`도 이 상한에 맞춰 셉니다.
+  그 `next`는 아무것도 해제하지 않아야 하고, 해제한다면 공리로 `iter_next_deallocations`를 적어야 합니다.
 
 ## 완전한 제자리 함수: `#[verifier::fip]`
 
@@ -774,7 +782,8 @@ fn has<T: FipPartialEq>(s: &[T], x: &T) -> bool {
 
 대상은 `<[T]>::contains`, `starts_with`, `ends_with`, `sort_unstable`, `binary_search`, `Option`의 `eq`,
 `partial_cmp`, `cmp`, 참조끼리의 비교, `Range::contains`, `RangeInclusive::contains`, 그리고 `cmp::min`,
-`cmp::max`입니다. 마지막 둘을 뺀 나머지는 아무것도 drop하지 않으므로(`#[verifier::alloc_check_skip_drops]`),
+`cmp::max`입니다. (정수, `bool`, `char`의 `min`, `max`, `clamp` 메서드는 직접 `allocates 0 deallocates 0`으로
+명세했습니다. `clamp`는 core가 그렇지 않으면 panic하므로 `min <= max`를 요구합니다.) 마지막 둘을 뺀 나머지는 아무것도 drop하지 않으므로(`#[verifier::alloc_check_skip_drops]`),
 엄격한 함수도 `FipStrictOp`를 통해 부를 수 있습니다. (`sort_unstable`의 결과는 입력의 순열이고, `T`의 비교가
 전순서이면(`vstd::laws_cmp::obeys_cmp::<T>()`) `cmp_spec`으로 정렬되어 있습니다. 그렇게 정렬된 slice에서
 `binary_search`는 원소가 `Equal`로 비교되는 `i`에 대해 `Ok(i)`를 돌려주거나, `i` 앞의 원소는 모두 `Less`이고

@@ -726,3 +726,141 @@ test_verify_one_file_with_options! {
         fn after() {}
     }.to_string() => Err(err) => assert_fails(err, 2)
 }
+
+// `for` loops (portable-fip, 2026-11-22): `Iterator::next` is bounded by
+// `iter_next_deallocations`, which vstd states 0 for std's iterators whose `next` frees nothing
+// (as `allocates`, a loop keeps the counter in its invariant)
+test_verify_one_file_with_options! {
+    #[test] deallocates_for_loops ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn range(n: u64) deallocates 0 {
+            for i in 0..n
+                invariant deallocated() == 0,
+            {
+            }
+        }
+
+        pub fn range_inclusive(n: u64) deallocates 0 {
+            for i in 0..=n
+                invariant deallocated() == 0,
+            {
+            }
+        }
+
+        pub fn slice(s: &[u64]) -> (r: u64) allocates 0 deallocates 0 {
+            let mut r = 0u64;
+            for x in s.iter()
+                invariant allocated() == 0, deallocated() == 0,
+            {
+                r = *x;
+            }
+            r
+        }
+
+        pub fn vec_ref(v: &Vec<u64>) deallocates 0 {
+            for x in v
+                invariant deallocated() == 0,
+            {
+            }
+        }
+
+        pub fn slice_mut(s: &mut [u64]) deallocates 0 {
+            for x in s.iter_mut()
+                invariant deallocated() == 0,
+            {
+            }
+        }
+
+        pub fn next_direct(n: u64, s: &[u64]) -> (r: Option<u64>) deallocates 0 {
+            let mut it = s.iter();
+            let _ = it.next();
+            let mut r = 0..n;
+            r.next()
+        }
+
+        // (in a loop that frees, the invariant states what it frees)
+        pub fn frees(n: u64) deallocates n {
+            for i in 0..n
+                invariant deallocated() == i,
+            {
+                let b = Box::new(i);
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_for_loops_fail ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+
+        // (without the counter in the invariant, the loop forgets it)
+        pub fn no_invariant(n: u64) deallocates 0 { // FAILS
+            for i in 0..n {
+            }
+        }
+
+        // (an owning iterator frees its buffer when it is dropped)
+        pub fn owning(v: Vec<u64>) deallocates 0 { // FAILS
+            for x in v
+                invariant deallocated() == 0,
+            {
+            }
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 2)
+}
+
+// integer, `bool` and `char` `min`/`max`/`clamp` (impl items of core since Rust 1.100) and the
+// `bool`/`char` comparisons (portable-fip, 2026-11-22)
+test_verify_one_file_with_options! {
+    #[test] deallocates_ord_methods ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn f1(a: usize, b: usize) -> (r: usize)
+            ensures r == (if a <= b { a } else { b }),
+            allocates 0
+        {
+            a.min(b)
+        }
+
+        pub fn f2(a: i32, b: i32) -> (r: i32)
+            ensures r >= a && r >= b,
+            deallocates 0
+        {
+            a.max(b)
+        }
+
+        #[verifier::fip]
+        pub fn f3(a: usize, b: usize, c: usize) -> (r: usize)
+            requires b <= c,
+        {
+            a.clamp(b, c)
+        }
+
+        #[verifier::fip(strict)]
+        pub fn f4(a: u8, b: u8) -> (r: u8) {
+            a.max(b)
+        }
+
+        #[verifier::fip]
+        pub fn f5(a: bool, b: bool, c: char, d: char) -> (r: (bool, bool, char)) {
+            (a.min(b), c.lt(&d), c.max(d))
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_ord_clamp_requires ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+
+        // (core panics unless `min <= max`)
+        #[verifier::fip]
+        pub fn f(a: usize, b: usize, c: usize) -> (r: usize) {
+            a.clamp(b, c) // FAILS
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_one_fails(err)
+}
