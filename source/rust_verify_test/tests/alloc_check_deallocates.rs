@@ -947,8 +947,7 @@ test_verify_one_file_with_options! {
 
 // the scrutinee of a `match` or `if let` that an arm moves out of is counted with a drop flag,
 // like a local (portable-fip, 2026-11-22)
-test_verify_one_file_with_options! {
-    #[test] deallocates_match_scrutinee ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+const MATCH_SCRUTINEE: &str = verus_code_str! {
         use vstd::prelude::*;
 
         pub fn consume(b: Box<u64>) deallocates 1 { }
@@ -1015,11 +1014,17 @@ test_verify_one_file_with_options! {
             let f = |w: &mut Vec<Box<u64>>| deallocates 1 { if let Some(x) = w.pop() { consume(x); } };
             f(v);
         }
-    } => Ok(())
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_match_scrutinee ["vstd", "-V alloc-check", "--no-cheating"] => MATCH_SCRUTINEE.to_string() => Ok(())
 }
 
 test_verify_one_file_with_options! {
-    #[test] deallocates_match_scrutinee_fails ["vstd", "-V alloc-check"] => verus_code_str! {
+    #[test] deallocates_match_scrutinee_2024 ["vstd", "-V alloc-check", "--no-cheating", "--edition 2024"] => MATCH_SCRUTINEE.to_string() => Ok(())
+}
+
+const MATCH_SCRUTINEE_FAILS: &str = verus_code_str! {
         use vstd::prelude::*;
 
         pub fn consume(b: Box<u64>) deallocates 1 { }
@@ -1042,7 +1047,14 @@ test_verify_one_file_with_options! {
         }
 
         fn after() {}
-    }.to_string() => Err(err) => assert_fails(err, 4)
+    };
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_match_scrutinee_fails ["vstd", "-V alloc-check"] => MATCH_SCRUTINEE_FAILS.to_string() => Err(err) => assert_fails(err, 4)
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_match_scrutinee_fails_2024 ["vstd", "-V alloc-check", "--edition 2024"] => MATCH_SCRUTINEE_FAILS.to_string() => Err(err) => assert_fails(err, 4)
 }
 
 // A `#[verus_spec(with ..)]` function `f` is verified as its twin `_VERUS_VERIFIED_f`, whose body
@@ -1139,6 +1151,25 @@ const EDITION_DROPS: &str = verus_code_str! {
         {
         }
     }
+
+    // (what is left in the scrutinee is dropped at the end of the then-branch, on a `return`
+    // out of it, or before the else-branch)
+    pub fn if_let_rest(v: &mut Vec<(Box<u64>, Box<u64>)>) deallocates 2 {
+        if let Some((x, _)) = v.pop() { consume(x); }
+    }
+
+    pub fn if_let_returns_rest(v: &mut Vec<(Box<u64>, Box<u64>)>) -> (r: u64) deallocates 2 {
+        if let Some((x, _)) = v.pop() { consume(x); return 1; } else { }
+        0
+    }
+
+    pub fn if_let_no_move(v: &mut Vec<Box<u64>>) deallocates 1 {
+        if let Some(_) = v.pop() { } else { }
+    }
+
+    pub fn if_let_moves_in_then(v: &mut Vec<(Box<u64>, bool)>) -> (r: Option<Box<u64>>) deallocates 1 {
+        if let Some((x, true)) = v.pop() { Some(x) } else { None }
+    }
 };
 
 const EDITION_DROPS_LOW: &str = verus_code_str! {
@@ -1165,6 +1196,23 @@ const EDITION_DROPS_LOW: &str = verus_code_str! {
         if let Some((x, true)) = v.pop() { consume(x); } else if let Some((y, true)) = w.pop() { consume(y); } else { }
     }
 
+    pub fn if_let_rest(v: &mut Vec<(Box<u64>, Box<u64>)>) deallocates 1 { // FAILS
+        if let Some((x, _)) = v.pop() { consume(x); }
+    }
+
+    pub fn if_let_returns_rest(v: &mut Vec<(Box<u64>, Box<u64>)>) -> (r: u64) deallocates 1 { // FAILS
+        if let Some((x, _)) = v.pop() { consume(x); return 1; } else { } // FAILS
+        0
+    }
+
+    pub fn if_let_no_move(v: &mut Vec<Box<u64>>) deallocates 0 { // FAILS
+        if let Some(_) = v.pop() { } else { }
+    }
+
+    pub fn if_let_moves_in_then(v: &mut Vec<(Box<u64>, bool)>) -> (r: Option<Box<u64>>) deallocates 0 { // FAILS
+        if let Some((x, true)) = v.pop() { Some(x) } else { None }
+    }
+
     fn after() {}
 };
 
@@ -1177,5 +1225,32 @@ test_verify_one_file_with_options! {
 }
 
 test_verify_one_file_with_options! {
-    #[test] deallocates_edition_2024_low ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_DROPS_LOW.to_string() => Err(err) => assert_fails(err, 4)
+    #[test] deallocates_edition_2024_low ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_DROPS_LOW.to_string() => Err(err) => assert_fails(err, 8)
+}
+
+// (a block in `open_local_invariant!` is the user's: its tail follows the user's edition)
+const EDITION_INVARIANT_BLOCK: &str = verus_code_str! {
+    use vstd::prelude::*;
+    use vstd::invariant::*;
+
+    #[verifier::external_body]
+    pub fn mk() -> (r: Box<u64>) opens_invariants none no_unwind allocates 1 deallocates 0 { Box::new(1) }
+    pub fn touch(b: &Box<u64>) opens_invariants none no_unwind deallocates 0 { }
+
+    pub fn f<A, B: InvariantPredicate<A, u8>>(Tracked(i): Tracked<&LocalInvariant<A, u8, B>>) deallocates 1 {
+        open_local_invariant!(i => inner => {
+            touch(&mk())
+        });
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_edition_2024_invariant_block ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_INVARIANT_BLOCK.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_edition_2024_invariant_block_low ["vstd", "-V alloc-check", "--edition 2024"] => EDITION_INVARIANT_BLOCK.replace("Tracked<&LocalInvariant<A, u8, B>>) deallocates 1", "Tracked<&LocalInvariant<A, u8, B>>) deallocates 0") => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("postcondition not satisfied"));
+    }
 }

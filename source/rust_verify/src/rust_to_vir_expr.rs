@@ -1207,16 +1207,23 @@ pub(crate) fn block_to_vir<'tcx>(
         vir_stmts.append(&mut some_stmts);
     }
     let vir_expr = block.expr.map(|expr| expr_to_vir_consume(bctx, &expr)).transpose()?;
-    // (Rust 2024: the tail expression is a temporary scope of its own; rustc decides by the
-    // edition of the block's span)
-    let tail_rescoped = vir_expr.is_some() && block.span.at_least_rust_2024();
 
     let x = ExprX::Block(Arc::new(vir_stmts), vir_expr);
     let e = bctx.spanned_typed_new(span.clone(), ty, x);
-    if tail_rescoped {
-        bctx.ctxt.edition_2024_scopes.borrow_mut().insert(e.span.id);
-    }
+    note_edition_2024_tail(bctx, block, &e);
     Ok(e)
+}
+
+/// Rust 2024: a block's tail expression is a temporary scope of its own (rustc decides by the
+/// edition of the block's span); records the VIR block of `block` for the resolution analysis
+fn note_edition_2024_tail<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    block: &Block<'tcx>,
+    vir_block: &vir::ast::Expr,
+) {
+    if block.expr.is_some() && block.span.at_least_rust_2024() {
+        bctx.ctxt.edition_2024_scopes.borrow_mut().insert(vir_block.span.id);
+    }
 }
 
 /// Prefix of the verified twin `_VERUS_VERIFIED_f` of a `#[verus_spec(with ...)]` function `f`
@@ -1743,6 +1750,7 @@ fn invariant_block_to_vir<'tcx>(
             // (e.span or mid_stmt.span would expose macro internals)
             let vir_body =
                 bctx.spanned_typed_new(body.span, &ty, ExprX::Block(vir_stmts, vir_expr));
+            note_edition_2024_tail(bctx, body, &vir_body);
             (vir_body, body.hir_id)
         }
         _ => {
@@ -2005,6 +2013,7 @@ fn open_au_block_to_vir<'tcx>(
             body_block.expr.map(|expr| expr_to_vir_consume(bctx, &expr)).transpose()?,
         ),
     );
+    note_edition_2024_tail(bctx, body_block, &vir_body);
 
     let au_vir_arg = expr_to_vir_consume(bctx, au_arg)?;
     let au_vir_binder = Arc::new(VarBinderX {
@@ -3746,22 +3755,25 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                             value: None,
                         },
                     );
-                    (
-                        None,
-                        // (spanned at the whole loop: the scrutinee is a temporary of the loop
-                        // body's scope, which rustc drops at the end of the loop body, `}`)
-                        bctx.spanned_typed_new(
-                            expr.span,
-                            &body_ty,
-                            cond_let_expr_to_vir_match(
-                                cond,
-                                body,
-                                body_span,
-                                wildcard_body,
-                                cond.span,
-                            )?,
-                        ),
-                    )
+                    // (spanned at the whole loop: rustc desugars `while let` to `loop { if let
+                    // .. { body } else { break } }`; in 2021 the scrutinee is a temporary of the
+                    // loop body's scope, dropped at the end of the loop, `}`; in 2024, as for an
+                    // `if let`, at the end of the body block or before the `break`)
+                    let m = bctx.spanned_typed_new(
+                        expr.span,
+                        &body_ty,
+                        cond_let_expr_to_vir_match(
+                            cond,
+                            body,
+                            body_span,
+                            wildcard_body,
+                            cond.span,
+                        )?,
+                    );
+                    if expr.span.at_least_rust_2024() {
+                        bctx.ctxt.edition_2024_scopes.borrow_mut().insert(m.span.id);
+                    }
+                    (None, m)
                 }
                 _ => (Some(expr_to_vir_consume(bctx, cond)?), body),
             };

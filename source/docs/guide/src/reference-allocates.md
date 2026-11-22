@@ -494,8 +494,10 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   drop_deallocations(x)`, or bound the type parameter by `NoDeallocDrop`.
 * `drop(x)` (`core::mem::drop`) is counted `drop_deallocations(x)`, like the end of a scope.
 * Verus checks on the compiled program that each drop that may deallocate is one it counted,
-  and rejects any other: for now, a temporary in an operand of `&&` or `||`, or kept alive by
-  `let r = &f();`; a `Box` whose contents were moved out of it; and a
+  and rejects any other: for now, a temporary in an operand of `&&` or `||`; a temporary that a
+  `let` keeps alive for the rest of its block because its initializer borrows it (`let r =
+  &f();`, also through a block's tail `{ &f() }`, a branch of an `if` or `match`, or a field of a
+  literal `(&f(), 1)`, `Some(&f())`); a `Box` whose contents were moved out of it; and a
   `move` closure that captures a value it only reads. Bind the value to a local, or move it.
   An or-pattern whose alternatives move different parts of a value (e.g.
   `(true, x, _) | (false, _, x)`) is rejected too (alternatives that are different variants of
