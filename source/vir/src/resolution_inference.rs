@@ -4329,10 +4329,16 @@ fn apply_resolutions(
     module: &Path,
     drops: DropInsertions,
 ) -> Result<Expr, VirErr> {
-    let DropInsertions { items: drop_items, temps: drop_temps, flags: drop_flags, sites: _ } =
-        drops;
-    // All the resolutions that apply to PlaceX::Temporary nodes
-    let mut temp_map = HashMap::<AstId, (Vec<FlattenedPlace>, bool)>::new();
+    let DropInsertions {
+        items: drop_items,
+        temps: drop_temps,
+        flags: drop_flags,
+        temp_afters: mut drop_temp_afters,
+        sites: _,
+    } = drops;
+    // All the resolutions that apply to PlaceX::Temporary nodes (and the drop flag updates
+    // after them)
+    let mut temp_map = HashMap::<AstId, (Vec<FlattenedPlace>, Vec<Expr>, bool)>::new();
     let mut typ_inv_map = HashMap::<AstId, (FunWithVis, bool)>::new();
 
     // All the resolutions that apply to Expr and Stmt nodes
@@ -4352,7 +4358,7 @@ fn apply_resolutions(
     for r in resolutions.into_iter() {
         // For any temp that has an Assume(HasResolved(...)) about it, we need to expand that temp
         if let Some(temp_ast_id) = r.is_for_temp(cfg) {
-            temp_map.entry(temp_ast_id).or_insert_with_key(|_| (vec![], false));
+            temp_map.entry(temp_ast_id).or_insert_with_key(|_| (vec![], vec![], false));
         }
 
         let ast_id = match r.position {
@@ -4369,7 +4375,11 @@ fn apply_resolutions(
             }
             AstPosition::AfterBool(ast_id, _b) => ast_id,
             AstPosition::AfterTempAssignment(ast_id) => {
-                temp_map.entry(ast_id).or_insert_with_key(|_| (vec![], false)).0.push(r.place);
+                temp_map
+                    .entry(ast_id)
+                    .or_insert_with_key(|_| (vec![], vec![], false))
+                    .0
+                    .push(r.place);
                 continue;
             }
             AstPosition::BeforeAssignWrite(_) => {
@@ -4420,7 +4430,16 @@ fn apply_resolutions(
 
     // -V alloc-check: the temporaries whose values the drop charges read must be named
     for ast_id in drop_temps.iter() {
-        temp_map.entry(*ast_id).or_insert_with_key(|_| (vec![], false));
+        let entry = temp_map.entry(*ast_id).or_insert_with_key(|_| (vec![], vec![], false));
+        if let Some(es) = drop_temp_afters.remove(ast_id) {
+            entry.1.extend(es);
+        }
+    }
+    if !drop_temp_afters.is_empty() {
+        return Err(crate::messages::internal_error(
+            &body.span,
+            "-V alloc-check: a drop flag of a temporary could not be placed",
+        ));
     }
 
     let mut maps = (id_map, temp_map, typ_inv_map, drop_items);
@@ -4583,12 +4602,13 @@ fn apply_resolutions(
         &|_, t| Ok(t.clone()),
         &|(_, temp_map, typ_inv_map, _), scope_map, p| {
             let p1 = if matches!(&p.x, PlaceX::Temporary(_)) {
-                if let Some((afters, seen_yet)) = temp_map.get_mut(&p.span.id) {
+                if let Some((afters, flag_sets, seen_yet)) = temp_map.get_mut(&p.span.id) {
                     if *seen_yet {
                         panic!("Verus internal error: duplicate AstId");
                     }
                     *seen_yet = true;
-                    let afters_exprs = filter_and_make_assumes(cfg, &p.span, scope_map, afters);
+                    let mut afters_exprs = filter_and_make_assumes(cfg, &p.span, scope_map, afters);
+                    afters_exprs.extend(flag_sets.iter().cloned());
                     apply_temp_simplification(cfg, p, afters_exprs)
                 } else {
                     p.clone()
@@ -4631,7 +4651,7 @@ fn apply_resolutions(
         }
     }
 
-    for (_, (_, found)) in temp_map.iter() {
+    for (_, (_, _, found)) in temp_map.iter() {
         if !*found {
             panic!("resolution_inference: bad run for apply_resolutions");
         }
@@ -4950,7 +4970,7 @@ fn apply_temp_simplification(cfg: &CFG, place: &Place, exprs: Vec<Expr>) -> Plac
 
 fn add_decls_for_temps(
     cfg: &CFG,
-    temp_map: &HashMap<AstId, (Vec<FlattenedPlace>, bool)>,
+    temp_map: &HashMap<AstId, (Vec<FlattenedPlace>, Vec<Expr>, bool)>,
     drop_flags: &Vec<VarIdent>,
     expr: &Expr,
 ) -> Expr {
@@ -5089,6 +5109,9 @@ struct DropInsertions {
     temps: HashSet<AstId>,
     /// The drop flags (declared at the start of the body, initially false)
     flags: Vec<VarIdent>,
+    /// The drop flag updates right after a temporary is assigned (the scrutinee of a `match`
+    /// or `if let`, which an arm may move out of)
+    temp_afters: HashMap<AstId, Vec<Expr>>,
     /// (the closure whose drop it is, the dropped local, the drop site) of each charged drop,
     /// for the MIR cross-check
     sites: Vec<(Option<Span>, DropLocal, Span)>,
@@ -5127,6 +5150,12 @@ impl DropInsertions {
                 AstPosition::BeforeAssignWrite(id) => (id, |d| &mut d.assign_write),
                 // (only normal returns are counted)
                 AstPosition::OnUnwind(_) => return Ok(()),
+                // (a drop flag set when the temporary is created; it reads no named local)
+                AstPosition::AfterTempAssignment(id) if local.is_none() => {
+                    self.temp_afters.entry(id).or_default().push(e);
+                    self.temps.insert(id);
+                    return Ok(());
+                }
                 AstPosition::AfterTempAssignment(_) | AstPosition::MatchIntermediate => {
                     return Err(error(
                         span,
@@ -5369,12 +5398,8 @@ fn drop_insertions(
                     continue;
                 }
                 if st.can_be_uninit {
-                    if cfg.locals.locals[leaf.local].name.is_temp() {
-                        return Err(error(
-                            &d.site,
-                            "-V alloc-check: Verus cannot count the drop of a temporary value that is moved on some paths only yet",
-                        ));
-                    }
+                    // (a temporary, e.g. the scrutinee of a `match` or `if let` that an arm moves
+                    // out of, gets a flag like a named local: set when it is created)
                     flagged.insert(li);
                 }
                 c.push((li, st.can_be_uninit));

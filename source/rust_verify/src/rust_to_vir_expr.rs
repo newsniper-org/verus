@@ -3732,8 +3732,10 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                     );
                     (
                         None,
+                        // (spanned at the whole loop: the scrutinee is a temporary of the loop
+                        // body's scope, which rustc drops at the end of the loop body, `}`)
                         bctx.spanned_typed_new(
-                            cond.span,
+                            expr.span,
                             &body_ty,
                             cond_let_expr_to_vir_match(
                                 cond,

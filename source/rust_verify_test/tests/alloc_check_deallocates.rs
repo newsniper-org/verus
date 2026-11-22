@@ -944,3 +944,103 @@ test_verify_one_file_with_options! {
         fn after() {}
     }.to_string() => Err(err) => assert_fails(err, 2)
 }
+
+// the scrutinee of a `match` or `if let` that an arm moves out of is counted with a drop flag,
+// like a local (portable-fip, 2026-11-22)
+test_verify_one_file_with_options! {
+    #[test] deallocates_match_scrutinee ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn consume(b: Box<u64>) deallocates 1 { }
+
+        pub fn if_let(v: &mut Vec<Box<u64>>) deallocates 1 {
+            if let Some(x) = v.pop() { consume(x); }
+        }
+
+        pub fn match_(v: &mut Vec<Box<u64>>) deallocates 1 {
+            match v.pop() { Some(x) => consume(x), None => {} }
+        }
+
+        pub fn take(o: &mut Option<Box<u64>>) deallocates 1 {
+            if let Some(x) = o.take() { consume(x); }
+        }
+
+        pub fn else_(v: &mut Vec<Box<u64>>) deallocates 1 {
+            if let Some(x) = v.pop() { consume(x); } else { }
+        }
+
+        pub fn guard(v: &mut Vec<Box<u64>>) deallocates 1 {
+            match v.pop() { Some(x) if *x > 0 => consume(x), _ => {} }
+        }
+
+        // (a `Some((b, false))` is dropped whole)
+        pub fn residue(v: &mut Vec<(Box<u64>, bool)>) deallocates 1 {
+            if let Some((x, true)) = v.pop() { consume(x); }
+        }
+
+        pub fn ret(v: &mut Vec<Box<u64>>) -> (r: u64) deallocates 1 {
+            match v.pop() { Some(x) => { consume(x); return 1; } None => {} }
+            0
+        }
+
+        pub fn else_if(v: &mut Vec<Box<u64>>, w: &mut Vec<Box<u64>>) deallocates 1 {
+            if let Some(x) = v.pop() { consume(x); } else if let Some(y) = w.pop() { consume(y); }
+        }
+
+        pub fn in_loop(v: &mut Vec<Box<u64>>, n: u64) deallocates n {
+            let mut i = 0;
+            while i < n
+                invariant i <= n, deallocated() <= i,
+                decreases n - i,
+            {
+                match v.pop() { Some(x) => consume(x), None => {} }
+                i = i + 1;
+            }
+        }
+
+        pub fn while_let_residue(v: &mut Vec<(Box<u64>, Box<u64>)>)
+            requires old(v)@.len() <= 100,
+            deallocates 200
+        {
+            while let Some((x, _)) = v.pop()
+                invariant_except_break deallocated() + 2 * v@.len() <= 200,
+                ensures deallocated() <= 200,
+                decreases v@.len(),
+            {
+                consume(x);
+            }
+        }
+
+        pub fn in_closure(v: &mut Vec<Box<u64>>) deallocates 1 {
+            let f = |w: &mut Vec<Box<u64>>| deallocates 1 { if let Some(x) = w.pop() { consume(x); } };
+            f(v);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_match_scrutinee_fails ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+
+        pub fn consume(b: Box<u64>) deallocates 1 { }
+
+        pub fn if_let(v: &mut Vec<Box<u64>>) deallocates 0 { // FAILS
+            if let Some(x) = v.pop() { consume(x); }
+        }
+
+        pub fn residue(v: &mut Vec<(Box<u64>, bool)>) deallocates 0 { // FAILS
+            if let Some((x, true)) = v.pop() { consume(x); }
+        }
+
+        // (the second box is dropped on the matching path too)
+        pub fn residue2(v: &mut Vec<(Box<u64>, Box<u64>)>) deallocates 1 { // FAILS
+            if let Some((x, _)) = v.pop() { consume(x); }
+        }
+
+        pub fn guard(v: &mut Vec<Box<u64>>) deallocates 0 { // FAILS
+            match v.pop() { Some(x) if *x > 0 => consume(x), _ => {} }
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 4)
+}

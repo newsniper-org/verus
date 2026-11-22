@@ -472,7 +472,9 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   overwrites), the count is `vstd::alloc_check::drop_deallocations(v)` of the parts of the value
   that are still there (not moved out). A value moved on some paths only is counted on the
   others (a ghost drop flag), so `match o { Some(b) => consume(b), None => {} }` counts nothing
-  for `o`. A loop whose body drops values needs `deallocated()` in its invariant.
+  for `o`. So is the scrutinee of a `match` or `if let` (`if let Some(x) = v.pop() { .. }`,
+  `while let Some(x) = it.next() { .. }`). A loop whose body drops values needs `deallocated()`
+  in its invariant.
 * `drop_deallocations` is exact for `Box` (its contents, then 1 for its block, 0 for a
   zero-sized `T`), `Vec` (its elements, then 1 if it has a buffer: `vec_has_buffer`), arrays,
   `Option`, `Result` and tuples; at most 1 for `String`; at most the elements' plus 1 for
@@ -486,7 +488,9 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * `drop(x)` (`core::mem::drop`) is counted `drop_deallocations(x)`, like the end of a scope.
 * Verus checks on the compiled program that each drop that may deallocate is one it counted,
   and rejects any other: for now, a temporary in an operand of `&&` or `||`, or kept alive by
-  `let r = &f();`, or made on some paths only; a `Box` whose contents were moved out of it; and a
+  `let r = &f();`; with `--edition 2024`, the scrutinee of an `if let` with an `else` (or at the
+  end of a block) that is still there when it is dropped; a `Box` whose contents were moved out
+  of it; and a
   `move` closure that captures a value it only reads. Bind the value to a local, or move it.
   An or-pattern whose alternatives move different parts of a value (e.g.
   `(true, x, _) | (false, _, x)`) is rejected too (alternatives that are different variants of

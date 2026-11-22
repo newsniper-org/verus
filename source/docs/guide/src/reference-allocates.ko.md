@@ -450,7 +450,8 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   - 대입이 덮어쓰는 자리의 원래 값.
 
   일부 경로에서만 옮겨진 값은 나머지 경로에서만 셉니다(ghost drop flag). 그래서
-  `match o { Some(b) => consume(b), None => {} }`는 `o`에 대해 아무것도 세지 않습니다. 본문에서 값을 drop하는
+  `match o { Some(b) => consume(b), None => {} }`는 `o`에 대해 아무것도 세지 않습니다. `match`나 `if let`의 대상도
+  마찬가지입니다(`if let Some(x) = v.pop() { .. }`, `while let Some(x) = it.next() { .. }`). 본문에서 값을 drop하는
   루프는 불변식에 `deallocated()`가 있어야 합니다.
 * `drop_deallocations`는 타입마다 이렇습니다.
   - 정확한 값:
@@ -470,7 +471,8 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * `drop(x)`(`core::mem::drop`)는 스코프 끝과 같이 `drop_deallocations(x)`로 셉니다.
 * Verus는 컴파일된 프로그램에서, 해제할 수 있는 drop이 모두 자기가 센 것인지 검사하고 아니면 거부합니다. 지금 거부하는
   것은 이렇습니다.
-  - `&&`나 `||`의 피연산자 안의 임시값, `let r = &f();`로 살아 있는 임시값, 일부 경로에서만 만들어지는 임시값.
+  - `&&`나 `||`의 피연산자 안의 임시값, `let r = &f();`로 살아 있는 임시값. `--edition 2024`에서, `else`가 있는
+    (또는 블록 끝에 있는) `if let`의 대상이 drop될 때 남아 있는 경우.
     (rustc처럼 Verus도 임시값을 문장의 끝에서 drop합니다. if의 조건이나 갈래, 루프의 조건이나 본문(반복마다),
     match의 팔이나 guard 안에 있으면 그 끝에서 drop합니다.)
   - 내용물을 꺼낸 `Box`.
