@@ -289,7 +289,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::min_by ](
             &&& r == (if o == Ordering::Greater { v2 } else { v1 })
         },
     allocates call_allocations(compare, (&v1, &v2))
- deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2);
+ deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2) + super::super::alloc_check::drop_deallocations(compare);
 
 pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
     v1: T,
@@ -304,7 +304,7 @@ pub assume_specification<T, F: FnOnce(&T, &T) -> Ordering>[ core::cmp::max_by ](
             &&& r == (if o == Ordering::Greater { v1 } else { v2 })
         },
     allocates call_allocations(compare, (&v1, &v2))
- deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2);
+ deallocates call_deallocations(compare, (&v1, &v2)) + super::super::alloc_check::drop_deallocations(v1) + super::super::alloc_check::drop_deallocations(v2) + super::super::alloc_check::drop_deallocations(compare);
 
 // `min_by_key` and `max_by_key` compute the keys `f(&v1)` and `f(&v2)` and
 // compare them with `<`. When neither key is less than the other, `min_by_key`

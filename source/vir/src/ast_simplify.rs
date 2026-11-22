@@ -57,6 +57,8 @@ struct State {
     closure_typs: HashMap<usize, ClosureDatatype>,
     // Functions for which the corresponding FnDef type is used
     fndef_typs: HashSet<Fun>,
+    // -V alloc-check: `vstd::alloc_check::drop_may_deallocate` is in the crate
+    drop_may_deallocate_fn: bool,
 }
 
 impl State {
@@ -68,6 +70,7 @@ impl State {
             tuple_typs: HashSet::new(),
             closure_typs: HashMap::new(),
             fndef_typs: HashSet::new(),
+            drop_may_deallocate_fn: false,
         }
     }
 
@@ -664,6 +667,7 @@ fn simplify_one_expr(
             deallocations,
             fip,
             unwind_spec,
+            drop_no_dealloc,
             ret,
             external_spec,
         } => {
@@ -694,6 +698,7 @@ fn simplify_one_expr(
                 ctx.alloc_check && *fip,
                 unwind_spec,
                 proof_fn_modes.is_some(),
+                ctx.alloc_check && *drop_no_dealloc && state.drop_may_deallocate_fn,
             )?;
             let external_spec = Some((closure_var_ident, external_spec_expr));
 
@@ -711,6 +716,7 @@ fn simplify_one_expr(
                     deallocations: deallocations.clone(),
                     fip: *fip,
                     unwind_spec: unwind_spec.clone(),
+                    drop_no_dealloc: *drop_no_dealloc,
                     ret: ret.clone(),
                     external_spec,
                 },
@@ -1288,6 +1294,36 @@ fn exec_closure_spec_allocates(
     Ok(conjoin(span, &vec![value_level, type_level]))
 }
 
+/// -V alloc-check: `!vstd::alloc_check::drop_may_deallocate::<typ>()` (dropping a value of type
+/// `typ` frees nothing)
+fn not_drop_may_deallocate(span: &Span, typ: &Typ) -> Expr {
+    let bool_typ = Arc::new(TypX::Bool);
+    let call_target_attrs = crate::ast::CallTargetAttrs {
+        autospec: AutospecUsage::Final,
+        const_var: false,
+        assume_external_allowed: false,
+        trusted_call: false,
+        into_forward: None,
+    };
+    let call = SpannedTyped::new(
+        span,
+        &bool_typ,
+        ExprX::Call {
+            target: CallTarget::Fun(
+                crate::ast::CallTargetKind::Static,
+                crate::def::fn_drop_may_deallocate(),
+                Arc::new(vec![typ.clone()]),
+                Arc::new(vec![]),
+                call_target_attrs,
+            ),
+            args: Arc::new(vec![]),
+            post_args: None,
+            body: None,
+        },
+    );
+    SpannedTyped::new(span, &bool_typ, ExprX::Unary(crate::ast::UnaryOp::Not, call))
+}
+
 /// `-V alloc-check`, `#[verifier::fip]` on a closure: its body never deallocates (checked where
 /// it is), so `forall c: C, x :: !closure_dealloc(c, x)` for every value `c` of its type (all of
 /// them come from this closure expression)
@@ -1442,6 +1478,7 @@ fn exec_closure_spec(
     fip: bool,
     unwind_spec: &Option<crate::ast::UnwindSpec>,
     is_proof: bool,
+    drop_no_dealloc: bool,
 ) -> Result<Expr, VirErr> {
     let req_forall = exec_closure_spec_requires(state, span, closure_var, params, requires)?;
     let mut exprs: Vec<Expr> = vec![req_forall];
@@ -1484,6 +1521,10 @@ fn exec_closure_spec(
     }
     if fip {
         exprs.push(exec_closure_spec_fip(state, span, closure_var, params));
+    }
+    if drop_no_dealloc {
+        // (rustc found no drop glue: dropping the closure, wherever that happens, runs no code)
+        exprs.push(not_drop_may_deallocate(span, &closure_var.typ));
     }
     match unwind_spec {
         None | Some(crate::ast::UnwindSpec::MayUnwind) => {}
@@ -1979,6 +2020,62 @@ fn add_fndef_axioms_to_function(
         fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, rel)));
     }
 
+    // -V alloc-check: a function item is a zero-sized value without drop glue, so dropping it
+    // frees nothing (`o.map(f)` drops `f` when `o` is `None`)
+    // (as `forall|f: FnDef(..)| drop_deallocations(f) == 0`: a FnDef axiom is a `forall`, whose
+    // trigger must cover the function's type parameters, so only where the type mentions them)
+    let fndef_typ = fndef_singleton.typ.clone();
+    let mut mentioned: HashSet<Ident> = HashSet::new();
+    let _ = crate::ast_visitor::typ_visitor_check::<(), _>(&fndef_typ, &mut |t| {
+        if let TypX::TypParam(x) = &**t {
+            mentioned.insert(x.clone());
+        }
+        Ok(())
+    });
+    if alloc_check
+        && state.drop_may_deallocate_fn
+        && function.x.mode == crate::ast::Mode::Exec
+        && function.x.typ_params.iter().all(|x| mentioned.contains(x))
+    {
+        let span = &function.span;
+        let nat_typ = Arc::new(TypX::Int(IntRange::Nat));
+        let bool_typ = Arc::new(TypX::Bool);
+        let x = state.next_temp();
+        let xv = SpannedTyped::new(span, &fndef_typ, ExprX::Var(x.clone()));
+        let call_target_attrs = crate::ast::CallTargetAttrs {
+            autospec: AutospecUsage::Final,
+            const_var: false,
+            assume_external_allowed: false,
+            trusted_call: false,
+            into_forward: None,
+        };
+        let call = SpannedTyped::new(
+            span,
+            &nat_typ,
+            ExprX::Call {
+                target: CallTarget::Fun(
+                    crate::ast::CallTargetKind::Static,
+                    crate::def::fn_drop_deallocations(),
+                    Arc::new(vec![fndef_typ.clone()]),
+                    Arc::new(vec![]),
+                    call_target_attrs,
+                ),
+                args: Arc::new(vec![xv]),
+                post_args: None,
+                body: None,
+            },
+        );
+        let zero = SpannedTyped::new(
+            span,
+            &nat_typ,
+            ExprX::Const(crate::ast::Constant::Int(num_bigint::BigInt::from(0))),
+        );
+        let eq = crate::ast_util::mk_eq(span, &wrap_in_trigger(&call), &zero);
+        let forall = Quant { quant: air::ast::Quant::Forall };
+        let binders = Arc::new(vec![Arc::new(VarBinderX { name: x, a: fndef_typ })]);
+        fndef_axioms.push(SpannedTyped::new(span, &bool_typ, ExprX::Quant(forall, binders, eq)));
+    }
+
     let mut functionx = function.x.clone();
     assert!(functionx.fndef_axioms.is_none());
     functionx.fndef_axioms = Some(Arc::new(fndef_axioms));
@@ -2240,6 +2337,9 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         arch,
     } = &**krate;
     let mut state = State::new();
+    let drop_may_deallocate = crate::def::fn_drop_may_deallocate();
+    state.drop_may_deallocate_fn =
+        ctx.alloc_check && functions.iter().any(|f| f.x.name == drop_may_deallocate);
 
     // Always add this because unit values might be added later, after ast_simplify.
     state.tuple_type_name(0);

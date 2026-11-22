@@ -864,3 +864,83 @@ test_verify_one_file_with_options! {
         fn after() {}
     }.to_string() => Err(err) => assert_one_fails(err)
 }
+
+// closures (portable-fip, 2026-11-22): `drop_deallocations` of a closure without drop glue, and
+// of a function item, is 0; a function that takes a closure by value counts its drop
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure_drops ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::alloc_check::*;
+
+        pub fn b1(o: Option<u64>) -> (r: Option<u64>) deallocates 0 {
+            o.map(|x: u64| -> (y: u64) deallocates 0 { x })
+        }
+
+        pub fn b3(o: Option<u64>) -> (r: u64) deallocates 0 {
+            o.unwrap_or_else(|| -> (y: u64) deallocates 0 { 0 })
+        }
+
+        pub fn captures_ref(o: Option<u64>, k: &u64) -> (r: Option<u64>) deallocates 0 {
+            o.map(|x: u64| -> (y: u64) deallocates 0 { *k })
+        }
+
+        pub fn captures_copy(o: Option<u64>, k: u64) -> (r: Option<u64>) deallocates 0 {
+            let g = move |x: u64| -> (y: u64) deallocates 0 { k };
+            o.map(g)
+        }
+
+        #[verifier::fip]
+        pub fn id(x: u64) -> (y: u64) {
+            x
+        }
+
+        pub fn fn_item(o: Option<u64>) -> (r: Option<u64>) deallocates 0 {
+            o.map(id)
+        }
+
+        // (a let-bound closure is called through a reference: it is not dropped by the call)
+        pub fn direct() -> (r: u64) deallocates 0 {
+            let c = |x: u64| -> (y: u64) deallocates 0 { x };
+            let a = c(1);
+            let _ = c(2);
+            a
+        }
+
+        pub fn apply<F: FnOnce(u64) -> u64>(f: F, x: u64) -> (r: u64)
+            requires f.requires((x,)),
+            deallocates f.deallocations(x) + drop_deallocations(f),
+        {
+            f(x)
+        }
+
+        pub fn use_apply() -> (r: u64) deallocates 0 {
+            let c = |x: u64| -> (y: u64) deallocates 0 { x };
+            apply(c, 1)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_closure_drops_counted ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+
+        // (an `Fn` closure called through `FnOnce` runs its body, then drops itself)
+        pub fn apply<F: FnOnce(u64) -> u64>(f: F, x: u64) -> (r: u64)
+            requires f.requires((x,)),
+            deallocates f.deallocations(x), // FAILS
+        {
+            f(x)
+        }
+
+        // (the drop of a closure that owns a box is not defined yet)
+        pub fn owns_box(o: Option<u64>, b: Box<u64>) -> (r: Option<u64>)
+            requires o is Some,
+            deallocates 1, // FAILS
+        {
+            let c = move |x: u64| -> (y: u64) deallocates 0 { *b };
+            o.map(c)
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 2)
+}

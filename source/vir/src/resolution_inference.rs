@@ -1321,6 +1321,7 @@ impl<'a> Builder<'a> {
                 deallocations,
                 fip,
                 unwind_spec: _,
+                drop_no_dealloc: _,
                 ret: _,
                 external_spec: _,
             } => {

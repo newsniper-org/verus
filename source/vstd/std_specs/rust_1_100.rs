@@ -559,7 +559,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(T) -> U>[ Box::<T, A>::ma
             0int
         } else {
             1int
-        }) + call_deallocations(f, (*this,)),
+        }) + call_deallocations(f, (*this,)) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::map::<U> ](
@@ -573,7 +573,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Rc::<T, A>::ma
     allocates
         1 + call_allocations(f, (&*this,)),
     deallocates
-        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)),
+        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::map::<U> ](
@@ -587,7 +587,7 @@ pub assume_specification<T, A: Allocator, U, F: FnOnce(&T) -> U>[ Arc::<T, A>::m
     allocates
         1 + call_allocations(f, (&*this,)),
     deallocates
-        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)),
+        1 + super::super::alloc_check::drop_deallocations(*this) + call_deallocations(f, (&*this,)) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 } // verus!

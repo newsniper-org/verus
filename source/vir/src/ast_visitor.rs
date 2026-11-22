@@ -416,6 +416,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 deallocations,
                 fip,
                 unwind_spec,
+                drop_no_dealloc,
                 ret: r,
                 external_spec,
             } => {
@@ -462,6 +463,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         deallocations: R::get_opt(deallocations),
                         fip: *fip,
                         unwind_spec: R::get_opt(unwind_spec),
+                        drop_no_dealloc: *drop_no_dealloc,
                         ret: R::get(ret),
                         external_spec: R::get_opt(external_spec),
                     })

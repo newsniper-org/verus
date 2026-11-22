@@ -267,7 +267,7 @@ pub assume_specification<T, F: FnOnce() -> T>[ bool::then ](b: bool, f: F) -> (r
             0
         },
     deallocates
-        if b { call_deallocations(f, ()) } else { super::super::alloc_check::drop_deallocations(f) },
+        (if b { call_deallocations(f, ()) } else { 0 }) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 pub assume_specification<T> [core::hint::must_use] (value: T) -> (ret: T)

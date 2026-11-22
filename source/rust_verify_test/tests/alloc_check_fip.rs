@@ -3124,7 +3124,9 @@ test_verify_one_file_with_options! {
 // A closure bound to a local first has kind `Fn` (its body takes `&self`). `map` calls it
 // through `FnOnce::call_once`, whose compiler shim calls the body and then drops the closure's
 // environment: a closure that owns a `Box` frees it there, which neither the closure's checks
-// nor its `deallocates` cover (portable-fip, 2026-11-22)
+// nor its `deallocates` cover (portable-fip, 2026-11-22). vstd's specification of `map` counts
+// the closure's drop, which is not known for one that owns a box; the compiled program's check
+// (a closure whose drop may deallocate is not handed to another crate's function) backs it up.
 test_verify_one_file_with_options! {
     #[test] fip_closure_owning_box_handed_over_rejected ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
@@ -3137,7 +3139,7 @@ test_verify_one_file_with_options! {
             let c = #[verifier::fip] move |x: u64| -> (y: u64) { *b };
             o.map(c)
         }
-    } => Err(err) => assert_vir_error_msg(err, "takes a closure (of type")
+    } => Err(err) => assert_vir_error_msg(err, "the `deallocates_when` condition of")
 }
 
 test_verify_one_file_with_options! {
@@ -3177,10 +3179,10 @@ test_verify_one_file_with_options! {
             o.map(c)
         }
     } => Err(err) => assert_vir_error_msgs(err, &[
-        "this call of `core::bool::<impl bool>::then` takes a closure",
-        "this call of `std::result::Result::<T, E>::map_err` takes a closure",
-        "this call of `std::option::Option::<T>::unwrap_or_else` takes a closure",
-        "this call of `std::option::Option::<T>::map` takes a closure",
+        "the `deallocates_when` condition of",
+        "the `deallocates_when` condition of",
+        "the `deallocates_when` condition of",
+        "the `deallocates_when` condition of",
     ])
 }
 
@@ -3480,4 +3482,39 @@ test_verify_one_file_with_options! {
         #[verifier::fip(strict)]
         pub fn s(n: u64) -> (r: u64) { enc(); deep(n) }
     } => Err(err) => assert_vir_error_msg(err, "which is not `#[verifier::fip(strict)]`")
+}
+
+// a fip closure without captures handed to std's closure combinators (portable-fip, 2026-11-22):
+// dropping it frees nothing, and so does dropping a function item
+test_verify_one_file_with_options! {
+    #[test] fip_closure_combinators ["vstd", "-V alloc-check", "--no-cheating"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn b2(o: Option<u64>) -> (r: Option<u64>) {
+            o.map(#[verifier::fip] |x: u64| -> (y: u64) { x })
+        }
+
+        #[verifier::fip]
+        pub fn others(o: Option<u64>, r: Result<u64, u64>, b: bool)
+            -> (t: (Option<u64>, Result<u64, u64>, Option<u64>, Result<u64, u64>))
+        {
+            (
+                o.and_then(#[verifier::fip] |x: u64| -> (y: Option<u64>) { Some(x) }),
+                r.map_err(#[verifier::fip] |e: u64| -> (y: u64) { e }),
+                b.then(#[verifier::fip] || -> (y: u64) { 1 }),
+                o.ok_or_else(#[verifier::fip] || -> (y: u64) { 0 }),
+            )
+        }
+
+        #[verifier::fip]
+        pub fn id(x: u64) -> (y: u64) {
+            x
+        }
+
+        #[verifier::fip]
+        pub fn fn_item(o: Option<u64>) -> (r: Option<u64>) {
+            o.map(id)
+        }
+    } => Ok(())
 }

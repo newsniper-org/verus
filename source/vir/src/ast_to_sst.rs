@@ -2909,6 +2909,7 @@ pub(crate) fn expr_to_stm_opt(
             deallocations,
             fip,
             unwind_spec,
+            drop_no_dealloc: _,
             ret,
             external_spec,
         } => {

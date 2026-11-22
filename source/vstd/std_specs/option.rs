@@ -252,11 +252,11 @@ pub assume_specification<T, U, F: FnOnce(T) -> U>[ Option::<T>::map ](a: Option<
             0
         },
     deallocates
-        if a.is_some() {
+        (if a.is_some() {
             call_deallocations(f, (a.unwrap(),))
         } else {
-            super::super::alloc_check::drop_deallocations(f)
-        },
+            0
+        }) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 // cloned
@@ -313,11 +313,11 @@ pub assume_specification<T, U, F: FnOnce(T) -> Option<U>>[ Option::<T>::and_then
             0
         },
     deallocates
-        if option.is_some() {
+        (if option.is_some() {
             call_deallocations(f, (option.unwrap(),))
         } else {
-            super::super::alloc_check::drop_deallocations(f)
-        },
+            0
+        }) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 // ok_or_else
@@ -340,11 +340,11 @@ pub assume_specification<T, E, F: FnOnce() -> E>[ Option::<T>::ok_or_else ](
             0
         },
     deallocates
-        if option.is_none() {
+        (if option.is_none() {
             call_deallocations(err, ())
         } else {
-            super::super::alloc_check::drop_deallocations(err)
-        },
+            0
+        }) + super::super::alloc_check::drop_deallocations(err),
 ;
 
 // unwrap_or_default
@@ -388,11 +388,11 @@ pub assume_specification<T, F: FnOnce() -> T>[ Option::<T>::unwrap_or_else ](
             0
         },
     deallocates
-        if option.is_none() {
+        (if option.is_none() {
             call_deallocations(f, ())
         } else {
-            super::super::alloc_check::drop_deallocations(f)
-        },
+            0
+        }) + super::super::alloc_check::drop_deallocations(f),
 ;
 
 // clone

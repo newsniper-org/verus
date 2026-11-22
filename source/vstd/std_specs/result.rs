@@ -266,11 +266,11 @@ pub assume_specification<T, E, U, F: FnOnce(T) -> U>[ Result::<T, E>::map ](
             0
         },
     deallocates
-        if result.is_ok() {
+        (if result.is_ok() {
             call_deallocations(op, (result->Ok_0,))
         } else {
-            super::super::alloc_check::drop_deallocations(op)
-        },
+            0
+        }) + super::super::alloc_check::drop_deallocations(op),
 ;
 
 // map_err
@@ -288,7 +288,7 @@ pub assume_specification<T, E, F, O: FnOnce(E) -> F>[Result::<T, E>::map_err](re
         call_allocations(op, (result->Err_0,))
     } else {
         0
-    } deallocates if result.is_err() { call_deallocations(op, (result->Err_0,)) } else { super::super::alloc_check::drop_deallocations(op) };
+    } deallocates (if result.is_err() { call_deallocations(op, (result->Err_0,)) } else { 0 }) + super::super::alloc_check::drop_deallocations(op);
 
 // ok
 #[verifier::inline]

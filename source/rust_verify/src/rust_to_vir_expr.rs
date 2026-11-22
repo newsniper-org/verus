@@ -4926,6 +4926,17 @@ pub(crate) fn closure_to_vir<'tcx>(
 
             let ret = Arc::new(VarBinderX { name: id, a: ret_typ });
 
+            // -V alloc-check: whether the closure type has no drop glue (its captures are
+            // settled here): nothing to drop, or only references and `Copy` values. Dropping such
+            // a closure runs no code, wherever it happens (in std code, or in the `FnOnce` shim
+            // of an `Fn` closure).
+            let drop_no_dealloc =
+                bctx.ctxt.cmd_line_args.alloc_check && proof_fn_modes.is_none() && {
+                    let tcx = bctx.ctxt.tcx;
+                    let cty = bctx.types.node_type(closure_expr.hir_id);
+                    !cty.needs_drop(tcx, TypingEnv::post_analysis(tcx, bctx.fun_id))
+                };
+
             ExprX::NonSpecClosure {
                 params: Arc::new(params),
                 proof_fn_modes,
@@ -4937,6 +4948,7 @@ pub(crate) fn closure_to_vir<'tcx>(
                 deallocations,
                 fip: closure_fip.is_some(),
                 unwind_spec,
+                drop_no_dealloc,
                 ret: ret,
                 external_spec: None, // filled in by ast_simplify
             }

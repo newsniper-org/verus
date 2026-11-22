@@ -1246,6 +1246,9 @@ pub enum ExprX {
         /// `no_unwind` (or `no_unwind when c`) on the closure (`call_unwinds` of it is then
         /// `false`, where `c` holds)
         unwind_spec: Option<UnwindSpec>,
+        /// `-V alloc-check`: rustc found that the closure has no drop glue (it captures nothing,
+        /// or only references and `Copy` values), so dropping it frees nothing
+        drop_no_dealloc: bool,
         ret: VarBinder<Typ>,
         /// The 'external spec' is an Option because it gets filled in during
         /// ast_simplify. It contains the assumptions that surrounding context

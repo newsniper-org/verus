@@ -483,6 +483,14 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   값을 지역 변수에 묶거나 옮기면 됩니다.
 * 클로저에도 `deallocates` 상한을 붙일 수 있고, 같은 방식으로 셉니다(자기 drop 포함). 그 클로저를 부르면 그
   `call_deallocations`를 셉니다. `#[verifier::fip]` 클로저는 해제하지 않으므로 `deallocates`를 적을 수 없습니다.
+* 클로저를 drop하면 클로저가 소유한 것이 drop됩니다. drop glue가 없는 클로저(아무것도 캡처하지 않거나 참조와
+  `Copy` 값만 캡처한 클로저)의 `drop_deallocations`는 0이고, 함수 항목은 늘 0입니다. 클로저를 값으로 받는 함수는
+  그것을 drop할 수 있습니다. 그런 std 함수(`Option::map`, `and_then`, `ok_or_else`, `unwrap_or_else`,
+  `Result::map`, `map_err`, `bool::then`, `cmp::min_by`, `max_by`, `Box::map` 등)의 vstd 명세는 호출과 함께
+  `drop_deallocations(f)`를 세고, `F: FnOnce(..)`인 `f: F`에 대한 `f(x)`도 그렇습니다(종류가 `Fn`인 클로저를
+  `FnOnce`로 부르면 본문을 실행한 뒤 자기 자신을 drop합니다). drop하면 해제될 수 있는 값을 소유한 클로저(`Box`를
+  캡처한 `move` 클로저)의 drop은 아직 정의되지 않았습니다. 대신 참조로 캡처하십시오. (종류가 `FnOnce`인
+  클로저를 `f(x)`로 부르면, 본문이 자기가 소유한 것을 drop하는데도 그 drop을 한 번 더 셉니다. 실제보다 많이 셉니다.)
 * 이전 형태 `allocates deallocates_when(n, c)`(횟수 없는 조건)는 더는 받지 않습니다.
   `allocates n deallocates deallocates_when(d, c)`로 씁니다.
 * std 함수에 대한 vstd 명세는 해제를 적습니다. 메모리를 놓을 수 있는 함수는 횟수로 적습니다(`Vec::push`는 기존 버퍼를
@@ -916,6 +924,7 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop
+* drop하면 해제될 수 있는 값을 소유한 클로저의 drop
 * drop glue 안의 projection 타입(예: `Cow`)
 * 구조체의 필드 하나만 캡처하는 클로저를 구조체 전체를 캡처한 것처럼 검사하는 점
 * 프로그램 어디에든 상한 있는 trait 메서드의 검사되지 않은 구현이 있는 경우

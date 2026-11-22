@@ -498,6 +498,16 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
 * A closure can have a `deallocates` bound, counted the same way (its own drops included); a
   call of it counts `call_deallocations` of it. A `#[verifier::fip]` closure deallocates nothing
   (it cannot state `deallocates`).
+* Dropping a closure drops what it owns. `drop_deallocations` of a closure is 0 when it has no
+  drop glue (it captures nothing, or only references and `Copy` values), and of a function item
+  always. A function that takes a closure by value may drop it: vstd's specifications of std
+  functions that do (`Option::map`, `and_then`, `ok_or_else`, `unwrap_or_else`, `Result::map`,
+  `map_err`, `bool::then`, `cmp::min_by`, `max_by`, `Box::map`, ...) count
+  `drop_deallocations(f)` besides the call, and so does `f(x)` for `f: F` with `F: FnOnce(..)`
+  (a closure of kind `Fn` called through `FnOnce` runs its body and then drops itself). The
+  drop of a closure that owns a value whose drop may deallocate (a `move` closure that captures
+  a `Box`) is not defined yet: capture by reference instead. (A call `f(x)` of a closure of kind
+  `FnOnce` counts its drop too, though the body drops what it owns: an over-count.)
 * The earlier form `allocates deallocates_when(n, c)` (a condition without a number) is no longer
   accepted: write `allocates n deallocates deallocates_when(d, c)`.
 * vstd's specifications of std functions state their deallocations: those that may free memory
@@ -983,6 +993,7 @@ What `-V alloc-check` trusts:
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not
 unsound):
 * `dyn` values and opaque `impl Trait` values being dropped;
+* the drop of a closure that owns a value whose drop may deallocate;
 * projected types in drop glue (for example `Cow`);
 * a closure that captures one field of a struct is checked as if it captured the whole struct;
 * unchecked implementations of bounded trait methods anywhere in the program.

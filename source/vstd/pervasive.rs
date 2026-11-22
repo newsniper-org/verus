@@ -133,7 +133,10 @@ fn exec_nonstatic_call<Args: core::marker::Tuple, Output, F>(f: F, args: Args) -
     allocates
         call_allocations(f, args),
     deallocates
-        deallocates_when(call_deallocations(f, args), call_deallocates(f, args)),
+        deallocates_when(
+            call_deallocations(f, args) + super::alloc_check::drop_deallocations(f),
+            call_deallocates(f, args) || super::alloc_check::drop_may_deallocate::<F>(),
+        ),
 {
     unimplemented!();
 }
