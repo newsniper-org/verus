@@ -327,6 +327,13 @@ pub fn run(
     build_test_mode: bool,
 ) -> (Verifier, Stats, Result<(), ()>) {
     if !rustc_args.iter().any(|a| a.starts_with("--edition")) {
+        // -V alloc-check: the drops of the compiled program, which the counted drops are checked
+        // against, depend on the edition (Rust 2024 drops temporaries earlier)
+        if verifier.args.alloc_check && !build_test_mode && verifier.via_cargo_args.is_none() {
+            eprintln!(
+                "warning: -V alloc-check: no `--edition` was given, so the crate is verified and compiled as Rust 2021; the drops that Verus counts depend on the edition (pass the crate's, e.g. `--edition 2024`)"
+            );
+        }
         rustc_args.push(format!("--edition"));
         rustc_args.push(format!("2021"));
     }
