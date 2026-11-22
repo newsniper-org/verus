@@ -3068,6 +3068,49 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "is dropped here")
 }
 
+// `#[verifier::fip]` and `#[verus_spec]` on a closure, in either order (portable-fip, 2026-11-22)
+test_verify_one_file_with_options! {
+    #[test] fip_closure_with_verus_spec ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => deallocates 0)]
+        pub fn spec_then_fip(x: u32) -> bool {
+            let c = #[verus_spec(r: bool => ensures r == (*v > 1))] #[verifier::fip] |v: &u32| *v > 1;
+            c(&x)
+        }
+
+        #[verus_spec(r => deallocates 0)]
+        pub fn fip_then_spec(x: u32) -> bool {
+            let c = #[verifier::fip] #[verus_spec(r: bool => ensures r == (*v > 1))] |v: &u32| *v > 1;
+            c(&x)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_with_verus_spec_body_checked ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec]
+        pub fn make() -> u64 {
+            let f = #[verus_spec(r: u64 => ensures r == *b)] #[verifier::fip] |b: Box<u64>| *b;
+            f(Box::new(3))
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_with_verus_spec_deallocates ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec]
+        pub fn f(x: u32) -> bool {
+            let c = #[verus_spec(r: bool => deallocates 0)] #[verifier::fip] |v: &u32| *v > 1;
+            c(&x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "a `#[verifier::fip]` closure deallocates nothing: it cannot state `deallocates`")
+}
+
 test_verify_one_file_with_options! {
     // a strict function may call a strict closure it knows (a generic one's stack is not known)
     #[test] fip_strict_closure_call ["vstd", "-V alloc-check"] => verus_code! {

@@ -853,6 +853,12 @@ pub(crate) fn rewrite_verus_spec_on_fun_or_loop(
         // erase non-function cases if in erase mode
         _ if erase.erase() => return f.to_token_stream().into(),
         AnyFnOrLoop::Closure(mut closure) => {
+            // (the closure's other attributes, e.g. `#[verifier::fip]`, stay on it; the error is
+            // a statement, here in a block to stand for the closure expression)
+            if let Err(error_tokens) = check_misuse_verus_spec(&closure.attrs, true) {
+                let error_tokens = TokenStream::from(error_tokens);
+                return quote! { { #error_tokens } }.into();
+            }
             replace_expr(erase, &mut closure.body);
             let mut spec_attr =
                 verus_syn::parse_macro_input!(outer_attr_tokens as verus_syn::SignatureSpecAttr);
@@ -881,12 +887,24 @@ pub(crate) fn rewrite_verus_spec_on_fun_or_loop(
             } else {
                 None
             };
-            let new_body = quote_spanned!(closure.body.span() =>
+            let body_span = closure.body.span();
+            let new_body = quote_spanned!(body_span =>
                 #dcc
                 #(#spec_stmts)*
                 {#body}
             );
-            *closure.body = Expr::Verbatim(new_body);
+            // (a block with the body's span: a body that is not a block is printed in braces at
+            // the call site, which gives the closure the attribute's span; the erase compile
+            // keeps the closure as written, and -V alloc-check finds a closure in both compiles
+            // by its span)
+            *closure.body = Expr::Block(syn::ExprBlock {
+                attrs: vec![],
+                label: None,
+                block: syn::Block {
+                    brace_token: syn::token::Brace(body_span),
+                    stmts: vec![syn::Stmt::Expr(Expr::Verbatim(new_body), None)],
+                },
+            });
             let toks = closure.to_token_stream();
             let toks = if erase.keep() {
                 quote_spanned_builtin!(builtin, closure.span() =>

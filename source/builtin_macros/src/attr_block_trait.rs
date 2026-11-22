@@ -114,9 +114,15 @@ impl syn::parse::Parse for AnyFnOrLoop {
             return Ok(AnyFnOrLoop::While(while_expr));
         }
 
-        // Try to parse as ExprClosure (if needed)
+        // Try to parse as ExprClosure (if needed), with its outer attributes (e.g.
+        // `#[verifier::fip]`), which syn's `ExprClosure` parser does not take
         let fork = input.fork();
-        if let Ok(closure_expr) = fork.parse::<syn::ExprClosure>() {
+        let closure = fork.call(syn::Attribute::parse_outer).and_then(|attrs| {
+            let mut closure_expr = fork.parse::<syn::ExprClosure>()?;
+            closure_expr.attrs = attrs;
+            Ok(closure_expr)
+        });
+        if let Ok(closure_expr) = closure {
             input.advance_to(&fork);
             if input.peek(syn::token::Comma) {
                 input.parse::<syn::token::Comma>()?;

@@ -1081,6 +1081,74 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "a `Box` whose contents were moved out of it is freed here")
 }
 
+// A `#[verus_spec]` closure is rewritten for verification and kept as written in the erase
+// compile; the closure, and the drops in it, are found in both by their spans (portable-fip,
+// 2026-11-22)
+const ATTR_CLOSURES: &str = code_str! {
+    use vstd::prelude::*;
+
+    #[verus_spec(r => deallocates 0)]
+    pub fn no_drop(x: u32) -> bool {
+        let c = #[verus_spec(r: bool => allocates 0 deallocates 0)] |v: &u32| *v > 1;
+        c(&x)
+    }
+
+    #[verus_spec(deallocates 1)]
+    pub fn expr_body() {
+        let f = #[verus_spec(r: u64 => deallocates 1)] |b: Box<u64>| *b;
+        let y = f(Box::new(3));
+    }
+
+    #[verus_spec(deallocates 1)]
+    pub fn block_body() {
+        let f = #[verus_spec(r => deallocates 1)] |b: Box<u64>| -> u64 { *b };
+        let y = f(Box::new(3));
+    }
+
+    #[verus_spec(deallocates 2)]
+    pub fn local_in_closure() {
+        let f = #[verus_spec(r: u64 => deallocates 1)] |x: u64| { let b = Box::new(x); 0 };
+        let y = f(3);
+        let z = f(4);
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_attr_closure ["vstd", "-V alloc-check"] => ATTR_CLOSURES.to_string() => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_attr_closure_fail ["vstd", "-V alloc-check"] => ATTR_CLOSURES.to_string() + code_str! {
+        #[verus_spec]
+        pub fn tight() {
+            let f = #[verus_spec(r: u64 => deallocates 0)] |b: Box<u64>| *b; // FAILS
+        }
+
+        #[verus_spec]
+        pub fn tight_block() {
+            let f = #[verus_spec(r => deallocates 0)] |b: Box<u64>| -> u64 { *b }; // FAILS
+        }
+
+        #[verus_spec(deallocates 0)] // FAILS
+        pub fn caller_too_small() {
+            let f = #[verus_spec(r: u64 => deallocates 1)] |b: Box<u64>| *b;
+            let y = f(Box::new(3));
+        }
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_attr_closure_duplicate_verus_spec ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec]
+        pub fn f(x: u32) -> bool {
+            let c = #[verus_spec(r: bool => ensures r)] #[verus_spec(r: bool => ensures true)] |v: &u32| *v > 1;
+            c(&x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Multiple #[verus_spec] attributes are not allowed.")
+}
+
 // Rust 2024 drops temporaries earlier: those of a block's tail expression at its end (before the
 // block's locals), and the scrutinee of an `if let` at the end of the then-branch or before the
 // else-branch; Verus counts them where rustc drops them (portable-fip, 2026-11-22)
