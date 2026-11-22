@@ -1044,3 +1044,27 @@ test_verify_one_file_with_options! {
         fn after() {}
     }.to_string() => Err(err) => assert_fails(err, 4)
 }
+
+// A `#[verus_spec(with ..)]` function `f` is verified as its twin `_VERUS_VERIFIED_f`, whose body
+// the erase compile replaces: the drops of the compiled `f` are the ones checked against those
+// Verus counted (a `Box` whose contents are moved out of it is freed, which is not counted yet)
+test_verify_one_file_with_options! {
+    #[test] deallocates_verus_spec_with_checked ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(
+            with Ghost(w): Ghost<u32>
+            deallocates 1
+        )]
+        pub fn h(b: Box<u64>) {
+        }
+
+        #[verus_spec(ret =>
+            with Ghost(w): Ghost<u32>
+            deallocates 0
+        )]
+        pub fn f(b: Box<Box<u64>>) -> Box<u64> {
+            *b
+        }
+    } => Err(err) => assert_vir_error_msg(err, "a `Box` whose contents were moved out of it is freed here")
+}

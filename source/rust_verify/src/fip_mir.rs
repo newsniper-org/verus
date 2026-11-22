@@ -1471,14 +1471,43 @@ impl ExternalStrict {
         } else {
             (def_id.to_def_id(), None)
         };
+        let (p, twin) = self.vir_path_and_twin(tcx, fn_def_id)?;
+        let key = (p, closure.clone());
+        if let Some(sites) = self.local_dealloc_bounded.get(&key) {
+            return Some((key, sites));
+        }
+        let key = (twin?, closure);
+        let sites = self.local_dealloc_bounded.get(&key)?;
+        Some((key, sites))
+    }
+
+    /// The VIR path of a function of this crate (`{:?}`), and that of its verified twin: a
+    /// `#[verus_spec(with ..)]` function `f` is verified as `_VERUS_VERIFIED_f`, whose body the
+    /// erase compile replaces, so the compiled body to check is `f`'s
+    fn vir_path_and_twin<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+    ) -> Option<(String, Option<String>)> {
         let p = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
             tcx,
             &self.verus_items,
-            fn_def_id,
+            def_id,
         )?;
-        let key = (format!("{:?}", p), closure);
-        let sites = self.local_dealloc_bounded.get(&key)?;
-        Some((key, sites))
+        let twin = p.segments.last().filter(|last| last.name().is_some()).map(|last| {
+            let mut segments = (*p.segments).clone();
+            *segments.last_mut().unwrap() = last.map_name(|name| {
+                format!("{}{}", crate::rust_to_vir_expr::VERUS_VERIFIED_PREFIX, name)
+            });
+            format!(
+                "{:?}",
+                std::sync::Arc::new(vir::ast::PathX {
+                    krate: p.krate.clone(),
+                    segments: std::sync::Arc::new(segments),
+                })
+            )
+        });
+        Some((format!("{:?}", p), twin))
     }
 
     /// For a function (or a closure in one) whose drop rule VIR checked: the function's VIR path
@@ -1488,25 +1517,11 @@ impl ExternalStrict {
         }
         // (VIR's drop rule collects the types of the closures in the body too)
         let fn_def_id = tcx.typeck_root_def_id(def_id.to_def_id());
-        let p = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
-            tcx,
-            &self.verus_items,
-            fn_def_id,
-        )?;
-        // (a `#[verus_spec(with ..)]` function `f` is verified as its twin `_VERUS_VERIFIED_f`,
-        // whose body the erase compile replaces: the compiled body is `f`'s)
-        let twin = p.segments.last().filter(|last| last.name().is_some()).map(|last| {
-            let mut segments = (*p.segments).clone();
-            *segments.last_mut().unwrap() = last.map_name(|name| {
-                format!("{}{}", crate::rust_to_vir_expr::VERUS_VERIFIED_PREFIX, name)
-            });
-            vir::ast::PathX { krate: p.krate.clone(), segments: std::sync::Arc::new(segments) }
-        });
-        let p = format!("{:?}", p);
+        let (p, twin) = self.vir_path_and_twin(tcx, fn_def_id)?;
         if self.local_drop_rule.contains(&p) {
             return Some(p);
         }
-        let twin = format!("{:?}", std::sync::Arc::new(twin?));
+        let twin = twin?;
         if self.local_drop_rule.contains(&twin) { Some(twin) } else { None }
     }
 
