@@ -2629,6 +2629,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         path_as_rust_names: path_as_rust_names.clone(),
         arch: arch.clone(),
     });
+    let alloc_dyn_drops_on_mir = ctx.alloc_dyn_drops_on_mir;
     *ctx = crate::context::GlobalCtx::new(
         &krate,
         ctx.crate_name.clone(),
@@ -2647,6 +2648,7 @@ pub fn simplify_krate(ctx: &mut GlobalCtx, krate: &Krate) -> Result<Krate, VirEr
         ctx.report_long_running,
     )?;
     ctx.alloc_exec_typs = Arc::new(alloc_exec_typs);
+    ctx.alloc_dyn_drops_on_mir = alloc_dyn_drops_on_mir;
     Ok(krate)
 }
 

@@ -467,6 +467,9 @@ struct DropGlueCheck<'a> {
     on_stack: HashMap<Dt, (Vec<Typ>, usize)>,
     /// Current nesting depth of the walk (bounded so that the verifier's stack cannot overflow)
     depth: usize,
+    /// Leave `dyn` values to the MIR check (`fip_mir::check_no_dyn_drops`), which sees the
+    /// drops that really happen (only for the drop rule of a function's own body)
+    defer_dyn: bool,
 }
 
 /// Maximum nesting depth of the drop-glue walk
@@ -511,6 +514,7 @@ impl<'a> DropGlueCheck<'a> {
             visited: HashSet::new(),
             on_stack: HashMap::new(),
             depth: 0,
+            defer_dyn: false,
         }
     }
 
@@ -917,6 +921,8 @@ impl<'a> DropGlueCheck<'a> {
             TypX::Projection { .. } | TypX::PointeeMetadata(_) => {
                 Err(self.unsupported(span, typ, "projected types are not supported yet"))
             }
+            // (checked on the compiled program instead, where only the real drops are seen)
+            TypX::Dyn(..) if self.defer_dyn => Ok(()),
             TypX::Dyn(..) => {
                 Err(self.unsupported(span, typ, "the drop of a `dyn` value cannot be bounded yet"))
             }
@@ -1012,6 +1018,8 @@ pub(crate) fn check_drop_glue(
     );
     // (`T: Tr with { fn drop allocates 0; }`)
     checker.alloc_free_params.extend(marked_params(&function.x.require));
+    // (the MIR check sees which `dyn` values the body really drops)
+    checker.defer_dyn = ctx.global.alloc_dyn_drops_on_mir;
     for param in function.x.params.iter() {
         // (a ghost parameter, or one unwrapped from `Ghost(x)`, has no drop glue at run time)
         if param.x.mode == crate::ast::Mode::Spec

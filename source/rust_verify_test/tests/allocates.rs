@@ -2974,3 +2974,148 @@ test_verify_one_file_with_options! {
         fn after() {}
     } => Err(err) => assert_fails(err, 2)
 }
+
+// A `dyn` value's destructors are not known, so it must not be dropped; which values a function
+// drops is checked on the compiled program, so one that only moves a `Box<dyn Tr>` is fine
+// (portable-fip, 2026-11-22)
+test_verify_one_file_with_options! {
+    #[test] alloc_check_dyn_moved ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Tr {
+            fn m(&self) -> u64;
+        }
+
+        pub fn moved(b: Box<dyn Tr>) -> (r: Box<dyn Tr>)
+            allocates 0
+            deallocates 0
+        {
+            b
+        }
+
+        #[verifier::fip]
+        pub fn moved_fip(b: Box<dyn Tr>) -> (r: Box<dyn Tr>) {
+            b
+        }
+
+        pub fn swapped(a: Box<dyn Tr>, b: Box<dyn Tr>) -> (r: (Box<dyn Tr>, Box<dyn Tr>))
+            allocates 0
+        {
+            (b, a)
+        }
+
+        pub fn opt(o: Option<Box<dyn Tr>>) -> (r: Option<Box<dyn Tr>>)
+            allocates 0
+        {
+            o
+        }
+
+        pub fn by_ref(b: &Box<dyn Tr>) -> (r: u64)
+            allocates 0
+        {
+            7
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] alloc_check_dyn_dropped ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Tr {
+            fn m(&self) -> u64;
+        }
+
+        pub fn end_of_scope(b: Box<dyn Tr>)
+            allocates 0
+        {
+        }
+
+        pub fn mem_drop(b: Box<dyn Tr>)
+            allocates 0
+        {
+            drop(b);
+        }
+
+        pub fn on_some_paths(b: Box<dyn Tr>, c: bool) -> (r: Option<Box<dyn Tr>>)
+            allocates 0
+        {
+            if c { Some(b) } else { None }
+        }
+
+        pub fn overwrite(r: &mut Box<dyn Tr>, b: Box<dyn Tr>)
+            allocates 0
+        {
+            *r = b;
+        }
+
+        pub struct S {
+            pub b: Box<dyn Tr>,
+        }
+
+        pub fn field(s: S)
+            allocates 0
+        {
+        }
+
+        pub fn std_call(v: &mut Vec<Box<dyn Tr>>)
+            allocates 0
+        {
+            v.clear();
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 6);
+        assert_any_vir_error_msg(err, "the drop of a `dyn` value cannot be bounded yet")
+    }
+}
+
+// (a function item called through a local; a function whose body Verus does not check may drop
+// what it is given)
+test_verify_one_file_with_options! {
+    #[test] alloc_check_dyn_dropped_by_callee ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Tr {
+            fn m(&self) -> u64;
+        }
+
+        pub fn fn_item_local(b: Box<dyn Tr>)
+            allocates 0
+        {
+            let d = core::mem::drop::<Box<dyn Tr>>;
+            d(b);
+        }
+
+        #[verifier::external_body]
+        pub fn sink(b: Box<dyn Tr>)
+            allocates 0
+        {
+        }
+
+        pub fn to_sink(b: Box<dyn Tr>)
+            allocates 0
+        {
+            sink(b)
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert_any_vir_error_msg(err, "which may drop it: the drop of a `dyn` value")
+    }
+}
+
+// (without the compiled program's check, any `dyn` value is rejected)
+test_verify_one_file_with_options! {
+    #[test] alloc_check_dyn_no_lifetime ["vstd", "-V alloc-check", "--no-lifetime"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Tr {
+            fn m(&self) -> u64;
+        }
+
+        pub fn moved(b: Box<dyn Tr>) -> (r: Box<dyn Tr>)
+            allocates 0
+        {
+            b
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the drop of a `dyn` value cannot be bounded yet")
+}

@@ -378,6 +378,282 @@ fn check_no_dealloc_drop<'tcx>(
     }
 }
 
+/// Can dropping a value of type `ty` run the drop glue of a `dyn` value (whose concrete type is
+/// not known, so neither are its destructors)? Conservative: `true` where it cannot tell.
+fn drop_reaches_dyn<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    ty: Ty<'tcx>,
+    seen: &mut std::collections::HashSet<Ty<'tcx>>,
+    depth: usize,
+) -> bool {
+    if depth > 64 {
+        return true;
+    }
+    if let ty::Dynamic(..) = ty.kind() {
+        return true;
+    }
+    if !ty.needs_drop(tcx, typing_env) || !seen.insert(ty) {
+        return false;
+    }
+    let rec = |t: Ty<'tcx>, seen: &mut std::collections::HashSet<Ty<'tcx>>| {
+        drop_reaches_dyn(tcx, typing_env, t, seen, depth + 1)
+    };
+    match ty.kind() {
+        ty::Adt(adt, args) => {
+            if adt.is_phantom_data() || adt.is_manually_drop() {
+                return false;
+            }
+            // (an allocator's drop is the runtime's, but not that of std's pointers that
+            // implement `Allocator`: see `drop_may_deallocate`)
+            if is_allocator(tcx, typing_env, allocator_trait(tcx), ty) && !is_std_pointer(tcx, ty) {
+                return false;
+            }
+            if is_trusted_leaf_crate(tcx, adt.did()) {
+                // (a std container drops values of its type arguments; what else it holds is
+                // checked by VIR's drop rule, which knows std's types by their specifications)
+                args.types().any(|t| rec(t, seen))
+            } else {
+                // (any other crate's type drops its fields)
+                adt.variants().iter().any(|v| {
+                    v.fields.iter().any(|f| rec(f.ty(tcx, args).skip_normalization(), seen))
+                })
+            }
+        }
+        ty::Tuple(ts) => ts.iter().any(|t| rec(t, seen)),
+        ty::Array(t, _) | ty::Slice(t) => rec(*t, seen),
+        ty::Closure(_, cargs) => cargs.as_closure().upvar_tys().iter().any(|t| rec(t, seen)),
+        // (one that does not normalize mentions a type parameter, or is opaque: VIR's drop rule
+        // rejects projected and opaque types, and bounds type parameters)
+        ty::Alias(..) => {
+            match tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new_wip(ty)) {
+                Ok(n) if n != ty => rec(n, seen),
+                _ => false,
+            }
+        }
+        // (VIR's drop rule requires `T: AllocFreeDrop` or `T: Copy` of a type parameter)
+        ty::Param(_) => false,
+        ty::Ref(..) | ty::RawPtr(..) | ty::FnPtr(..) | ty::FnDef(..) => false,
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str | ty::Never => {
+            false
+        }
+        _ => true,
+    }
+}
+
+/// May std code, given a value of type `ty` (or instantiated with it), drop a `dyn` value: does
+/// `ty` own one, or reach one through a mutable reference or raw pointer (std drops through
+/// `&mut`: `Vec::clear`), or name a function item that is instantiated with such a type (std may
+/// call it)? Conservative: `true` where it cannot tell.
+fn carries_dyn<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    ty: Ty<'tcx>,
+    seen: &mut std::collections::HashSet<Ty<'tcx>>,
+    depth: usize,
+) -> bool {
+    if depth > 64 {
+        return true;
+    }
+    if !seen.insert(ty) {
+        return false;
+    }
+    let rec = |t: Ty<'tcx>, seen: &mut std::collections::HashSet<Ty<'tcx>>| {
+        carries_dyn(tcx, typing_env, t, seen, depth + 1)
+    };
+    match ty.kind() {
+        ty::Dynamic(..) => true,
+        ty::Ref(_, t, m) if m.is_mut() => rec(*t, seen),
+        ty::RawPtr(t, m) if m.is_mut() => rec(*t, seen),
+        ty::Ref(..) | ty::RawPtr(..) => false,
+        ty::FnDef(_, args) => args.skip_binder().types().any(|t| rec(t, seen)),
+        ty::Adt(adt, args) => {
+            if adt.is_phantom_data() {
+                return false;
+            }
+            if is_trusted_leaf_crate(tcx, adt.did()) {
+                args.types().any(|t| rec(t, seen))
+            } else {
+                adt.variants().iter().any(|v| {
+                    v.fields.iter().any(|f| rec(f.ty(tcx, args).skip_normalization(), seen))
+                })
+            }
+        }
+        ty::Tuple(ts) => ts.iter().any(|t| rec(t, seen)),
+        ty::Array(t, _) | ty::Slice(t) => rec(*t, seen),
+        ty::Closure(_, cargs) => cargs.as_closure().upvar_tys().iter().any(|t| rec(t, seen)),
+        // (one that does not normalize mentions a type parameter, or is opaque: VIR's drop rule
+        // rejects projected and opaque types, and bounds type parameters)
+        ty::Alias(..) => {
+            match tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new_wip(ty)) {
+                Ok(n) if n != ty => rec(n, seen),
+                _ => false,
+            }
+        }
+        // (VIR's drop rule requires `T: AllocFreeDrop` or `T: Copy` of a type parameter)
+        ty::Param(_) => false,
+        ty::FnPtr(..) => false,
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str | ty::Never => {
+            false
+        }
+        _ => true,
+    }
+}
+
+/// The associated types of the trait bounds of a call of `target` (instantiated with `targs`):
+/// std code may hold and drop values of them (`Iterator::count` drops each `Self::Item`)
+fn bound_assoc_types<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
+    target: DefId,
+    targs: ty::GenericArgsRef<'tcx>,
+) -> Vec<Ty<'tcx>> {
+    let clauses: Vec<ty::Clause<'tcx>> = tcx
+        .clauses_of(target)
+        .instantiate(tcx, targs)
+        .clauses
+        .into_iter()
+        .map(|c| c.skip_norm_wip())
+        .collect();
+    let mut out = Vec::new();
+    for c in rustc_infer::traits::util::elaborate(tcx, clauses) {
+        let Some(tc) = c.as_trait_clause() else { continue };
+        // (under a binder, e.g. `for<'a> F: Fn(&'a T)`, the associated types are left to the
+        // types of the call: its type arguments)
+        let Some(tc) = tc.no_bound_vars() else { continue };
+        let tr = tc.trait_ref;
+        for item in tcx.associated_items(tr.def_id).in_definition_order() {
+            if !item.is_type() {
+                continue;
+            }
+            let proj = Ty::new_projection_from_args(tcx, ty::IsRigid::No, item.def_id, tr.args);
+            let proj = tcx.erase_and_anonymize_regions(proj);
+            // (one that does not normalize is a type parameter's, which VIR's drop rule bounds)
+            if let Ok(n) =
+                tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new_wip(proj))
+            {
+                if !matches!(n.kind(), ty::Alias(..)) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The drop rule (`vir::alloc_check::check_drop_glue`) for the `dyn` values of a function with
+/// an `allocates` bound, which VIR leaves to this check: a value whose drop runs the drop glue of
+/// a `dyn` value must not be dropped on a path that returns normally (its destructors are not
+/// known, so they may allocate). A value that is only moved (e.g. returned) is fine. The drops
+/// are those of the compiled program, and those that std code may do with the values of its
+/// type arguments and the values it is given.
+fn check_no_dyn_drops<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, ext: &ExternalStrict) {
+    let typing_env = TypingEnv::post_analysis(tcx, def_id.to_def_id());
+    let body = tcx.mir_drops_elaborated_and_const_checked(def_id);
+    let body = body.borrow();
+    let drop_trait = tcx.lang_items().drop_trait();
+    let drop_in_place = tcx.lang_items().drop_glue_fn();
+    let reaches = |ty: Ty<'tcx>| {
+        drop_reaches_dyn(tcx, typing_env, ty, &mut std::collections::HashSet::new(), 0)
+    };
+    let err = |span: Span, ty: Ty<'tcx>, how: String| {
+        tcx.dcx().span_err(
+            span,
+            format!(
+                "-V alloc-check: cannot bound the allocations of dropping a value of type `{}` {}: the drop of a `dyn` value cannot be bounded yet (a value that is only moved, e.g. returned, is not dropped)",
+                ty, how
+            ),
+        );
+    };
+    for (_bb, data) in body.basic_blocks.iter_enumerated() {
+        // (`allocates` bounds the normal returns only)
+        if data.is_cleanup {
+            continue;
+        }
+        let term = data.terminator();
+        let span = term.source_info.span;
+        match &term.kind {
+            TerminatorKind::Drop { place, .. } => {
+                let ty = place.ty(&body.local_decls, tcx).ty;
+                if reaches(ty) {
+                    err(span, ty, "here".to_string());
+                }
+            }
+            TerminatorKind::Call { func, args: call_args, .. }
+            | TerminatorKind::TailCall { func, args: call_args, .. } => {
+                // (the callee: a constant, or a local of a function item's type)
+                let callee =
+                    func.const_fn_def().or_else(|| match func.ty(&body.local_decls, tcx).kind() {
+                        ty::FnDef(d, a) => a.no_bound_vars().map(|a| (*d, a)),
+                        _ => None,
+                    });
+                let carries = |ty: Ty<'tcx>| {
+                    carries_dyn(tcx, typing_env, ty, &mut std::collections::HashSet::new(), 0)
+                };
+                // (what the call is given: by value, or through `&mut`)
+                let mut given: Vec<Ty<'tcx>> = Vec::new();
+                for arg in call_args.iter() {
+                    let aty = arg.node.ty(&body.local_decls, tcx);
+                    match aty.kind() {
+                        ty::Ref(_, t, m) if m.is_mut() => given.push(*t),
+                        ty::Ref(..) => {}
+                        _ => given.push(aty),
+                    }
+                }
+                let Some((callee, gargs)) = callee else {
+                    // (a function pointer: the callee is not known here, so it may drop what
+                    // it is given)
+                    if let Some(ty) = given.into_iter().find(|t| carries(*t)) {
+                        err(span, ty, "in this call, which may drop it".to_string());
+                    }
+                    continue;
+                };
+                let is_drop_method =
+                    drop_trait.is_some() && tcx.trait_of_assoc(callee) == drop_trait;
+                if is_drop_method || Some(callee) == drop_in_place {
+                    let ty = gargs.type_at(0);
+                    let ty = match ty.kind() {
+                        ty::RawPtr(t, _) if Some(callee) == drop_in_place => *t,
+                        _ => ty,
+                    };
+                    if reaches(ty) {
+                        err(span, ty, "here".to_string());
+                    }
+                    continue;
+                }
+                // (a callee may drop values of its type arguments, of the associated types of
+                // its bounds, and the values it is given, by value or through `&mut`; only a
+                // function of this crate whose own drops this check covers, a closure in one, or
+                // a std function that drops none of them, is left out)
+                let (target, targs) = ty::Instance::try_resolve(tcx, typing_env, callee, gargs)
+                    .ok()
+                    .flatten()
+                    .map(|i| (i.def_id(), i.args))
+                    .unwrap_or((callee, gargs));
+                if ext.drops_nothing(tcx, target)
+                    || target.as_local().is_some_and(|l| ext.drop_rule(tcx, l).is_some())
+                {
+                    continue;
+                }
+                let mut tys: Vec<Ty<'tcx>> = targs.types().collect();
+                tys.extend(given);
+                tys.extend(bound_assoc_types(tcx, typing_env, callee, gargs));
+                if let Some(ty) = tys.into_iter().find(|t| carries(*t)) {
+                    err(
+                        span,
+                        ty,
+                        format!(
+                            "in this call of `{}`, which may drop it",
+                            tcx.def_path_str(target)
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A drop of a function with a `deallocates` bound that VIR did not charge
 fn report_not_counted<'tcx>(tcx: TyCtxt<'tcx>, span: Span, ty: Ty<'tcx>) {
     tcx.dcx().span_err(
@@ -421,9 +697,7 @@ fn owned_closure_may_deallocate<'tcx>(
         ty::Adt(_, args) => {
             args.types().find_map(|t| owned_closure_may_deallocate(tcx, typing_env, marker, t))
         }
-        ty::Array(t, _) | ty::Slice(t) => {
-            owned_closure_may_deallocate(tcx, typing_env, marker, *t)
-        }
+        ty::Array(t, _) | ty::Slice(t) => owned_closure_may_deallocate(tcx, typing_env, marker, *t),
         _ => None,
     }
 }
@@ -609,13 +883,7 @@ fn check_fip_body<'tcx>(
                     drop_trait.is_some() && tcx.trait_of_assoc(callee) == drop_trait;
                 if counted.is_none() && !is_drop_method && Some(callee) != drop_in_place {
                     check_closures_handed_over(
-                        tcx,
-                        typing_env,
-                        marker,
-                        &body,
-                        func,
-                        call_args,
-                        span,
+                        tcx, typing_env, marker, &body, func, call_args, span,
                     );
                 }
                 // another crate's code may call back into this crate's (a strict function's
@@ -1155,6 +1423,9 @@ pub(crate) struct ExternalStrict {
     /// closures with a `deallocates` bound, with the drops that VIR charged
     local_dealloc_bounded:
         std::collections::HashMap<CountedBodyKey, std::collections::HashSet<DropSiteKey>>,
+    /// the functions of this crate whose drop rule VIR checked (`allocates` bound), leaving the
+    /// drops of `dyn` values to `check_no_dyn_drops` (their VIR paths)
+    local_drop_rule: std::collections::HashSet<String>,
 }
 
 impl ExternalStrict {
@@ -1208,6 +1479,35 @@ impl ExternalStrict {
         let key = (format!("{:?}", p), closure);
         let sites = self.local_dealloc_bounded.get(&key)?;
         Some((key, sites))
+    }
+
+    /// For a function (or a closure in one) whose drop rule VIR checked: the function's VIR path
+    fn drop_rule<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<String> {
+        if self.local_drop_rule.is_empty() {
+            return None;
+        }
+        // (VIR's drop rule collects the types of the closures in the body too)
+        let fn_def_id = tcx.typeck_root_def_id(def_id.to_def_id());
+        let p = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+            tcx,
+            &self.verus_items,
+            fn_def_id,
+        )?;
+        // (a `#[verus_spec(with ..)]` function `f` is verified as its twin `_VERUS_VERIFIED_f`,
+        // whose body the erase compile replaces: the compiled body is `f`'s)
+        let twin = p.segments.last().filter(|last| last.name().is_some()).map(|last| {
+            let mut segments = (*p.segments).clone();
+            *segments.last_mut().unwrap() = last.map_name(|name| {
+                format!("{}{}", crate::rust_to_vir_expr::VERUS_VERIFIED_PREFIX, name)
+            });
+            vir::ast::PathX { krate: p.krate.clone(), segments: std::sync::Arc::new(segments) }
+        });
+        let p = format!("{:?}", p);
+        if self.local_drop_rule.contains(&p) {
+            return Some(p);
+        }
+        let twin = format!("{:?}", std::sync::Arc::new(twin?));
+        if self.local_drop_rule.contains(&twin) { Some(twin) } else { None }
     }
 
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
@@ -1513,6 +1813,7 @@ pub(crate) fn check_fip_crate<'tcx>(
     no_drop_fns: &[String],
     local_encapsulates_fns: &[String],
     local_dealloc_bounded_fns: &[(CountedBodyKey, Vec<DropSiteKey>)],
+    local_drop_rule_fns: &[String],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
@@ -1523,6 +1824,7 @@ pub(crate) fn check_fip_crate<'tcx>(
             .iter()
             .map(|(p, sites)| (p.clone(), sites.iter().cloned().collect()))
             .collect(),
+        local_drop_rule: local_drop_rule_fns.iter().cloned().collect(),
     };
     let om = OpMarkers::new(tcx);
     let marker = find_trait(tcx, MARKER);
@@ -1545,6 +1847,29 @@ pub(crate) fn check_fip_crate<'tcx>(
     let mut any = false;
     let mut strict: Vec<LocalDefId> = Vec::new();
     let mut matched: std::collections::HashSet<CountedBodyKey> = std::collections::HashSet::new();
+    // (the drop rule's `dyn` values: the drops of the bodies VIR left them to)
+    let mut drop_rule_matched: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for def_id in tcx.hir_body_owners() {
+        if matches!(
+            tcx.def_kind(def_id),
+            rustc_hir::def::DefKind::Fn
+                | rustc_hir::def::DefKind::AssocFn
+                | rustc_hir::def::DefKind::Closure
+        ) {
+            if let Some(p) = ext.drop_rule(tcx, def_id) {
+                check_no_dyn_drops(tcx, def_id, &ext);
+                drop_rule_matched.insert(p);
+            }
+        }
+    }
+    for p in local_drop_rule_fns.iter() {
+        if !drop_rule_matched.contains(p) {
+            tcx.dcx().err(format!(
+                "-V alloc-check: internal error: the function `{}`, which has an `allocates` bound, was not found in the compiled program, so the drops of its `dyn` values could not be checked",
+                p
+            ));
+        }
+    }
     for def_id in tcx.hir_body_owners() {
         // (a `#[verifier::fip]` closure too: its body is checked like a function's)
         if !matches!(

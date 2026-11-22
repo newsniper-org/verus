@@ -144,6 +144,13 @@ drop. For each of these types:
   `Box`, `Vec`, `String` and others.
 * A closure drops its captures. A bounded closure is checked like a function: its captures,
   including other closures it may drop, must pass the drop rule.
+* A `dyn` value's destructors are not known, so a function may not drop one (a `Box<dyn Tr>`,
+  or a value that holds one). Which values it drops is checked on the compiled program: a
+  `Box<dyn Tr>` that is only moved (returned, or passed on) is fine. A std call instantiated
+  with such a type is rejected unless std drops no value of its type arguments there (see
+  "Callbacks from other crates"). With `--no-lifetime` or `--no-erasure-check`, which skip the
+  compiled program, the parameter and expression types are checked instead (any `dyn` is
+  rejected). A closure with an `allocates` bound may not mention a `dyn` value at all yet.
 
 ### Custom allocators
 

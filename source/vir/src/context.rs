@@ -80,6 +80,10 @@ pub struct GlobalCtx {
     pub alloc_check: bool,
     /// `-V alloc-check-strict`: functions with an `allocates` bound must be `no_unwind`
     pub alloc_check_strict: bool,
+    /// -V alloc-check: the compiled program's MIR is checked after verification (`fip_mir`),
+    /// so the drop rule leaves the drops of `dyn` values to it: there it sees which values are
+    /// really dropped (a `Box<dyn Tr>` that is only moved is not)
+    pub alloc_dyn_drops_on_mir: bool,
     /// `-V alloc-check`: for each datatype with a `Drop` impl in the crate (or its imports),
     /// the impl's span and whether it is bounded by `allocates 0`. Computed before pruning,
     /// since `Drop::drop` is never called explicitly and would otherwise be pruned away.
@@ -815,6 +819,7 @@ impl GlobalCtx {
             check_api_safety,
             alloc_check,
             alloc_check_strict,
+            alloc_dyn_drops_on_mir: false,
             drop_impl_alloc_zero: Arc::new(drop_impl_alloc_zero),
             copy_datatypes: Arc::new(copy_datatypes),
             copy_impls: Arc::new(copy_impls),
@@ -855,6 +860,7 @@ impl GlobalCtx {
             check_api_safety: self.check_api_safety,
             alloc_check: self.alloc_check,
             alloc_check_strict: self.alloc_check_strict,
+            alloc_dyn_drops_on_mir: self.alloc_dyn_drops_on_mir,
             drop_impl_alloc_zero: self.drop_impl_alloc_zero.clone(),
             copy_datatypes: self.copy_datatypes.clone(),
             copy_impls: self.copy_impls.clone(),

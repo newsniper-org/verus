@@ -363,6 +363,10 @@ pub struct Verifier {
     /// `fip_mir` checks that their implicit drops free nothing
     pub(crate) alloc_local_dealloc_bounded_fns:
         Vec<(crate::fip_mir::CountedBodyKey, Vec<crate::fip_mir::DropSiteKey>)>,
+    /// -V alloc-check: the functions of this crate that the drop rule checks (an `allocates`
+    /// bound, own or inherited; their VIR paths): the drop rule leaves the drops of `dyn` values
+    /// to `fip_mir`, which checks the drops of their compiled bodies
+    pub(crate) alloc_local_drop_rule_fns: Vec<String>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -576,6 +580,7 @@ impl Verifier {
             alloc_no_drop_fns: Vec::new(),
             alloc_local_encapsulates_fns: Vec::new(),
             alloc_local_dealloc_bounded_fns: Vec::new(),
+            alloc_local_drop_rule_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -631,6 +636,7 @@ impl Verifier {
             alloc_no_drop_fns: self.alloc_no_drop_fns.clone(),
             alloc_local_encapsulates_fns: self.alloc_local_encapsulates_fns.clone(),
             alloc_local_dealloc_bounded_fns: self.alloc_local_dealloc_bounded_fns.clone(),
+            alloc_local_drop_rule_fns: self.alloc_local_drop_rule_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -2130,6 +2136,10 @@ impl Verifier {
             self.args.no_bv_simplify,
             self.args.report_long_running,
         )?;
+        // (the erase compile checks the MIR, unless it is skipped: see driver.rs)
+        global_ctx.alloc_dyn_drops_on_mir = self.args.alloc_check
+            && !self.args.check_api_safety
+            && (self.compile || !(self.args.no_erasure_check || self.args.no_lifetime));
         vir::recursive_types::check_traits(&krate, &global_ctx)?;
         let krate = vir::ast_simplify::simplify_krate(&mut global_ctx, &krate)?;
 
@@ -2905,6 +2915,38 @@ impl Verifier {
             }
             bounded.sort_by(|a, b| a.0.cmp(&b.0));
             self.alloc_local_dealloc_bounded_fns = bounded;
+
+            // The functions whose drop rule (`vir::alloc_check::check_drop_glue`) leaves the
+            // drops of `dyn` values to the MIR check: exec functions with a body and an
+            // `allocates` bound (own, or their trait method declaration's; a fip function has
+            // one), whose drops are checked (not the allocator runtime's, nor
+            // `alloc_check_skip_drops`)
+            if self.args.alloc_check && !self.args.check_api_safety {
+                let decls_with_bound: std::collections::HashSet<&vir::ast::Fun> = merged_crate
+                    .functions
+                    .iter()
+                    .filter(|f| f.x.allocates.is_some())
+                    .map(|f| &f.x.name)
+                    .collect();
+                let mut drop_rule: Vec<String> = local_crate
+                    .functions
+                    .iter()
+                    .filter(|f| {
+                        f.x.mode == vir::ast::Mode::Exec
+                            && f.x.body.is_some()
+                            && !f.x.attrs.allocator_runtime
+                            && !f.x.attrs.alloc_check_skip_drops
+                            && (f.x.allocates.is_some()
+                                || matches!(&f.x.kind,
+                                    vir::ast::FunctionKind::TraitMethodImpl { method, .. }
+                                        if decls_with_bound.contains(method)))
+                    })
+                    .map(|f| format!("{:?}", f.x.name.path))
+                    .collect();
+                drop_rule.sort();
+                drop_rule.dedup();
+                self.alloc_local_drop_rule_fns = drop_rule;
+            }
         }
         self.maybe_log_impl_names(&merged_crate).map_err(map_err_diagnostics)?;
         self.maybe_log_vir_crate(&merged_crate).map_err(map_err_diagnostics)?;

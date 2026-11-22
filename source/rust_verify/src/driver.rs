@@ -135,6 +135,8 @@ struct CompilerCallbacksEraseMacro {
     /// see `Verifier::alloc_local_dealloc_bounded_fns`
     pub alloc_local_dealloc_bounded_fns:
         Vec<(crate::fip_mir::CountedBodyKey, Vec<crate::fip_mir::DropSiteKey>)>,
+    /// see `Verifier::alloc_local_drop_rule_fns`
+    pub alloc_local_drop_rule_fns: Vec<String>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
@@ -178,6 +180,7 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
                 &self.alloc_no_drop_fns,
                 &self.alloc_local_encapsulates_fns,
                 &self.alloc_local_dealloc_bounded_fns,
+                &self.alloc_local_drop_rule_fns,
             );
         }
         if self.fip_lint {
@@ -221,6 +224,7 @@ pub(crate) fn run_with_erase_macro_compile(
         crate::fip_mir::CountedBodyKey,
         Vec<crate::fip_mir::DropSiteKey>,
     )>,
+    alloc_local_drop_rule_fns: Vec<String>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
@@ -233,6 +237,7 @@ pub(crate) fn run_with_erase_macro_compile(
         alloc_no_drop_fns,
         alloc_local_encapsulates_fns,
         alloc_local_dealloc_bounded_fns,
+        alloc_local_drop_rule_fns,
     };
     rustc_args.extend(["--cfg", "verus_only", "--cfg", "verus_keep_ghost"].map(|s| s.to_string()));
     if matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore) {
@@ -443,6 +448,7 @@ pub fn run(
             verifier.alloc_no_drop_fns.clone(),
             verifier.alloc_local_encapsulates_fns.clone(),
             verifier.alloc_local_dealloc_bounded_fns.clone(),
+            verifier.alloc_local_drop_rule_fns.clone(),
         )
     };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built
