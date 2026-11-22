@@ -403,6 +403,10 @@ impl<T> VecAdditionalExecFns<T> for alloc::vec::Vec<T> {
             i < old(self).len(),
         ensures
             final(self)@ == old(self)@.update(i as int, value),
+        allocates
+            0int,
+        deallocates
+            super::alloc_check::drop_deallocations(old(self)@[i as int]),
     {
         self[i] = value;
     }
@@ -415,6 +419,10 @@ impl<T> VecAdditionalExecFns<T> for alloc::vec::Vec<T> {
         ensures
             final(self)@ == old(self)@.update(i as int, *old(value)),
             *final(value) == old(self)@.index(i as int),
+        allocates
+            0int,
+        deallocates
+            0,
     {
         core::mem::swap(&mut self[i], value);
     }

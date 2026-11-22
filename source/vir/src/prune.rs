@@ -576,6 +576,11 @@ fn traverse_reachable(ctxt: &Ctxt, state: &mut State) {
                             reach_function(ctxt, state, &fn_slice_len());
                         }
                     }
+                    ExprX::Assign { op: None, charge_drop: true, .. } => {
+                        // -V alloc-check: the drop of the old value is charged when this
+                        // assignment is lowered to SST (see ast_to_sst.rs), after pruning
+                        reach_function(ctxt, state, &crate::def::fn_drop_deallocations());
+                    }
                     ExprX::Binary(op, ..) | ExprX::Assign { op: Some(op), .. } => match op {
                         BinaryOp::Arith(crate::ast::ArithOp::TruncatingDiv(..)) => {
                             reach_function(ctxt, state, &fn_truncating_div());

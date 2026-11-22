@@ -467,6 +467,7 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
     구현하지만, 이것들을 drop하면 블록이 해제됩니다.
   - 그 밖의 타입(타입 매개변수, 사용자 구조체)에는 정의가 없습니다. 필요한 것을 직접 적거나(예: `deallocates
     drop_deallocations(x)`), 타입 매개변수에 `NoDeallocDrop` bound를 겁니다.
+* `drop(x)`(`core::mem::drop`)는 스코프 끝과 같이 `drop_deallocations(x)`로 셉니다.
 * Verus는 컴파일된 프로그램에서, 해제할 수 있는 drop이 모두 자기가 센 것인지 검사하고 아니면 거부합니다. 지금 거부하는
   것은 이렇습니다.
   - `&&`나 `||`의 피연산자 안의 임시값, `let r = &f();`로 살아 있는 임시값, 일부 경로에서만 만들어지는 임시값.
@@ -477,6 +478,7 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   - 대안마다 값의 다른 부분을 옮기는 or-패턴(예: `(true, x, _) | (false, _, x)`). enum의 서로 다른 variant끼리의
     대안은 괜찮습니다.
   - `deallocates` 상한이 있는 async 함수.
+  - 인덱싱을 거친 원소 대입(`v[i] = x`). `let r = &mut v[i]; *r = x;`나 `v.set(i, x)`로 씁니다.
 
   값을 지역 변수에 묶거나 옮기면 됩니다.
 * 클로저에도 `deallocates` 상한을 붙일 수 있고, 같은 방식으로 셉니다(자기 drop 포함). 그 클로저를 부르면 그

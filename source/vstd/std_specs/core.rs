@@ -198,6 +198,15 @@ pub assume_specification<T>[ core::mem::replace::<T> ](dest: &mut T, src: T) -> 
         0
 ;
 
+// `drop` runs the destructor of `t` (what `t` owns is deallocated)
+pub assume_specification<T>[ core::mem::drop::<T> ](t: T)
+    opens_invariants none
+    no_unwind  allocates
+        0int,
+    deallocates
+        super::super::alloc_check::drop_deallocations(t)
+;
+
 // `forget` never runs a destructor, so it never deallocates (what `t` owns is leaked instead)
 pub assume_specification<T>[ core::mem::forget::<T> ](t: T)
     opens_invariants none

@@ -483,13 +483,16 @@ fn drop_two(v: &mut Pool, a: Slot, b: Slot)
   implement `Allocator` too, but dropping them frees a block. For other types (a type
   parameter, a user struct) it is not defined: state what you need, e.g. `deallocates
   drop_deallocations(x)`, or bound the type parameter by `NoDeallocDrop`.
+* `drop(x)` (`core::mem::drop`) is counted `drop_deallocations(x)`, like the end of a scope.
 * Verus checks on the compiled program that each drop that may deallocate is one it counted,
   and rejects any other: for now, a temporary in an operand of `&&` or `||`, or kept alive by
   `let r = &f();`, or made on some paths only; a `Box` whose contents were moved out of it; and a
   `move` closure that captures a value it only reads. Bind the value to a local, or move it.
   An or-pattern whose alternatives move different parts of a value (e.g.
   `(true, x, _) | (false, _, x)`) is rejected too (alternatives that are different variants of
-  an enum are fine), and so is an async function with a `deallocates` bound.
+  an enum are fine), and so is an async function with a `deallocates` bound. Assigning to an
+  element through indexing (`v[i] = x`) is rejected too: write `let r = &mut v[i]; *r = x;`, or
+  `v.set(i, x)`.
   (Like rustc, Verus drops a temporary at the end of its statement, or of the condition or branch
   of an `if`, the condition or body of a loop (every iteration), or a match arm or guard.)
 * A closure can have a `deallocates` bound, counted the same way (its own drops included); a

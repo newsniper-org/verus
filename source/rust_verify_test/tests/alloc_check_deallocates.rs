@@ -629,3 +629,100 @@ test_verify_one_file_with_options! {
         async fn f(b: Box<Box<u64>>) -> (r: Box<u64>) deallocates 0 { *b }
     } => Err(err) => assert_vir_error_msg(err, "an async function cannot be `#[verifier::fip]` or have a `deallocates` bound yet")
 }
+
+// (portable-fip 2026-11-20) a function whose only counted drop is an overwritten value: one per
+// crate, since another function's drops used to keep `drop_deallocations` from being pruned
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_deref ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(r: &mut Box<u64>) deallocates 1 { *r = Box::new(1); }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_option ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(o: &mut Option<Box<u64>>) deallocates 1 { *o = None; }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_copy ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(r: &mut u64) deallocates 0 { *r = 1; }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_field ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub struct S { pub b: Box<u64> }
+        pub fn f(s: &mut S) deallocates 1 { s.b = Box::new(2); }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_vec_element ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(v: &mut Vec<Box<u64>>) requires old(v)@.len() > 0, deallocates 1 {
+            let r = &mut v[0];
+            *r = Box::new(1);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_vec_set ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(v: &mut Vec<Box<u64>>) requires old(v)@.len() > 0, deallocates 1 {
+            v.set(0, Box::new(1));
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_index_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(v: &mut Vec<Box<u64>>) requires old(v)@.len() > 0, deallocates 1 {
+            v[0] = Box::new(1);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Verus cannot count this drop of a value of type")
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_only_overwrite_fails ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+        pub fn f1(r: &mut Box<u64>) deallocates 0 { *r = Box::new(1); } // FAILS
+        pub fn f2(o: &mut Option<Box<u64>>) requires old(o).is_some(), deallocates 0 { *o = None; } // FAILS
+        pub struct S { pub b: Box<u64> }
+        pub fn f3(s: &mut S) deallocates 0 { s.b = Box::new(2); } // FAILS
+        pub fn f4(v: &mut Vec<Box<u64>>) requires old(v)@.len() > 0, deallocates 0 { // FAILS
+            let r = &mut v[0];
+            *r = Box::new(1);
+        }
+        pub fn f5(v: &mut Vec<Box<u64>>) requires old(v)@.len() > 0, deallocates 0 { // FAILS
+            v.set(0, Box::new(1));
+        }
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 5)
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_mem_drop ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+        pub fn f(b: Box<u64>) deallocates 1 { drop(b); }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] deallocates_mem_drop_bounds ["vstd", "-V alloc-check"] => verus_code_str! {
+        use vstd::prelude::*;
+        pub fn g<T>(x: T) deallocates vstd::alloc_check::drop_deallocations(x) { drop(x); }
+        pub fn k(b: Box<Box<u64>>) deallocates 2 { core::mem::drop(b); }
+        pub fn h(b: Box<u64>) deallocates 0 { drop(b); } // FAILS
+        pub fn k1(b: Box<Box<u64>>) deallocates 1 { drop(b); } // FAILS
+
+        fn after() {}
+    }.to_string() => Err(err) => assert_fails(err, 2)
+}
