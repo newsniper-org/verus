@@ -1297,6 +1297,38 @@ fn rewrite_const_ret_proxy(const_fun: &mut syn::ItemFn) -> syn::ItemFn {
 // function body, to enable seamless use of unverified call to the function in
 // verification.
 // If the function is const, it will be rewritten to a proxy function and a verified function.
+fn is_fip_attr_path(path: &syn::Path) -> bool {
+    path.segments.len() == 2 && path.segments[0].ident == "verifier" && path.segments[1].ident == "fip"
+}
+
+/// Removes `#[verifier::fip]` and `#[verifier::fip(strict)]`, also from `cfg_attr`
+fn strip_fip_attrs(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain_mut(|attr| {
+        if is_fip_attr_path(attr.path()) {
+            return false;
+        }
+        if attr.path().is_ident("cfg_attr") {
+            let parser =
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
+            if let Ok(list) = attr.parse_args_with(parser) {
+                let mut items = list.into_iter();
+                let Some(pred) = items.next() else { return true };
+                let rest: Vec<syn::Meta> = items.collect();
+                if rest.iter().any(|m| is_fip_attr_path(m.path())) {
+                    let kept: Vec<syn::Meta> =
+                        rest.into_iter().filter(|m| !is_fip_attr_path(m.path())).collect();
+                    if kept.is_empty() {
+                        return false;
+                    }
+                    let span = attr.span();
+                    *attr = syn::parse_quote_spanned!(span => #[cfg_attr(#pred, #(#kept),*)]);
+                }
+            }
+        }
+        true
+    });
+}
+
 fn rewrite_unverified_func(
     fun: &mut syn::ItemFn,
     span: proc_macro2::Span,
@@ -1341,6 +1373,12 @@ fn rewrite_unverified_func(
             block.stmts.push(precondition_false);
             block.stmts.push(unimplemented.clone());
         }
+    }
+    // -V alloc-check: `#[verifier::fip]` is verified on the verified copy, and checked on the
+    // compiled program on this one (whose compiled body is the function's); the copy that the
+    // verification sees has no body to verify, so it does not get the attribute there
+    if erase.keep() {
+        strip_fip_attrs(&mut unverified_fun.attrs);
     }
     // change name to verified_{fname}
     let x = &fun.sig.ident;

@@ -3950,3 +3950,77 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "is dropped here")
 }
+
+// `#[verifier::fip]` with `#[verus_spec(with ..)]`: Verus verifies the copy that takes the ghost
+// arguments, and the compiled program's check covers the compiled function (portable-fip,
+// 2026-11-23)
+test_verify_one_file_with_options! {
+    #[test] fip_with_verus_spec_with ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[verifier::fip]
+        pub fn f(x: u64) -> u64 {
+            x
+        }
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[verifier::fip(strict)]
+        pub fn g(x: u64) -> u64 {
+            x
+        }
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[cfg_attr(verus_keep_ghost, verifier::fip, allow(unused_variables))]
+        pub fn h(x: u64) -> u64 {
+            x
+        }
+
+        #[verus_verify]
+        pub struct S;
+
+        #[verus_verify]
+        impl S {
+            #[verus_spec(with Ghost(w): Ghost<u32>)]
+            #[verifier::fip]
+            pub fn m(&self, x: u64) -> u64 {
+                x
+            }
+        }
+
+        #[verus_spec]
+        pub fn caller(x: u64) -> u64 {
+            proof_with!(Ghost(3u32));
+            f(x)
+        }
+
+        pub fn plain_caller(x: u64) -> u64 {
+            f(x)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_with_verus_spec_with_drop ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[cfg_attr(verus_keep_ghost, verifier::fip)]
+        pub fn f(b: Box<u64>) -> u64 {
+            let x = *b;
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_with_verus_spec_with_allocates ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
+}

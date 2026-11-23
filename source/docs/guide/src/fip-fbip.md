@@ -60,6 +60,9 @@ function, and a closure in a function that Verus ignores or that is external or 
 Without `-V alloc-check` it is only a warning, as for other Verus attributes on such items. On
 something that is not a function or a closure, the attribute is always an error.
 
+A function with `#[verus_spec(with ..)]` can be fip as well: Verus verifies the copy that takes the
+ghost arguments, and the compilation checks the function that is compiled.
+
 ## Examples
 
 The examples below share this list type:
