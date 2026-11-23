@@ -138,7 +138,7 @@ struct CompilerCallbacksEraseMacro {
     /// see `Verifier::alloc_local_drop_rule_fns`
     pub alloc_local_drop_rule_fns: Vec<String>,
     /// see `Verifier::alloc_local_fip_fns`
-    pub alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
+    pub alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
@@ -228,7 +228,7 @@ pub(crate) fn run_with_erase_macro_compile(
         Vec<crate::fip_mir::DropSiteKey>,
     )>,
     alloc_local_drop_rule_fns: Vec<String>,
-    alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
+    alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
@@ -421,11 +421,9 @@ pub fn run(
     {
         // -V alloc-check: the drops of `#[verifier::fip]` functions and closures are only
         // checked on the compiled program's MIR, by the run that is skipped here
-        let has_fip = !verifier.alloc_local_fip_fns.is_empty()
-            || verifier
-                .vir_crate
-                .as_ref()
-                .is_some_and(|k| k.functions.iter().any(|f| f.x.attrs.fip && f.x.body.is_some()));
+        // (this crate's fip bodies, as the compiled program's check would see them: not the
+        // allocator runtime's, nor other crates')
+        let has_fip = !verifier.alloc_local_fip_fns.is_empty();
         if has_fip {
             eprintln!(
                 "error: `#[verifier::fip]` functions and closures are checked on the compiled program, which --no-lifetime and --no-erasure-check skip"

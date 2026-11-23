@@ -3508,6 +3508,15 @@ pub(crate) fn check_item_const_or_static<'tcx>(
     if vattrs.unerased_proxy {
         path = fixup_unerased_proxy_path(&path, span)?;
     }
+    if let Some(strict) = vattrs.fip {
+        return err_span(
+            span,
+            format!(
+                "`{}` can only be used on functions and closures",
+                if strict { "#[verifier::fip(strict)]" } else { "#[verifier::fip]" }
+            ),
+        );
+    }
 
     let name = Arc::new(FunX { path: path.clone() });
 

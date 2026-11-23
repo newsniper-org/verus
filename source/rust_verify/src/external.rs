@@ -276,7 +276,7 @@ impl<'a, 'tcx> VisitMod<'a, 'tcx> {
                         crate::util::err_span_bare(
                             e.span,
                             format!(
-                                "-V alloc-check: `{}` is on a closure in a function that Verus does not verify (it ignores the function, or the function is external or `external_body`), so the closure would not be checked as fully in-place",
+                                "-V alloc-check: `{}` is on a closure in code that Verus does not verify (a function or other item that Verus ignores, or that is external or `external_body`), so the closure would not be checked as fully in-place",
                                 fip_attr_name(strict)
                             ),
                         )
@@ -525,7 +525,7 @@ fn fip_attr_name(strict: bool) -> &'static str {
     if strict { "#[verifier::fip(strict)]" } else { "#[verifier::fip]" }
 }
 
-const UNVERIFIED_FIP_HELP: &str = "`#[verifier::fip]` is checked only on what Verus verifies: wrap the function in the `verus!` macro or apply the `#[verus_spec]` attribute to it (without `#[verifier::external]`), or remove the attribute";
+const UNVERIFIED_FIP_HELP: &str = "`#[verifier::fip]` is checked only on what Verus verifies: make Verus verify the function (inside `verus!` or with `#[verus_spec]`, and neither external nor inside something external, nor `external_body`), or remove the attribute";
 
 /// Emit warnings and errors from nonsense combinations.
 fn emit_errors_warnings_for_ignored_attrs<'tcx>(
@@ -581,7 +581,7 @@ fn emit_errors_warnings_for_ignored_attrs<'tcx>(
         if ctxt.cmd_line_args.alloc_check && !in_unerased_proxy && (external || ignored) {
             let msg = if external {
                 format!(
-                    "-V alloc-check: `{}` is on a function that is marked external (or is inside an external module, impl or function, or an `external_body` function), so it would not be checked as fully in-place",
+                    "-V alloc-check: `{}` is on a function that is marked external (or is inside an external module, impl, trait or function, or an `external_body` function), so it would not be checked as fully in-place",
                     fip_attr_name(strict)
                 )
             } else {

@@ -52,9 +52,10 @@ drop 검사와 스택 검사는 컴파일된 프로그램(유령 코드를 지�
 
 `-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 붙은 `#[verifier::fip]`이 오류입니다. 두 검사 어느
 쪽도 그것을 다루지 않기 때문입니다. `#[verus_spec]` 없이 `verus!` 밖에 있는 함수, `#[verifier::external]`이
-붙었거나 external인 모듈·impl·함수 안에 있는 함수, 그리고 Verus가 무시하거나 external·`external_body`인 함수 안의
-클로저가 여기에 해당합니다. `-V alloc-check`가 없으면 이런 항목에 붙은 다른 Verus 속성처럼 경고만 냅니다. 함수나
-클로저가 아닌 것에 붙이면 언제나 오류입니다.
+붙었거나 external인 모듈·impl·trait·함수 안에 있는 함수, 그리고 Verus가 무시하거나 external·`external_body`인
+함수 안의 클로저가 여기에 해당합니다. `-V alloc-check`가 없으면 Verus가 무시하는 항목에 붙은 다른 Verus 속성처럼,
+그런 함수에는 경고만 내고 그런 클로저에는 아무것도 알리지 않습니다. 함수가 아닌 항목(struct, impl, `const` 등)에
+붙이면 언제나 오류입니다.
 
 `#[verus_spec(with ..)]`이 붙은 함수도 fip일 수 있습니다. Verus는 유령 인자를 받는 사본을 검증하고, 컴파일은
 실제로 컴파일되는 함수를 검사합니다.

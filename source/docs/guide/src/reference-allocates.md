@@ -567,7 +567,8 @@ them sees, such as one behind `cfg_attr(verus_keep_ghost_body, ..)`, is an error
 
 With `-V alloc-check` the attribute is an error on a function or closure that Verus does not verify:
 outside `verus!` without `#[verus_spec]`, marked `#[verifier::external]`, or inside an external or
-`external_body` item. On an item that is not a function it is always an error.
+`external_body` item. On an item that is not a function (a struct, an impl, a `const`, ...) it is
+always an error.
 
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }

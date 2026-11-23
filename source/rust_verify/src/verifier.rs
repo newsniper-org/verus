@@ -371,7 +371,7 @@ pub struct Verifier {
     /// (functions by their VIR paths, closures also by their positions), and whether as
     /// `fip(strict)`: `fip_mir` checks that the compiled program has the same attribute on
     /// exactly these bodies (an attribute behind `cfg_attr` may be seen by only one of the two)
-    pub(crate) alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
+    pub(crate) alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -2963,7 +2963,7 @@ impl Verifier {
             // (`fip_mir::allocator_runtime`).
             if self.args.alloc_check {
                 let fip_closures = ctxt.fip_closures.borrow();
-                let mut fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)> = vec![];
+                let mut fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)> = vec![];
                 for f in local_crate.functions.iter() {
                     let Some(body) = &f.x.body else { continue };
                     // (`encapsulates` also sets `allocator_runtime`, but such a function's body
@@ -2972,8 +2972,9 @@ impl Verifier {
                         continue;
                     }
                     let path = format!("{:?}", f.x.name.path);
+                    let name = vir::ast_util::path_as_friendly_rust_name(&f.x.name.path);
                     if f.x.attrs.fip {
-                        fip_fns.push(((path.clone(), None), f.x.attrs.fip_strict));
+                        fip_fns.push(((path.clone(), None), f.x.attrs.fip_strict, name.clone()));
                     }
                     let _ = vir::ast_visitor::expr_visitor_check::<(), _>(body, &mut |_, e| {
                         if let vir::ast::ExprX::NonSpecClosure { fip: true, .. } = &e.x {
@@ -2981,7 +2982,7 @@ impl Verifier {
                                 .and_then(|s| crate::fip_mir::closure_key(source_map, s));
                             if let Some(key) = key {
                                 let strict = fip_closures.get(&key).copied().unwrap_or(false);
-                                fip_fns.push(((path.clone(), Some(key)), strict));
+                                fip_fns.push(((path.clone(), Some(key)), strict, name.clone()));
                             }
                         }
                         Ok(())

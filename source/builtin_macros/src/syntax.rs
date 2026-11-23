@@ -4085,12 +4085,16 @@ impl Visitor {
                 if let Expr::Block(block) = &mut *clos.body {
                     block.block.stmts.splice(0..0, stmts);
                 } else {
+                    // (the block gets the body's span: the closure's span is then the same as in
+                    // the erase compile, which keeps the closure as written; -V alloc-check finds
+                    // a closure in both compiles by its span)
+                    let body_span = clos.body.span();
                     let body = take_expr(&mut *clos.body);
                     stmts.push(Stmt::Expr(body, None));
                     *clos.body = Expr::Block(ExprBlock {
                         attrs: vec![],
                         label: None,
-                        block: Block { brace_token: Brace(clos.span()), stmts },
+                        block: Block { brace_token: Brace(body_span), stmts },
                     })
                 }
             }

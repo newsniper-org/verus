@@ -1293,42 +1293,20 @@ fn rewrite_const_ret_proxy(const_fun: &mut syn::ItemFn) -> syn::ItemFn {
     proxy_fun
 }
 
-// Create a copy of function with unverified function signature without a
-// function body, to enable seamless use of unverified call to the function in
-// verification.
-// If the function is const, it will be rewritten to a proxy function and a verified function.
 fn is_fip_attr_path(path: &syn::Path) -> bool {
     path.segments.len() == 2 && path.segments[0].ident == "verifier" && path.segments[1].ident == "fip"
 }
 
-/// Removes `#[verifier::fip]` and `#[verifier::fip(strict)]`, also from `cfg_attr`
+/// Removes `#[verifier::fip]` and `#[verifier::fip(strict)]`. (A `cfg_attr` is expanded before
+/// an attribute macro of the same item runs, wherever it is written, so none is left here.)
 fn strip_fip_attrs(attrs: &mut Vec<syn::Attribute>) {
-    attrs.retain_mut(|attr| {
-        if is_fip_attr_path(attr.path()) {
-            return false;
-        }
-        if attr.path().is_ident("cfg_attr") {
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            if let Ok(list) = attr.parse_args_with(parser) {
-                let mut items = list.into_iter();
-                let Some(pred) = items.next() else { return true };
-                let rest: Vec<syn::Meta> = items.collect();
-                if rest.iter().any(|m| is_fip_attr_path(m.path())) {
-                    let kept: Vec<syn::Meta> =
-                        rest.into_iter().filter(|m| !is_fip_attr_path(m.path())).collect();
-                    if kept.is_empty() {
-                        return false;
-                    }
-                    let span = attr.span();
-                    *attr = syn::parse_quote_spanned!(span => #[cfg_attr(#pred, #(#kept),*)]);
-                }
-            }
-        }
-        true
-    });
+    attrs.retain(|attr| !is_fip_attr_path(attr.path()));
 }
 
+// Create a copy of function with unverified function signature without a
+// function body, to enable seamless use of unverified call to the function in
+// verification.
+// If the function is const, it will be rewritten to a proxy function and a verified function.
 fn rewrite_unverified_func(
     fun: &mut syn::ItemFn,
     span: proc_macro2::Span,
@@ -1336,7 +1314,8 @@ fn rewrite_unverified_func(
 ) -> Vec<syn::ItemFn> {
     let mut ret = vec![];
     let mut unverified_fun = fun.clone();
-    if fun.sig.constness.is_some() {
+    let const_proxy = fun.sig.constness.is_some();
+    if const_proxy {
         // Create a proxy function to include requires/ensures.
         let proxy = rewrite_const_ret_proxy(&mut unverified_fun);
         ret.push(unverified_fun);
@@ -1372,12 +1351,17 @@ fn rewrite_unverified_func(
             block.stmts.clear();
             block.stmts.push(precondition_false);
             block.stmts.push(unimplemented.clone());
+        } else if const_proxy {
+            // (the compiled program calls the `const fn` itself, not this proxy)
+            block.stmts.clear();
+            block.stmts.push(unimplemented.clone());
         }
     }
     // -V alloc-check: `#[verifier::fip]` is verified on the verified copy, and checked on the
-    // compiled program on this one (whose compiled body is the function's); the copy that the
-    // verification sees has no body to verify, so it does not get the attribute there
-    if erase.keep() {
+    // compiled program on the function that is compiled (this one, or for a `const fn` the
+    // `const fn` itself); the copy that the verification sees has no body to verify, and a
+    // `const fn`'s proxy is not what is compiled, so they do not get the attribute
+    if erase.keep() || const_proxy {
         strip_fip_attrs(&mut unverified_fun.attrs);
     }
     // change name to verified_{fname}

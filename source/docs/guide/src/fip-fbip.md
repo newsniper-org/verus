@@ -55,10 +55,11 @@ one behind `cfg_attr(verus_keep_ghost_body, ..)`: Verus sets that cfg only for t
 
 With `-V alloc-check`, `#[verifier::fip]` on a function or closure that Verus does not verify is an
 error, since neither check would cover it. That is a function outside `verus!` without
-`#[verus_spec]`, a function marked `#[verifier::external]` or inside an external module, impl or
-function, and a closure in a function that Verus ignores or that is external or `external_body`.
-Without `-V alloc-check` it is only a warning, as for other Verus attributes on such items. On
-something that is not a function or a closure, the attribute is always an error.
+`#[verus_spec]`, a function marked `#[verifier::external]` or inside an external module, impl,
+trait or function, and a closure in a function that Verus ignores or that is external or
+`external_body`. Without `-V alloc-check` it is only a warning on such a function (and nothing on
+such a closure), as for other Verus attributes on items that Verus ignores. On an item that is not
+a function (a struct, an impl, a `const`, ...), the attribute is always an error.
 
 A function with `#[verus_spec(with ..)]` can be fip as well: Verus verifies the copy that takes the
 ghost arguments, and the compilation checks the function that is compiled.

@@ -219,6 +219,11 @@ fn vstd_dependency(tcx: TyCtxt<'_>) -> bool {
 /// on the function or closure. (Each attribute is parsed on its own: one that does not parse,
 /// which only the verification would report, does not hide the others.)
 fn fip_attr_local(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<bool> {
+    // (a foreign function has no body to check, so the attribute means nothing on it; the
+    // verification rejects it, but an attribute only the compilation sees must not be trusted)
+    if tcx.is_foreign_item(def_id) {
+        return None;
+    }
     let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(def_id));
     attrs.iter().find_map(|attr| {
         parse_attrs_opt(std::slice::from_ref(attr), None).iter().find_map(|a| match a {
@@ -1433,9 +1438,9 @@ pub(crate) struct ExternalStrict {
     /// the functions of this crate whose drop rule VIR checked (`allocates` bound), leaving the
     /// drops of `dyn` values to `check_no_dyn_drops` (their VIR paths)
     local_drop_rule: std::collections::HashSet<String>,
-    /// the functions and closures of this crate that VIR verified as `#[verifier::fip]`, and
-    /// whether as `fip(strict)`
-    local_fip: std::collections::HashMap<CountedBodyKey, bool>,
+    /// the functions and closures of this crate that VIR verified as `#[verifier::fip]`, whether
+    /// as `fip(strict)`, and the function's name for messages
+    local_fip: std::collections::HashMap<CountedBodyKey, (bool, String)>,
 }
 
 impl ExternalStrict {
@@ -1481,14 +1486,13 @@ impl ExternalStrict {
         } else {
             (def_id.to_def_id(), None)
         };
-        let (p, twin) = self.vir_path_and_twin(tcx, fn_def_id)?;
-        let key = (p, closure.clone());
-        if let Some(sites) = self.local_dealloc_bounded.get(&key) {
-            return Some((key, sites));
+        for p in self.vir_paths(tcx, fn_def_id) {
+            let key = (p, closure.clone());
+            if let Some(sites) = self.local_dealloc_bounded.get(&key) {
+                return Some((key, sites));
+            }
         }
-        let key = (twin?, closure);
-        let sites = self.local_dealloc_bounded.get(&key)?;
-        Some((key, sites))
+        None
     }
 
     /// For a function, or closure, that VIR verified as `#[verifier::fip]`: its key and whether
@@ -1508,43 +1512,53 @@ impl ExternalStrict {
         } else {
             (def_id.to_def_id(), None)
         };
-        let (p, twin) = self.vir_path_and_twin(tcx, fn_def_id)?;
-        let key = (p, closure.clone());
-        if let Some(strict) = self.local_fip.get(&key) {
-            return Some((key, *strict));
+        for p in self.vir_paths(tcx, fn_def_id) {
+            let key = (p, closure.clone());
+            if let Some((strict, _)) = self.local_fip.get(&key) {
+                return Some((key, *strict));
+            }
         }
-        let key = (twin?, closure);
-        let strict = self.local_fip.get(&key)?;
-        Some((key, *strict))
+        None
     }
 
-    /// The VIR path of a function of this crate (`{:?}`), and that of its verified twin: a
-    /// `#[verus_spec(with ..)]` function `f` is verified as `_VERUS_VERIFIED_f`, whose body the
-    /// erase compile replaces, so the compiled body to check is `f`'s
-    fn vir_path_and_twin<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: DefId,
-    ) -> Option<(String, Option<String>)> {
-        let p = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
+    /// The VIR path of a function (`{:?}`), then those of the copies that Verus may have
+    /// verified in its place:
+    /// - a `#[verus_spec(with ..)]` function `f` is verified as `_VERUS_VERIFIED_f`, whose body
+    ///   the erase compile replaces, so the compiled body to check is `f`'s (and an item nested in
+    ///   `f` is verified inside `_VERUS_VERIFIED_f`);
+    /// - an item nested in a `const fn` `x` of `verus!` is verified inside its proxy
+    ///   `VERUS_UNERASED_PROXY__x` (the proxy itself is verified under the name `x`).
+    fn vir_paths<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<String> {
+        let Some(p) = crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
             tcx,
             &self.verus_items,
             def_id,
-        )?;
-        let twin = p.segments.last().filter(|last| last.name().is_some()).map(|last| {
+        ) else {
+            return vec![];
+        };
+        let mut paths = vec![format!("{:?}", p)];
+        let n = p.segments.len();
+        let mut renamed = |i: usize, prefix: &str| {
+            if p.segments[i].name().is_none() {
+                return;
+            }
             let mut segments = (*p.segments).clone();
-            *segments.last_mut().unwrap() = last.map_name(|name| {
-                format!("{}{}", crate::rust_to_vir_expr::VERUS_VERIFIED_PREFIX, name)
-            });
-            format!(
+            segments[i] = segments[i].map_name(|name| format!("{}{}", prefix, name));
+            paths.push(format!(
                 "{:?}",
                 std::sync::Arc::new(vir::ast::PathX {
                     krate: p.krate.clone(),
                     segments: std::sync::Arc::new(segments),
                 })
-            )
-        });
-        Some((format!("{:?}", p), twin))
+            ));
+        };
+        for i in (0..n).rev() {
+            renamed(i, crate::rust_to_vir_expr::VERUS_VERIFIED_PREFIX);
+        }
+        for i in (0..n.saturating_sub(1)).rev() {
+            renamed(i, "VERUS_UNERASED_PROXY__");
+        }
+        paths
     }
 
     /// For a function (or a closure in one) whose drop rule VIR checked: the function's VIR path
@@ -1554,23 +1568,15 @@ impl ExternalStrict {
         }
         // (VIR's drop rule collects the types of the closures in the body too)
         let fn_def_id = tcx.typeck_root_def_id(def_id.to_def_id());
-        let (p, twin) = self.vir_path_and_twin(tcx, fn_def_id)?;
-        if self.local_drop_rule.contains(&p) {
-            return Some(p);
-        }
-        let twin = twin?;
-        if self.local_drop_rule.contains(&twin) { Some(twin) } else { None }
+        self.vir_paths(tcx, fn_def_id).into_iter().find(|p| self.local_drop_rule.contains(p))
     }
 
+    /// A strict fip function of another crate (or the compiled function of a `#[verus_spec(with
+    /// ..)]` one there: its crate's compilation checked it against the verified copy)
     fn contains<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         !def_id.is_local()
             && !self.paths.is_empty()
-            && crate::rust_to_vir_path::def_id_to_vir_path_option_uncached(
-                tcx,
-                &self.verus_items,
-                def_id,
-            )
-            .is_some_and(|p| self.paths.contains(&format!("{:?}", p)))
+            && self.vir_paths(tcx, def_id).iter().any(|p| self.paths.contains(p))
     }
 }
 
@@ -1871,7 +1877,7 @@ fn fip_attr_name(strict: bool) -> &'static str {
 fn check_fip_attrs_verified<'tcx>(
     tcx: TyCtxt<'tcx>,
     ext: &ExternalStrict,
-    local_fip_fns: &[(CountedBodyKey, bool)],
+    local_fip_fns: &[(CountedBodyKey, bool, String)],
 ) {
     let mut matched: std::collections::HashSet<CountedBodyKey> = std::collections::HashSet::new();
     let cfg_note = "(is the attribute behind `cfg_attr`, so that the verification and the compilation see different attributes?)";
@@ -1938,12 +1944,12 @@ fn check_fip_attrs_verified<'tcx>(
         }
     }
     // (every body that VIR verified as fip must be found here, with the attribute)
-    for (key, strict) in local_fip_fns.iter() {
+    for (key, strict, name) in local_fip_fns.iter() {
         if !matched.contains(key) {
             tcx.dcx().err(format!(
                 "-V alloc-check: the {} `{}`, which was verified as `{}`, was not found in the compiled program, so its drops could not be checked",
                 if key.1.is_some() { "closure in the function" } else { "function" },
-                key.0,
+                name,
                 fip_attr_name(*strict)
             ));
         }
@@ -1961,7 +1967,7 @@ pub(crate) fn check_fip_crate<'tcx>(
     local_encapsulates_fns: &[String],
     local_dealloc_bounded_fns: &[(CountedBodyKey, Vec<DropSiteKey>)],
     local_drop_rule_fns: &[String],
-    local_fip_fns: &[(CountedBodyKey, bool)],
+    local_fip_fns: &[(CountedBodyKey, bool, String)],
 ) -> bool {
     let ext = ExternalStrict {
         verus_items: crate::verus_items::from_diagnostic_items(tcx),
@@ -1973,7 +1979,7 @@ pub(crate) fn check_fip_crate<'tcx>(
             .map(|(p, sites)| (p.clone(), sites.iter().cloned().collect()))
             .collect(),
         local_drop_rule: local_drop_rule_fns.iter().cloned().collect(),
-        local_fip: local_fip_fns.iter().cloned().collect(),
+        local_fip: local_fip_fns.iter().map(|(k, s, n)| (k.clone(), (*s, n.clone()))).collect(),
     };
     let om = OpMarkers::new(tcx);
     let marker = find_trait(tcx, MARKER);

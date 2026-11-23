@@ -3858,7 +3858,7 @@ test_verify_one_file_with_options! {
             };
             f()
         }
-    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: `#[verifier::fip]` is on a closure in a function that Verus does not verify")
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: `#[verifier::fip]` is on a closure in code that Verus does not verify")
 }
 
 test_verify_one_file_with_options! {
@@ -3870,7 +3870,7 @@ test_verify_one_file_with_options! {
             let c = #[verifier::fip] |y: u64| Box::new(y);
             c(x)
         }
-    } => Err(err) => assert_vir_error_msg(err, "is on a closure in a function that Verus does not verify")
+    } => Err(err) => assert_vir_error_msg(err, "is on a closure in code that Verus does not verify")
 }
 
 test_verify_one_file_with_options! {
@@ -4059,4 +4059,142 @@ test_verify_one_file_with_options! {
             x
         }
     } => Err(err) => assert_vir_error_msg(err, "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it")
+}
+
+// (review of the above, 2026-11-23)
+test_verify_one_file_with_options! {
+    // a closure whose body is an expression, not a block, has the same position in both compiles
+    #[test] fip_closure_expression_body ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn outer(x: u64) -> u64 {
+            let c = #[verifier::fip] |y: u64| y;
+            c(x)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_expression_body_drop ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn outer(b: Box<u64>) -> u64 {
+            let c = #[verifier::fip] |b: Box<u64>| *b;
+            c(b)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}
+
+test_verify_one_file_with_options! {
+    // the proxy of a `const fn` is not what is compiled; a nested item is verified inside the
+    // verified copy
+    #[test] fip_with_verus_spec_with_const_and_nested ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(with Ghost(w): Ghost<u32>)]
+        #[verifier::fip]
+        #[allow(unused_variables, non_snake_case)]
+        pub const fn f(x: u64) -> u64 {
+            let c = #[verifier::fip] |y: u64| -> u64 { y };
+            x
+        }
+
+        #[verus_spec(with Ghost(g): Ghost<u64>)]
+        #[allow(unused_variables)]
+        pub fn g(x: u64) -> u64 {
+            fn helper(x: u64) -> u64 {
+                let c = #[verifier::fip] |y: u64| -> u64 { y };
+                c(x)
+            }
+            helper(x)
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_const ["vstd"] => verus_code! {
+        #[verifier::fip]
+        pub const X: u64 = 3;
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` can only be used on functions and closures")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_static ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub exec static Y: u64 = 4;
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` can only be used on functions and closures")
+}
+
+test_verify_one_file_with_options! {
+    // an attribute that only the compilation sees on a foreign function is not trusted
+    #[test] fip_strict_foreign_fn_compiled_only ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        unsafe extern "C" {
+            #[verifier::external]
+            #[cfg_attr(not(verus_keep_ghost_body), verifier::fip(strict))]
+            pub fn ext_step(n: u64);
+        }
+
+        verus! {
+        pub assume_specification[ ext_step ](n: u64) allocates 0 deallocates 0;
+
+        #[verifier::fip(strict)]
+        pub fn f(n: u64) {
+            unsafe { ext_step(n) }
+        }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "it calls `ext_step`, which is not `#[verifier::fip(strict)]`")
+}
+
+// a strict function of another crate with `#[verus_spec(with ..)]`: the compiled function is the
+// one called, and its crate checked it against the verified copy
+#[test]
+fn fip_strict_with_across_crates() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let pre = format!("{}\nuse vstd::prelude::*;\n", FEATURE_PRELUDE);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{pre}#[verus_spec(with Ghost(w): Ghost<u32>)]
+#[verifier::fip(strict)]
+#[allow(unused_variables)]
+pub fn f(x: u64) -> u64 {{ x }}
+"
+        ),
+    )
+    .expect("write");
+    let lib = run_verus_raw(
+        &["--crate-type=lib", "lib.rs", "-V", "alloc-check", "--compile", "--export", "lib.vir"],
+        dir,
+    );
+    assert!(lib.status.success(), "lib:\n{}", String::from_utf8_lossy(&lib.stderr));
+    std::fs::write(
+        dir.join("user.rs"),
+        format!(
+            "{pre}#[verus_spec]
+#[verifier::fip(strict)]
+pub fn g(x: u64) -> u64 {{ proof_with!(Ghost(1u32)); lib::f(x) }}
+"
+        ),
+    )
+    .expect("write");
+    let out = run_verus_raw(
+        &[
+            "--crate-type=lib",
+            "user.rs",
+            "-V",
+            "alloc-check",
+            "--compile",
+            "--import",
+            "lib=lib.vir",
+            "--extern",
+            "lib=liblib.rlib",
+        ],
+        dir,
+    );
+    assert!(out.status.success(), "user:\n{}", String::from_utf8_lossy(&out.stderr));
 }

@@ -538,7 +538,7 @@ FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되
 
 `-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 이 속성을 붙이면 오류입니다. `#[verus_spec]` 없이
 `verus!` 밖에 있거나, `#[verifier::external]`이 붙었거나, external·`external_body` 항목 안에 있는 경우입니다. 함수가
-아닌 항목에 붙이면 언제나 오류입니다.
+아닌 항목(struct, impl, `const` 등)에 붙이면 언제나 오류입니다.
 
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
