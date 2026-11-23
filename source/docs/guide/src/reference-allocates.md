@@ -69,6 +69,28 @@ allocates 1, `Vec::push` allocates 1 only when the vector is full, `Vec::with_ca
 allocates nothing, ...), and the bounds of `external_body` functions, which are trusted like
 their other specifications.
 
+The counts are those of the compiled program, while Verus verifies the crate and compiles it in two
+separate passes. The two must therefore have the same code. With `-V alloc-check` (unless
+`--no-verify`, and not for `--is-vstd` or `--is-core`):
+* The crate's own source may not name the cfg `verus_keep_ghost_body`, which Verus sets only when it
+  verifies the crate: not in `#[cfg(..)]`, `#[cfg_attr(..)]`, `cfg!(..)`, a `macro_rules!`, nor
+  anywhere else outside comments and strings. Nor may it enable the feature
+  `macro_metavar_expr_concat`, whose `${concat(..)}` can build the name from pieces. Likewise for
+  `verus_no_vstd`, which with `--no-vstd` Verus sets only when it compiles the crate. The crate's
+  source is its files, read the way rustc reads them (this includes files read by `include_str!`,
+  `include_bytes!` and `#[debugger_visualizer]`, so such a file is rejected too if, read as Rust, it
+  names the cfg), and the `-Z crate-attr` arguments. For code that only Verus builds, use
+  `verus_keep_ghost`, which is set for both.
+* Nor may the crate's source use what can tell the items apart that Verus's macros put in only one
+  of the two (spec and proof functions, and items of their own, such as `_VERUS_VERIFIED_f` for a
+  `#[verus_spec(with ..)]` function `f`): `cfg_accessible`, and names that start with `VERUS_`,
+  `_VERUS_`, `__VERUS_` or `_verus_`, which are reserved for what Verus's macros generate.
+* The crate root must be a file, not standard input.
+* The compilation may read only what the verification read: each time it reads a file of the
+  crate, the contents must be ones that the verification read from that file. Its cfgs must be the
+  same, apart from the two above. (The verification may read more files, such as one that an
+  `include!` in a proof function reads.)
+
 ## What a bound means
 
 `allocates e` bounds, for one call that **returns normally**, the number of calls to the
@@ -563,7 +585,8 @@ may carry only one of `#[verifier::fip]` and `#[verifier::fip(strict)]`.
 
 The attribute is checked partly by the verification and partly on the compiled program, so both
 must see it on the same functions and closures, with the same kind. An attribute that only one of
-them sees, such as one behind `cfg_attr(verus_keep_ghost_body, ..)`, is an error.
+them sees is an error. (In the crate's own source, the ways to do this are rejected, see "Checking
+bounds"; another crate's macro can still do it.)
 
 With `-V alloc-check` the attribute is an error on a function or closure that Verus does not verify:
 outside `verus!` without `#[verus_spec]`, marked `#[verifier::external]`, or inside an external or
@@ -1016,7 +1039,18 @@ What `-V alloc-check` trusts:
   then trusts its own `external_body` drops and opaque types; `--no-cheating` rejects
   `--is-vstd`);
 * vstd's impls of the operator markers (`FipAdd`, `FipOrd`, ...) for the primitive types;
-* the toolchain's std (its trusted drops and opaque types).
+* the toolchain's std (its trusted drops and opaque types);
+* Verus's own macros (`verus!`, `#[verus_spec]` and the others of `verus_builtin_macros`, and
+  vstd's), which put different code in the verification and the compilation on purpose (the
+  ghost code, and what only the verification needs);
+* that the tokens which other crates' macros put in the crate are the same for the verification
+  and the compilation. Only the crate's own source is checked for `verus_keep_ghost_body` (see
+  "Checking bounds"); a macro of another crate can test it as well, and a procedural macro can
+  tell the two apart without naming it. What such a macro could make differ is covered only in
+  part: the compilation may read only what was verified and must have the same cfgs,
+  `#[verifier::fip]` is compared between the two, and implicit drops are checked on the compiled
+  program, but calls are counted from what was verified (a call that only the compiled program has
+  is not seen).
 
 Known limitations, all of which make Verus reject programs or give weaker bounds (they are not
 unsound):

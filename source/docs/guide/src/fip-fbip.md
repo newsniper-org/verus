@@ -50,8 +50,11 @@ and drops are placed). So they see drops that do not appear in the source.
 
 The attribute is therefore read twice: by the verification, which checks calls and allocations,
 and by the compilation, which checks drops and the stack. Both must see it on the same functions
-and closures, with the same kind. An attribute that only one of them sees is an error, for example
-one behind `cfg_attr(verus_keep_ghost_body, ..)`: Verus sets that cfg only for the verification.
+and closures, with the same kind. An attribute that only one of them sees is an error. (Verus sets
+the cfg `verus_keep_ghost_body` only for the verification. With `-V alloc-check` the crate's own
+source may not name it at all, nor use the other ways to tell the two apart, so that the verified
+code and the compiled program are the same; see
+[the reference](./reference-allocates.md#checking-bounds--v-alloc-check).)
 
 With `-V alloc-check`, `#[verifier::fip]` on a function or closure that Verus does not verify is an
 error, since neither check would cover it. That is a function outside `verus!` without

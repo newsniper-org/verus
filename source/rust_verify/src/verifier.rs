@@ -372,6 +372,12 @@ pub struct Verifier {
     /// `fip(strict)`: `fip_mir` checks that the compiled program has the same attribute on
     /// exactly these bodies (an attribute behind `cfg_attr` may be seen by only one of the two)
     pub(crate) alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
+    /// -V alloc-check: what the verification was built from (see `VerifiedInputs`); the
+    /// compilation must be built from the same, checked in `driver`. (None when the crate is not
+    /// checked so.)
+    pub(crate) alloc_verified_inputs: Option<VerifiedInputs>,
+    /// -V alloc-check: what the verification's file loader read (see `RecordingFileLoader`)
+    pub(crate) alloc_file_reads: Option<crate::file_loader::FileReads>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -587,6 +593,8 @@ impl Verifier {
             alloc_local_dealloc_bounded_fns: Vec::new(),
             alloc_local_drop_rule_fns: Vec::new(),
             alloc_local_fip_fns: Vec::new(),
+            alloc_verified_inputs: None,
+            alloc_file_reads: None,
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -644,6 +652,8 @@ impl Verifier {
             alloc_local_dealloc_bounded_fns: self.alloc_local_dealloc_bounded_fns.clone(),
             alloc_local_drop_rule_fns: self.alloc_local_drop_rule_fns.clone(),
             alloc_local_fip_fns: self.alloc_local_fip_fns.clone(),
+            alloc_verified_inputs: self.alloc_verified_inputs.clone(),
+            alloc_file_reads: self.alloc_file_reads.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -3201,6 +3211,12 @@ fn lower_to_hir<'tcx>(
 
 impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
     fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+        if alloc_check_compares_inputs(&self.verifier.args) && config.file_loader.is_none() {
+            let reads = crate::file_loader::FileReads::default();
+            config.file_loader =
+                Some(Box::new(crate::file_loader::RecordingFileLoader { reads: reads.clone() }));
+            self.verifier.alloc_file_reads = Some(reads);
+        }
         if let Some(mut dep_tracker) = self.verifier.dep_tracker.take() {
             let import_dep_if_present = &self
                 .verifier
@@ -3330,6 +3346,52 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
             };
         let time_import1 = Instant::now();
         self.verifier.time_import = time_import1 - time_import0;
+        if alloc_check_compares_inputs(&self.verifier.args) {
+            // -V alloc-check counts the allocations and deallocations of the compiled program from
+            // what Verus verified, so the two must have the same code. A cfg that Verus sets for
+            // only one of them (`#[cfg(..)]`, `#[cfg_attr(..)]` or `cfg!(..)` on it) would let them
+            // differ; the drops are checked on the compiled program, but the calls (to `Box::new`,
+            // `drop`, other functions) only on what was verified. The crate's own source must not
+            // name such a cfg, nor build names with `${concat(..)}`, nor use what can tell apart the
+            // items that Verus's macros put in only one of them (see
+            // `alloc_check_forbidden_idents`). (Verus's own macros, `verus!`, `#[verus_spec]` and
+            // vstd's, do tell the two apart, and are trusted; the tokens that other crates' macros
+            // produce are not seen here.) The compilation must then read only what the verification
+            // read, with the same cfgs: see `VerifiedInputs`.
+            let dcx = compiler.sess.dcx();
+            let mut rejected = false;
+            // (the compilation reads the crate root again: it must be a file, not stdin)
+            if !matches!(compiler.sess.io.input, rustc_session::config::Input::File(_)) {
+                dcx.err(
+                    "-V alloc-check: the crate root must be a file (Verus reads it once to verify the crate and once more to compile it)",
+                );
+                rejected = true;
+            }
+            for feature in tcx.features().enabled_lang_features() {
+                if feature.gate_name == rustc_span::sym::macro_metavar_expr_concat {
+                    dcx.span_err(
+                        feature.attr_sp,
+                        "-V alloc-check: `${concat(..)}` can build an identifier from pieces, such as the name of a cfg that Verus sets for only one of the verification and the compilation, which -V alloc-check does not allow the crate's source to name; -V alloc-check does not allow the feature `macro_metavar_expr_concat`",
+                    );
+                    rejected = true;
+                }
+            }
+            // (the compilation reads the files of `#[debugger_visualizer]` during its analysis, so
+            // read them here too, for the files to compare)
+            let _ = tcx.debugger_visualizers(LOCAL_CRATE);
+            for (span, ident, message) in
+                local_source_mentions(tcx, &alloc_check_forbidden_idents(self.verifier.args.vstd))
+            {
+                dcx.span_err(span, message.replace("{ident}", &ident));
+                rejected = true;
+            }
+            if rejected {
+                self.verifier.encountered_vir_error = true;
+                return rustc_driver::Compilation::Stop;
+            }
+            self.verifier.alloc_verified_inputs =
+                Some(VerifiedInputs::of(tcx, self.verifier.alloc_file_reads.as_ref()));
+        }
         if self.verifier.args.alloc_check {
             // -V alloc-check trusts vstd by its crate (its opaque types, `external_body` drops
             // and std specifications), so an imported crate named `vstd` must be one that was
@@ -3619,4 +3681,283 @@ impl VerifierCallbacksEraseMacro {
             );
         }
     }
+}
+
+/// -V alloc-check: whether the verification and the compilation of the crate are compared (see
+/// `VerifiedInputs`): not when nothing is verified, nor for vstd or core
+pub(crate) fn alloc_check_compares_inputs(args: &crate::config::Args) -> bool {
+    args.alloc_check
+        && !args.no_verify
+        && !matches!(args.vstd, crate::config::Vstd::IsVstd | crate::config::Vstd::IsCore)
+}
+
+/// -V alloc-check: the identifiers that the crate's own source may not use (exactly, or as a
+/// prefix), with the error message (`{ident}` stands for the identifier). They are the cfgs that
+/// Verus sets for only one of the verification and the compilation, and what can observe the items
+/// that Verus's macros put in only one of them (spec and proof functions, the verified twins of
+/// `#[verus_spec(with ..)]` functions, ...): `cfg_accessible`, and the names of those items.
+fn alloc_check_forbidden_idents(vstd: crate::config::Vstd) -> Vec<(&'static str, bool, String)> {
+    let cfg = |name: &str, when: &str, hint: &str| {
+        format!(
+            "-V alloc-check: Verus sets `{name}` {when}, so code that tests it can differ between what is verified and what is compiled; -V alloc-check does not allow the crate's source to name it{hint}"
+        )
+    };
+    let mut forbidden = vec![(
+        "verus_keep_ghost_body",
+        false,
+        cfg(
+            "verus_keep_ghost_body",
+            "only when it verifies the crate, not when it compiles it",
+            " (for code that only Verus builds, use `verus_keep_ghost`, which is set for both)",
+        ),
+    )];
+    if vstd == crate::config::Vstd::NoVstd {
+        forbidden.push((
+            "verus_no_vstd",
+            false,
+            cfg(
+                "verus_no_vstd",
+                "(with `--no-vstd`) only when it compiles the crate, not when it verifies it",
+                "",
+            ),
+        ));
+    }
+    forbidden.push((
+        "cfg_accessible",
+        false,
+        "-V alloc-check: `cfg_accessible` keeps or removes code by whether a path exists, and Verus's macros put some items (such as spec and proof functions) only in what is verified, so code that uses it can differ between what is verified and what is compiled; -V alloc-check does not allow the crate's source to name it".to_string(),
+    ));
+    for prefix in ["VERUS_", "_VERUS_", "__VERUS_", "_verus_"] {
+        forbidden.push((
+            prefix,
+            true,
+            "-V alloc-check: `{ident}` has a prefix that is reserved for the names that Verus's macros generate, some of which exist only in what is verified (such as `_VERUS_VERIFIED_f`, the verified twin of a `#[verus_spec(with ..)]` function `f`), so a use of the name can mean something else in the compiled program; -V alloc-check does not allow the crate's source to use names that start with `VERUS_`, `_VERUS_`, `__VERUS_` or `_verus_`".to_string(),
+        ));
+    }
+    forbidden
+}
+
+/// The crate's own source files: the ones it is parsed from (the crate root, its module files and
+/// the files it `include!`s, also those read by `include_str!`, `include_bytes!` and
+/// `#[debugger_visualizer]`, which the source map does not tell apart) and the crate attributes given
+/// with `-Z crate-attr`. (Not the `--cfg` arguments, which Verus gives differently to the
+/// verification and the compilation: see `VerifiedInputs::cfgs`.)
+pub(crate) fn is_local_source_file(sf: &rustc_span::SourceFile) -> bool {
+    sf.cnum == LOCAL_CRATE
+        && matches!(sf.name, rustc_span::FileName::Real(_) | rustc_span::FileName::CliCrateAttr(_))
+}
+
+/// -V alloc-check: what a compile of the crate was built from, apart from the files of other crates
+/// and what Verus gives differently to the verification and the compilation. The compilation's
+/// must equal the verification's, except that the verification may read more files (such as one
+/// that an `include!` reads in a proof function, which the compilation does not have).
+#[derive(Clone, Debug)]
+pub(crate) struct VerifiedInputs {
+    /// the crate's own source files (see `is_local_source_file`), by name and the hash of their
+    /// contents (files that are not UTF-8 text, as `include_bytes!` can read, are compared by name
+    /// only: the source map keeps no contents for them)
+    pub(crate) files: Vec<(String, Vec<u8>)>,
+    /// the cfgs (from `--cfg`, the target and the other options; arguments in `@` files are read
+    /// again for each), without the two that Verus sets for only one (see
+    /// `alloc_check_forbidden_idents`)
+    pub(crate) cfgs: Vec<(String, Option<String>)>,
+    /// each read of a file of the crate's own source (see `RecordingFileLoader`), by path and the
+    /// hash of the contents it gave
+    pub(crate) reads: Vec<(String, Vec<u8>)>,
+}
+
+impl VerifiedInputs {
+    pub(crate) fn of(
+        tcx: TyCtxt<'_>,
+        reads: Option<&crate::file_loader::FileReads>,
+    ) -> VerifiedInputs {
+        let files = tcx
+            .sess
+            .source_map()
+            .files()
+            .iter()
+            .filter(|sf| is_local_source_file(sf))
+            .map(|sf| (format!("{:?}", sf.name), sf.src_hash.hash_bytes().to_vec()))
+            .collect();
+        let mut cfgs: Vec<(String, Option<String>)> = tcx
+            .sess
+            .config
+            .iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "verus_keep_ghost_body" | "verus_no_vstd"))
+            .map(|(name, value)| (name.to_string(), value.map(|v| v.to_string())))
+            .collect();
+        cfgs.sort();
+        let local_paths: HashSet<std::path::PathBuf> = tcx
+            .sess
+            .source_map()
+            .files()
+            .iter()
+            .filter(|sf| is_local_source_file(sf))
+            .filter_map(|sf| match &sf.name {
+                rustc_span::FileName::Real(real) => real.local_path().map(|p| p.to_path_buf()),
+                _ => None,
+            })
+            .collect();
+        let mut reads: Vec<(String, Vec<u8>)> = reads
+            .map(|reads| {
+                reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(path, _)| local_paths.contains(path))
+                    .map(|(path, hash)| (path.display().to_string(), hash.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        reads.sort();
+        reads.dedup();
+        VerifiedInputs { files, cfgs, reads }
+    }
+
+    /// The differences of `compiled` from `self`, in words
+    pub(crate) fn differences(&self, compiled: &VerifiedInputs, tcx: TyCtxt<'_>) -> Vec<String> {
+        let mut differences = Vec::new();
+        let verified: std::collections::HashMap<&str, &[u8]> =
+            self.files.iter().map(|(name, hash)| (name.as_str(), hash.as_slice())).collect();
+        let source_map = tcx.sess.source_map();
+        for sf in source_map.files().iter().filter(|sf| is_local_source_file(sf)) {
+            if verified.get(format!("{:?}", sf.name).as_str()) != Some(&sf.src_hash.hash_bytes()) {
+                differences.push(format!(
+                    "`{}` (changed after Verus read it, or read only for the compilation)",
+                    source_map.filename_for_diagnostics(&sf.name)
+                ));
+            }
+        }
+        let verified_reads: HashSet<&(String, Vec<u8>)> = self.reads.iter().collect();
+        let mut changed: Vec<&str> = compiled
+            .reads
+            .iter()
+            .filter(|read| !verified_reads.contains(read))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        changed.dedup();
+        for path in changed {
+            differences.push(format!(
+                "`{path}` (read for the compilation with contents that were not read for the verification)"
+            ));
+        }
+        if self.cfgs != compiled.cfgs {
+            let show = |cfgs: &Vec<(String, Option<String>)>,
+                        other: &Vec<(String, Option<String>)>| {
+                cfgs.iter()
+                    .filter(|c| !other.contains(c))
+                    .map(|(name, value)| match value {
+                        Some(value) => format!("`{name} = {value:?}`"),
+                        None => format!("`{name}`"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            differences.push(format!(
+                "other cfgs (only for the verification: [{}]; only for the compilation: [{}])",
+                show(&self.cfgs, &compiled.cfgs),
+                show(&compiled.cfgs, &self.cfgs)
+            ));
+        }
+        differences
+    }
+}
+
+/// The places in the crate's own source files (see `is_local_source_file`) that use an identifier
+/// that `forbidden` (see `alloc_check_forbidden_idents`) names, exactly or as a prefix, so not in a
+/// comment or a string; with the identifier and the message. Any such identifier counts, wherever it
+/// is (also in a macro that is never used): it can only be used by spelling it (or by building it,
+/// see `macro_metavar_expr_concat` above).
+///
+/// The files are tokenized by rustc's own lexer, with the crate's edition, in each of the ways
+/// that rustc reads a file (with or without a shebang line and frontmatter stripped: the crate root,
+/// a module file, an `include!` in item or expression position), and what any of them finds counts.
+/// A way of reading that fails to tokenize the file (an error, also a fatal one) is not one in which
+/// rustc could have used it.
+fn local_source_mentions(
+    tcx: TyCtxt<'_>,
+    forbidden: &[(&'static str, bool, String)],
+) -> Vec<(Span, String, String)> {
+    use rustc_ast::tokenstream::{TokenStream, TokenTree};
+    use rustc_parse::lexer::StripTokens;
+
+    fn walk(
+        stream: &TokenStream,
+        forbidden: &[(&'static str, bool, String)],
+        found: &mut Vec<(rustc_span::BytePos, rustc_span::BytePos, usize, String)>,
+    ) {
+        for tree in stream.iter() {
+            match tree {
+                TokenTree::Token(token, _) => {
+                    if let Some((ident, _)) = token.ident() {
+                        let name = ident.name.as_str();
+                        if let Some(k) = forbidden.iter().position(|(f, prefix, _)| {
+                            if *prefix { name.starts_with(f) } else { name == *f }
+                        }) {
+                            found.push((ident.span.lo(), ident.span.hi(), k, name.to_string()));
+                        }
+                    }
+                }
+                TokenTree::Delimited(_, _, _, inner) => walk(inner, forbidden, found),
+            }
+        }
+    }
+
+    let files: Vec<std::sync::Arc<rustc_span::SourceFile>> = tcx
+        .sess
+        .source_map()
+        .files()
+        .iter()
+        .filter(|sf| is_local_source_file(sf))
+        .cloned()
+        .collect();
+    // (a separate parse session with its own source map, which says nothing)
+    let source_map = std::sync::Arc::new(rustc_span::source_map::SourceMap::new(
+        rustc_span::source_map::FilePathMapping::empty(),
+    ));
+    let dcx = rustc_errors::DiagCtxt::new(Box::new(rustc_errors::emitter::SilentEmitter));
+    let psess = rustc_session::parse::ParseSess::with_dcx(dcx, source_map);
+    let mut mentions: std::collections::BTreeMap<
+        (rustc_span::BytePos, rustc_span::BytePos),
+        (usize, String),
+    > = std::collections::BTreeMap::new();
+    for sf in files.iter() {
+        let Some(src) = sf.src.as_ref() else { continue };
+        for strip in
+            [StripTokens::ShebangAndFrontmatter, StripTokens::Shebang, StripTokens::Nothing]
+        {
+            let lexed = rustc_span::fatal_error::catch_fatal_errors(|| {
+                match rustc_parse::new_parser_from_source_str(
+                    &psess,
+                    rustc_span::FileName::anon_source_code(src),
+                    src.to_string(),
+                    strip,
+                ) {
+                    Ok(mut parser) => Some(parser.parse_tokens()),
+                    Err(diags) => {
+                        for diag in diags {
+                            diag.cancel();
+                        }
+                        None
+                    }
+                }
+            });
+            let Ok(Some(stream)) = lexed else { continue };
+            let mut found = Vec::new();
+            walk(&stream, forbidden, &mut found);
+            for (lo, hi, k, ident) in found {
+                // (from the position in the separate source map to the one in the crate's: the
+                // separate one normalizes `src` once more, so through its record of what it changed)
+                let original = |pos: rustc_span::BytePos| {
+                    let at = psess.source_map().lookup_byte_offset(pos);
+                    sf.start_pos + rustc_span::BytePos(at.sf.original_relative_byte_pos(pos).0)
+                };
+                mentions.insert((original(lo), original(hi)), (k, ident));
+            }
+        }
+    }
+    mentions
+        .into_iter()
+        .map(|((lo, hi), (k, ident))| (Span::with_root_ctxt(lo, hi), ident, forbidden[k].2.clone()))
+        .collect()
 }

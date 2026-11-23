@@ -139,12 +139,22 @@ struct CompilerCallbacksEraseMacro {
     pub alloc_local_drop_rule_fns: Vec<String>,
     /// see `Verifier::alloc_local_fip_fns`
     pub alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
+    /// see `Verifier::alloc_verified_inputs`
+    pub alloc_verified_inputs: Option<crate::verifier::VerifiedInputs>,
+    /// what this compilation's file loader read, when compared with the verification's
+    pub alloc_file_reads: Option<crate::file_loader::FileReads>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
     // Adding `override_stability` and `stable_attr` functions is a hacky solution specifically for verifying core,
     // to fix an issue with stability attributes.
     fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+        if self.alloc_verified_inputs.is_some() && config.file_loader.is_none() {
+            let reads = crate::file_loader::FileReads::default();
+            config.file_loader =
+                Some(Box::new(crate::file_loader::RecordingFileLoader { reads: reads.clone() }));
+            self.alloc_file_reads = Some(reads);
+        }
         if self.override_stability {
             config.override_queries = Some(|_session, providers| {
                 providers.queries.hir_attr_map = |tcx, owner_id| {
@@ -172,6 +182,21 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
             && tcx.needs_hir_hash()
         {
             self.crate_hash = Some(tcx.crate_hash(rustc_hir::def_id::LOCAL_CRATE).as_u128());
+        }
+        // -V alloc-check: the compiled program must be built from what was verified: the same
+        // source files of the crate (one that is changed in between, or that only the compilation
+        // reads, as through a macro that tells the two apart, would make them differ; the
+        // verification may read more, as an `include!` in code that is erased) and the same cfgs
+        if let Some(verified) = &self.alloc_verified_inputs {
+            let compiled = crate::verifier::VerifiedInputs::of(tcx, self.alloc_file_reads.as_ref());
+            let differences = verified.differences(&compiled, tcx);
+            if !differences.is_empty() {
+                tcx.dcx().err(format!(
+                    "-V alloc-check: the compiled program would be built from other input than the one Verus verified: {}",
+                    differences.join("; ")
+                ));
+                return rustc_driver::Compilation::Stop;
+            }
         }
         // -V alloc-check, `#[verifier::fip]`: the drops of the compiled program (see `fip_mir`)
         if self.alloc_check {
@@ -229,6 +254,7 @@ pub(crate) fn run_with_erase_macro_compile(
     )>,
     alloc_local_drop_rule_fns: Vec<String>,
     alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
+    alloc_verified_inputs: Option<crate::verifier::VerifiedInputs>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
@@ -243,6 +269,8 @@ pub(crate) fn run_with_erase_macro_compile(
         alloc_local_dealloc_bounded_fns,
         alloc_local_drop_rule_fns,
         alloc_local_fip_fns,
+        alloc_verified_inputs,
+        alloc_file_reads: None,
     };
     rustc_args.extend(["--cfg", "verus_only", "--cfg", "verus_keep_ghost"].map(|s| s.to_string()));
     if matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore) {
@@ -461,6 +489,7 @@ pub fn run(
             verifier.alloc_local_dealloc_bounded_fns.clone(),
             verifier.alloc_local_drop_rule_fns.clone(),
             verifier.alloc_local_fip_fns.clone(),
+            verifier.alloc_verified_inputs.clone(),
         )
     };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built

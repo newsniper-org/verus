@@ -579,6 +579,15 @@ pub fn run_verus(
 }
 
 pub fn run_verus_raw(args: &[&str], dir: &std::path::Path) -> std::process::Output {
+    run_verus_raw_with_stdin(args, dir, None)
+}
+
+/// `run_verus_raw`, giving `stdin` (if any) as the standard input
+pub fn run_verus_raw_with_stdin(
+    args: &[&str],
+    dir: &std::path::Path,
+    stdin: Option<&[u8]>,
+) -> std::process::Output {
     if std::env::var("VERUS_IN_VARGO").is_err() {
         panic!("not running in vargo, read the README for instructions");
     }
@@ -601,16 +610,23 @@ pub fn run_verus_raw(args: &[&str], dir: &std::path::Path) -> std::process::Outp
         });
     let z3 = path::absolute(z3).expect("Failed to find absolute path for Z3 executable");
 
-    std::process::Command::new(bin)
+    let mut command = std::process::Command::new(bin);
+    command
         .current_dir(dir)
         .env("VERUS_Z3_PATH", z3)
         .args(args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("could not execute verus")
-        .wait_with_output()
-        .expect("raw verus wait failed")
+        .stderr(std::process::Stdio::piped());
+    if stdin.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    }
+    let mut child = command.spawn().expect("could not execute verus");
+    if let Some(input) = stdin {
+        use std::io::Write;
+        let mut pipe = child.stdin.take().expect("stdin");
+        pipe.write_all(input).expect("write stdin");
+    }
+    child.wait_with_output().expect("raw verus wait failed")
 }
 
 pub fn run_cargo_verus(args: &[&str], dir: &std::path::Path) -> std::process::Output {

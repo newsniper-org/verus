@@ -65,6 +65,25 @@ fn boxes(n: usize) -> (r: Vec<Box<usize>>)
   `Vec::with_capacity(0)`는 0입니다.
 * `external_body` 함수의 상한입니다. 이 상한은 그 함수의 다른 명세와 마찬가지로 신뢰됩니다.
 
+세는 것은 컴파일된 프로그램의 횟수인데, Verus는 crate를 검증하는 단계와 컴파일하는 단계를 따로 거칩니다.
+그래서 둘의 코드가 같아야 합니다. `-V alloc-check`에서는(`--no-verify`가 아니고, `--is-vstd`나
+`--is-core`가 아니면) 다음을 지켜야 합니다.
+* crate 자신의 소스가 cfg `verus_keep_ghost_body`를 쓸 수 없습니다. Verus는 이 cfg를 검증할 때만 켭니다.
+  `#[cfg(..)]`, `#[cfg_attr(..)]`, `cfg!(..)`, `macro_rules!` 등 주석과 문자열 밖이면 어디든 마찬가지입니다.
+  이 이름을 조각으로 만들 수 있는 `${concat(..)}`의 feature `macro_metavar_expr_concat`도 켤 수 없습니다.
+  `verus_no_vstd`도 같습니다. `--no-vstd`에서 Verus는 이것을 컴파일할 때만 켭니다. crate의 소스란 rustc가
+  읽는 방식으로 읽은 그 파일들과 `-Z crate-attr` 인자입니다. `include_str!`, `include_bytes!`,
+  `#[debugger_visualizer]`가 읽는 파일도 들어가므로, 그런 파일도 Rust로 읽었을 때 이 cfg 이름이 나오면
+  거부됩니다. Verus가 빌드할 때만 넣을 코드에는 둘 다에서 켜지는 `verus_keep_ghost`를 쓰십시오.
+* Verus의 매크로가 둘 중 한쪽에만 넣는 항목을 구별할 수 있는 것도 crate의 소스에 쓸 수 없습니다. 그런
+  항목은 spec·proof 함수와 매크로 자신의 항목(`#[verus_spec(with ..)]` 함수 `f`에 대한
+  `_VERUS_VERIFIED_f` 등)입니다. 쓸 수 없는 것은 `cfg_accessible`, 그리고 Verus의 매크로가 만드는
+  이름에 예약된 `VERUS_`, `_VERUS_`, `__VERUS_`, `_verus_`로 시작하는 이름입니다.
+* crate 루트는 표준 입력이 아니라 파일이어야 합니다.
+* 컴파일은 검증이 읽은 것만 읽을 수 있습니다. crate의 파일을 읽을 때마다, 그 내용은 검증이 그 파일에서
+  읽은 내용 가운데 하나여야 합니다. cfg도 위의 둘을 빼면 같아야 합니다. (검증이 파일을 더 많이 읽는 것은
+  괜찮습니다. proof 함수 안의 `include!`가 읽는 파일 등.)
+
 ## 상한의 의미
 
 `allocates e`는 **정상 반환**하는 호출 한 번 동안 Rust *추상 기계*, 곧 소스 프로그램이 하는
@@ -534,7 +553,8 @@ FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되
 `-V alloc-check`가 필요하며, 한 함수에는 `#[verifier::fip]`와 `#[verifier::fip(strict)]` 중 하나만 붙일 수 있습니다.
 
 이 속성은 일부를 검증이, 일부를 컴파일된 프로그램이 검사합니다. 그래서 둘이 같은 함수와 클로저에서 같은 종류로
-이 속성을 봐야 합니다. `cfg_attr(verus_keep_ghost_body, ..)` 뒤에 둔 것처럼 한쪽만 보는 속성은 오류입니다.
+이 속성을 봐야 합니다. 한쪽만 보는 속성은 오류입니다. (crate 자신의 소스에서는 이렇게 만드는 방법들을
+거부합니다. "상한 검사" 참고. 다른 crate의 매크로는 여전히 만들 수 있습니다.)
 
 `-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 이 속성을 붙이면 오류입니다. `#[verus_spec]` 없이
 `verus!` 밖에 있거나, `#[verifier::external]`이 붙었거나, external·`external_body` 항목 안에 있는 경우입니다. 함수가
@@ -942,6 +962,14 @@ overflow가 unwind할 수 있는 `panic!`이기 때문입니다. 그래서 실�
   `external_body` drop과 불투명 타입을 신뢰하며, `--no-cheating`은 `--is-vstd`를 거부합니다)
 * vstd가 기본 타입에 대해 제공하는 연산자 표시 trait(`FipAdd`, `FipOrd` 등)의 impl
 * toolchain의 std(신뢰하는 drop과 불투명 타입)
+* Verus 자신의 매크로(`verus!`, `#[verus_spec]` 등 `verus_builtin_macros`의 매크로와 vstd의 매크로).
+  이들은 검증과 컴파일에 일부러 다른 코드를 넣습니다(ghost 코드, 검증에만 필요한 것)
+* 다른 crate의 매크로가 이 crate에 넣는 토큰이 검증과 컴파일에서 같다는 점. `verus_keep_ghost_body`를
+  쓰는지는 crate 자신의 소스만 검사합니다("상한 검사" 참고). 다른 crate의 매크로도 이 cfg를 시험할 수
+  있고, 절차적 매크로는 이 이름을 쓰지 않고도 둘을 구별할 수 있습니다. 그런 매크로가 갈라 놓을 수 있는
+  것은 일부만 막습니다. 컴파일은 검증이 읽은 것만 읽을 수 있고 cfg도 같아야 하며, `#[verifier::fip]`은
+  두 쪽을 맞대어 보고, 암묵적 drop은 컴파일된 프로그램에서 검사합니다. 하지만 호출은 검증한 코드에서
+  셉니다(컴파일된 프로그램에만 있는 호출은 보지 못합니다).
 
 알려진 한계는 다음과 같습니다. 모두 프로그램을 거부하거나 더 약한 상한을 주는 쪽이며, 불건전하지는 않습니다.
 * `dyn` 값이나 불투명 `impl Trait` 값의 drop

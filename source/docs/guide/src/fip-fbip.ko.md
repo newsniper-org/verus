@@ -47,8 +47,10 @@ drop 검사와 스택 검사는 컴파일된 프로그램(유령 코드를 지�
 보이지 않는 drop도 봅니다.
 
 즉 이 속성은 두 번 읽힙니다. 검증이 호출과 할당을 검사할 때 한 번, 컴파일이 drop과 스택을 검사할 때 한 번입니다.
-둘은 같은 함수와 클로저에서 같은 종류로 이 속성을 봐야 합니다. 한쪽만 보는 속성은 오류입니다. 예를 들어
-`cfg_attr(verus_keep_ghost_body, ..)` 뒤에 둔 속성이 그렇습니다. Verus는 이 cfg를 검증할 때만 켭니다.
+둘은 같은 함수와 클로저에서 같은 종류로 이 속성을 봐야 합니다. 한쪽만 보는 속성은 오류입니다. (Verus는
+cfg `verus_keep_ghost_body`를 검증할 때만 켭니다. 검증한 코드와 컴파일된 프로그램이 같도록, `-V alloc-check`에서는
+crate 자신의 소스가 이 cfg를 아예 쓸 수 없고, 둘을 구별하는 다른 방법도 쓸 수 없습니다.
+[레퍼런스](./reference-allocates.ko.md#상한-검사--v-alloc-check) 참고.)
 
 `-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 붙은 `#[verifier::fip]`이 오류입니다. 두 검사 어느
 쪽도 그것을 다루지 않기 때문입니다. `#[verus_spec]` 없이 `verus!` 밖에 있는 함수, `#[verifier::external]`이

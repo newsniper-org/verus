@@ -1266,7 +1266,6 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "which may drop a value of type `T`, whose destructor is not known here")
 }
 
-
 test_verify_one_file_with_options! {
     // `&mut v[i]` calls `<Vec<T> as IndexMut<usize>>::index_mut`, which drops nothing; writing
     // over the element (`v[0] = x`) still drops the old one in this function, which is rejected
@@ -3565,7 +3564,13 @@ test_verify_one_file_with_options! {
 // The verification and the compiled program must see `#[verifier::fip]` on the same functions and
 // closures, with the same kind: `cfg_attr` on a cfg that only one of the two sets (Verus sets
 // `verus_keep_ghost_body` only for the verification) would make one trust what the other did not
-// check (portable-fip, 2026-11-23)
+// check (portable-fip, 2026-11-23). Since the crate's own source may not name that cfg at all under
+// -V alloc-check (below, 2026-11-23, second round), the cases written in the crate's source are
+// rejected for that; the agreement itself is checked with the same cases coming from a macro of
+// another crate (`verify_with_cfg_attr_macros`, below).
+const KEEP_GHOST_BODY_NAMED: &str =
+    "Verus sets `verus_keep_ghost_body` only when it verifies the crate, not when it compiles it";
+
 test_verify_one_file_with_options! {
     #[test] fip_attr_only_for_verification ["vstd", "-V alloc-check"] => verus_code! {
         use vstd::prelude::*;
@@ -3582,7 +3587,7 @@ test_verify_one_file_with_options! {
         {
             f(b)
         }
-    } => Err(err) => assert_vir_error_msg(err, "this function was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it")
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
 }
 
 test_verify_one_file_with_options! {
@@ -3593,7 +3598,7 @@ test_verify_one_file_with_options! {
         pub fn f(x: u64) -> u64 {
             x
         }
-    } => Err(err) => assert_vir_error_msg(err, "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it as `#[verifier::fip]`")
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
 }
 
 test_verify_one_file_with_options! {
@@ -3607,7 +3612,7 @@ test_verify_one_file_with_options! {
         {
             if n == 0 { 0 } else { sum(n - 1).wrapping_add(n) }
         }
-    } => Err(err) => assert_vir_error_msg(err, "this function was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it")
+    } => Err(err) => assert_vir_error_msgs(err, &[KEEP_GHOST_BODY_NAMED, KEEP_GHOST_BODY_NAMED])
 }
 
 test_verify_one_file_with_options! {
@@ -3618,7 +3623,7 @@ test_verify_one_file_with_options! {
             let c = #[cfg_attr(verus_keep_ghost_body, verifier::fip)] |b: Box<u64>| -> (r: u64) { *b };
             c(Box::new(3))
         }
-    } => Err(err) => assert_vir_error_msg(err, "this closure was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it")
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
 }
 
 test_verify_one_file_with_options! {
@@ -3631,7 +3636,7 @@ test_verify_one_file_with_options! {
                 |x: u64| -> (r: u64) { x };
             c(3)
         }
-    } => Err(err) => assert_vir_error_msg(err, "this closure was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it")
+    } => Err(err) => assert_vir_error_msgs(err, &[KEEP_GHOST_BODY_NAMED, KEEP_GHOST_BODY_NAMED])
 }
 
 test_verify_one_file_with_options! {
@@ -4047,20 +4052,6 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` needs a verified body, which a foreign function does not have")
 }
 
-test_verify_one_file_with_options! {
-    // an attribute that does not parse does not hide `#[verifier::fip]` from the compiled program's
-    // check (here both are seen only by the compilation)
-    #[test] fip_attr_next_to_bad_attr ["vstd", "-V alloc-check"] => verus_code! {
-        use vstd::prelude::*;
-
-        #[cfg_attr(not(verus_keep_ghost_body), verifier::fip)]
-        #[cfg_attr(not(verus_keep_ghost_body), verifier::no_such_attr)]
-        pub fn f(x: u64) -> u64 {
-            x
-        }
-    } => Err(err) => assert_vir_error_msg(err, "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it")
-}
-
 // (review of the above, 2026-11-23)
 test_verify_one_file_with_options! {
     // a closure whose body is an expression, not a block, has the same position in both compiles
@@ -4127,28 +4118,6 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` can only be used on functions and closures")
 }
 
-test_verify_one_file_with_options! {
-    // an attribute that only the compilation sees on a foreign function is not trusted
-    #[test] fip_strict_foreign_fn_compiled_only ["vstd", "-V alloc-check"] => code! {
-        use vstd::prelude::*;
-
-        unsafe extern "C" {
-            #[verifier::external]
-            #[cfg_attr(not(verus_keep_ghost_body), verifier::fip(strict))]
-            pub fn ext_step(n: u64);
-        }
-
-        verus! {
-        pub assume_specification[ ext_step ](n: u64) allocates 0 deallocates 0;
-
-        #[verifier::fip(strict)]
-        pub fn f(n: u64) {
-            unsafe { ext_step(n) }
-        }
-        }
-    } => Err(err) => assert_vir_error_msg(err, "it calls `ext_step`, which is not `#[verifier::fip(strict)]`")
-}
-
 // a strict function of another crate with `#[verus_spec(with ..)]`: the compiled function is the
 // one called, and its crate checked it against the verified copy
 #[test]
@@ -4197,4 +4166,829 @@ pub fn g(x: u64) -> u64 {{ proof_with!(Ghost(1u32)); lib::f(x) }}
         dir,
     );
     assert!(out.status.success(), "user:\n{}", String::from_utf8_lossy(&out.stderr));
+}
+
+// -V alloc-check: the crate's own source may not name a cfg that Verus sets for only one of the
+// verification and the compilation (`verus_keep_ghost_body`, and `verus_no_vstd` with
+// `--no-vstd`), as code that tests it can make the verified code and the compiled program differ:
+// the drops are checked on the compiled program, but the calls only on what was verified
+// (portable-fip, 2026-11-23, second round)
+test_verify_one_file_with_options! {
+    // the compiled program allocates in a function verified to allocate nothing
+    #[test] cfg_body_compiled_only_allocates ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            #[cfg(not(verus_keep_ghost_body))]
+            let _b = Box::new(x);
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    // the verification sees a call that frees nothing, the compiled program a `drop`
+    #[test] cfg_body_compiled_only_frees ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => deallocates 0)]
+        pub fn f(b: Box<u64>) -> u64 {
+            #[cfg(verus_keep_ghost_body)]
+            {
+                return helper(b);
+            }
+            #[cfg(not(verus_keep_ghost_body))]
+            {
+                drop(b);
+                0
+            }
+        }
+
+        #[verus_spec(r => deallocates 0)]
+        pub fn helper(b: Box<u64>) -> u64 {
+            core::mem::forget(b);
+            0
+        }
+    } => Err(err) => assert_vir_error_msgs(err, &[KEEP_GHOST_BODY_NAMED, KEEP_GHOST_BODY_NAMED])
+}
+
+test_verify_one_file_with_options! {
+    #[test] cfg_body_fip_compiled_frees_and_allocates ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec]
+        #[verifier::fip]
+        pub fn f(b: Box<u64>) -> Box<u64> {
+            #[cfg(not(verus_keep_ghost_body))]
+            let b = {
+                drop(b);
+                Box::new(0u64)
+            };
+            b
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    #[test] cfg_body_inside_verus_macro ["vstd", "-V alloc-check", "--edition 2024"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn f(x: u64) -> (r: u64)
+            allocates 0
+        {
+            #[cfg(not(verus_keep_ghost_body))]
+            let _b = Box::new(x);
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    // `cfg!` leaves nothing behind but a `true` or a `false`
+    #[test] cfg_macro_in_body ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            if cfg!(verus_keep_ghost_body) {
+                x
+            } else {
+                let _b = Box::new(x);
+                x
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    #[test] cfg_in_local_macro_rules ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        macro_rules! compiled_only {
+            ($e:expr) => {
+                #[cfg(not(verus_keep_ghost_body))]
+                let _b = $e;
+            };
+        }
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            compiled_only!(Box::new(x));
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    #[test] cfg_raw_ident ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            #[cfg(not(r#verus_keep_ghost_body))]
+            let _b = Box::new(x);
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, KEEP_GHOST_BODY_NAMED)
+}
+
+test_verify_one_file_with_options! {
+    // the name in a comment or a string is not a use of the cfg; `verus_keep_ghost` is set for both
+    #[test] cfg_names_allowed ["vstd", "-V alloc-check", "--edition 2024"] => verus_code! {
+        use vstd::prelude::*;
+
+        /// not `verus_keep_ghost_body`
+        // nor verus_keep_ghost_body
+        /* nor verus_keep_ghost_body */
+        pub fn f(x: u64) -> (r: &'static str)
+            allocates 0
+        {
+            if cfg!(verus_keep_ghost) { "verus_keep_ghost_body" } else { r"verus_keep_ghost_body" }
+        }
+
+        #[cfg(verus_keep_ghost)]
+        pub fn g(x: u64) -> u64 {
+            x
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // (without -V alloc-check, Verus does not check this)
+    #[test] cfg_body_without_alloc_check ["vstd", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            #[cfg(not(verus_keep_ghost_body))]
+            let _b = Box::new(x);
+            x
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // vstd's macros test the cfg, and vstd is trusted
+    #[test] cfg_in_vstd_macro ["vstd", "-V alloc-check", "--edition 2024"] => verus_code! {
+        use vstd::prelude::*;
+        use vstd::invariant::*;
+
+        #[verifier::atomic]
+        #[verifier::external_body]
+        fn atomic_op()
+            opens_invariants none
+            no_unwind
+        {
+        }
+
+        pub fn f<A, B: InvariantPredicate<A, u8>>(i: Tracked<AtomicInvariant<A, u8, B>>) {
+            open_atomic_invariant!(i.borrow() => inner => {
+                atomic_op();
+            });
+        }
+    } => Ok(())
+}
+
+#[test]
+fn cfg_no_vstd_compiled_only() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{}\nuse verus_builtin::*;\nuse verus_builtin_macros::*;\nverus! {{\npub fn f(x: u64) -> u64 {{\n    #[cfg(verus_no_vstd)]\n    let _y = 1u64;\n    x\n}}\n}}\n",
+            FEATURE_PRELUDE
+        ),
+    )
+    .expect("write");
+    let out = run_verus_raw(
+        &["--crate-type=lib", "--edition=2024", "lib.rs", "--no-vstd", "-V", "alloc-check"],
+        dir,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", stderr);
+    assert!(
+        stderr.contains(
+            "Verus sets `verus_no_vstd` (with `--no-vstd`) only when it compiles the crate, not when it verifies it"
+        ),
+        "{}",
+        stderr
+    );
+}
+
+// Code that comes from another crate's macro is not in the crate's own source, so that check does
+// not see a `cfg_attr` the macro puts on it; the check that the verification and the compiled
+// program agree on `#[verifier::fip]` does. These macros put `cfg_attr(verus_keep_ghost_body, ..)`
+// (`only_verified`) or `cfg_attr(not(verus_keep_ghost_body), ..)` (`only_compiled`) on what they
+// are on.
+const CFG_ATTR_MACROS: &str = r##"
+extern crate proc_macro;
+use proc_macro::TokenStream;
+fn wrap(pred: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut out: TokenStream = format!("#[cfg_attr({pred}, {attr})]").parse().unwrap();
+    out.extend(item);
+    out
+}
+#[proc_macro_attribute]
+pub fn only_verified(attr: TokenStream, item: TokenStream) -> TokenStream {
+    wrap("verus_keep_ghost_body", attr, item)
+}
+#[proc_macro_attribute]
+pub fn only_compiled(attr: TokenStream, item: TokenStream) -> TokenStream {
+    wrap("not(verus_keep_ghost_body)", attr, item)
+}
+"##;
+
+/// Builds the proc-macro crate `name` from `src` in `dir` with the toolchain that Verus is built with
+/// (for Verus to load it), with `RUSTC_BOOTSTRAP=1` if `bootstrap`; returns the library's file name
+fn build_proc_macro(dir: &std::path::Path, name: &str, src: &str, bootstrap: bool) -> String {
+    std::fs::write(dir.join(format!("{name}.rs")), src).expect("write");
+    let lib = format!("{}{name}{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+    // (vargo sets VARGO_TOOLCHAIN)
+    let mut rustc = match std::env::var("VARGO_TOOLCHAIN") {
+        Ok(toolchain) => {
+            let mut rustc = std::process::Command::new("rustup");
+            rustc.args(["run", &toolchain, "rustc"]);
+            rustc
+        }
+        Err(_) => std::process::Command::new("rustc"),
+    };
+    if bootstrap {
+        rustc.env("RUSTC_BOOTSTRAP", "1");
+    }
+    let src_file = format!("{name}.rs");
+    let crate_name = format!("--crate-name={name}");
+    let out = rustc
+        .current_dir(dir)
+        .args(["--edition=2021", "--crate-type=proc-macro", &crate_name, &src_file, "-o", &lib])
+        .output()
+        .expect("rustc");
+    assert!(out.status.success(), "{}:\n{}", name, String::from_utf8_lossy(&out.stderr));
+    lib
+}
+
+/// Runs Verus with -V alloc-check and `--edition=2024` (unless `extra` gives one) on `lib.rs` in
+/// `dir`, with `extra` arguments; returns whether it passed, and the errors (one line each)
+fn verus_alloc_check_in(dir: &std::path::Path, extra: &[&str]) -> (bool, Vec<String>) {
+    let mut args = vec!["--crate-type=lib", "lib.rs", "-V", "alloc-check"];
+    if !extra.iter().any(|a| a.starts_with("--edition")) {
+        args.push("--edition=2024");
+    }
+    args.extend_from_slice(extra);
+    let out = run_verus_raw(&args, dir);
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let errors: Vec<String> = stderr
+        .lines()
+        .filter(|l| l.starts_with("error") && !l.starts_with("error: aborting"))
+        .map(|l| l.to_string())
+        .collect();
+    assert!(out.status.success() || !errors.is_empty(), "{}", stderr);
+    assert!(!out.status.success() || errors.is_empty(), "{}", stderr);
+    (out.status.success(), errors)
+}
+
+/// Writes `files` into a temporary directory and runs `verus_alloc_check_in` there
+fn verus_alloc_check_files(files: &[(&str, &str)], extra: &[&str]) -> (bool, Vec<String>) {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    for (name, contents) in files {
+        std::fs::write(tempdir.path().join(name), contents).expect("write");
+    }
+    verus_alloc_check_in(tempdir.path(), extra)
+}
+
+/// Verifies `code` (after the feature prelude and `use vstd::prelude::*;`) with -V alloc-check and
+/// `CFG_ATTR_MACROS` as the crate `pm`; returns whether it passed, and the errors
+fn verify_with_cfg_attr_macros(code: &str) -> (bool, Vec<String>) {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let lib = build_proc_macro(dir, "pm", CFG_ATTR_MACROS, false);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!("{}\nuse vstd::prelude::*;\n{}", FEATURE_PRELUDE, code),
+    )
+    .expect("write");
+    verus_alloc_check_in(dir, &["--extern", &format!("pm={lib}")])
+}
+
+fn assert_one_alloc_check_error(result: (bool, Vec<String>), expected: &str) {
+    let (ok, errors) = result;
+    assert!(!ok);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    assert!(errors[0].starts_with("error: -V alloc-check"), "{:?}", errors);
+    assert!(errors[0].contains(expected), "{:?}", errors);
+}
+
+#[test]
+fn fip_attr_only_for_verification_by_macro() {
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+#[pm::only_verified(verifier::fip)]
+pub fn f(b: Box<u64>) -> u64 {
+    let x = *b;
+    x
+}
+
+// (relies on `f` being fip)
+pub fn caller(b: Box<u64>) -> (r: u64)
+    deallocates 0
+{
+    f(b)
+}
+}",
+        ),
+        "this function was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it",
+    );
+}
+
+#[test]
+fn fip_attr_only_in_compiled_program_by_macro() {
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+#[pm::only_compiled(verifier::fip)]
+pub fn f(x: u64) -> u64 {
+    x
+}
+}",
+        ),
+        "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it as `#[verifier::fip]`",
+    );
+}
+
+#[test]
+fn fip_strict_only_for_verification_by_macro() {
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+#[pm::only_verified(verifier::fip(strict))]
+#[pm::only_compiled(verifier::fip)]
+pub fn sum(n: u64) -> (r: u64)
+    decreases n
+{
+    if n == 0 { 0 } else { sum(n - 1).wrapping_add(n) }
+}
+}",
+        ),
+        "this function was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it",
+    );
+}
+
+#[test]
+fn fip_closure_attr_only_for_verification_by_macro() {
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+pub fn outer() -> u64 {
+    let c = #[pm::only_verified(verifier::fip)] |b: Box<u64>| -> (r: u64) { *b };
+    c(Box::new(3))
+}
+}",
+        ),
+        "this closure was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it",
+    );
+}
+
+#[test]
+fn fip_closure_strict_only_for_verification_by_macro() {
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+pub fn outer() -> u64 {
+    let c = #[pm::only_verified(verifier::fip(strict))]
+        #[pm::only_compiled(verifier::fip)]
+        |x: u64| -> (r: u64) { x };
+    c(3)
+}
+}",
+        ),
+        "this closure was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it",
+    );
+}
+
+#[test]
+fn fip_attr_next_to_bad_attr_by_macro() {
+    // an attribute that does not parse does not hide `#[verifier::fip]` from the compiled program's
+    // check (here both are seen only by the compilation)
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "verus! {
+#[pm::only_compiled(verifier::fip)]
+#[pm::only_compiled(verifier::no_such_attr)]
+pub fn f(x: u64) -> u64 {
+    x
+}
+}",
+        ),
+        "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it",
+    );
+}
+
+#[test]
+fn fip_strict_foreign_fn_compiled_only_by_macro() {
+    // an attribute that only the compilation sees on a foreign function is not trusted
+    assert_one_alloc_check_error(
+        verify_with_cfg_attr_macros(
+            "unsafe extern \"C\" {
+    #[verifier::external]
+    #[pm::only_compiled(verifier::fip(strict))]
+    pub fn ext_step(n: u64);
+}
+
+verus! {
+pub assume_specification[ ext_step ](n: u64) allocates 0 deallocates 0;
+
+#[verifier::fip(strict)]
+pub fn f(n: u64) {
+    unsafe { ext_step(n) }
+}
+}",
+        ),
+        "it calls `ext_step`, which is not `#[verifier::fip(strict)]`",
+    );
+}
+
+#[test]
+fn fip_attrs_agree_by_macro() {
+    // (the same attribute from both: no error)
+    let (ok, errors) = verify_with_cfg_attr_macros(
+        "verus! {
+#[pm::only_verified(verifier::fip)]
+#[pm::only_compiled(verifier::fip)]
+pub fn f(x: u64) -> u64 {
+    x
+}
+}",
+    );
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+}
+
+// (review of the above, 2026-11-23: the crate's source is read as rustc reads it)
+const SMALL_PRELUDE: &str = "#![allow(unused, unexpected_cfgs)]\nuse vstd::prelude::*;\n";
+
+#[test]
+fn cfg_after_shebang_line() {
+    // rustc drops only the first line, `#!/*`; the `/*` does not hide the rest
+    let lib = format!(
+        "#!/*\n{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{\n    #[cfg(not(verus_keep_ghost_body))]\n    let _b = Box::new(x);\n    x\n}}\n// */\n"
+    );
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib)], &[]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn cfg_in_include_with_frontmatter_like_lines() {
+    // an `include!` in expression position does not strip frontmatter: `---` is `- - -`
+    let lib = format!(
+        "{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f() -> i64 {{ include!(\"e.rs\") }}\n"
+    );
+    let e = "---\n{ #[cfg(not(verus_keep_ghost_body))] let _b = Box::new(0u64); 1i64 }\n---1\n";
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib), ("e.rs", e)], &[]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn cfg_in_module_file() {
+    let lib = format!("{SMALL_PRELUDE}mod m;\n");
+    let m = "use vstd::prelude::*;\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {\n    #[cfg(not(verus_keep_ghost_body))]\n    let _b = Box::new(x);\n    x\n}\n";
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib), ("m.rs", m)], &[]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn cfg_in_crate_attr_argument() {
+    let lib = format!(
+        "{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ x }}\n"
+    );
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(
+            &[("lib.rs", &lib)],
+            &["-Zcrate-attr=cfg_attr(not(verus_keep_ghost_body), allow(dead_code))"],
+        ),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+// (written to files directly, to control the edition and the first line)
+#[test]
+fn cfg_after_guarded_string_prefix() {
+    // before edition 2024, rustc reads `#"` as `#` and a string, not as a guarded string prefix
+    let lib = format!(
+        "{SMALL_PRELUDE}macro_rules! nothing {{ ($($t:tt)*) => {{}}; }}\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{\n    nothing!(#\"\"#);\n    #[cfg(not(verus_keep_ghost_body))]\n    let _b = Box::new(x);\n    x // \"\n}}\n"
+    );
+    for edition in ["--edition=2021", "--edition=2018"] {
+        assert_one_alloc_check_error(
+            verus_alloc_check_files(&[("lib.rs", &lib)], &[edition]),
+            KEEP_GHOST_BODY_NAMED,
+        );
+    }
+}
+
+#[test]
+fn cfg_before_prefix_2018() {
+    // before edition 2021, `name#` is the identifier `name` and a `#`
+    let lib = format!(
+        "{SMALL_PRELUDE}macro_rules! c {{ ($n:ident #) => {{ #[cfg(not($n))] let _b = Box::new(1u64); }} }}\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ c!(verus_keep_ghost_body#); x }}\n"
+    );
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib)], &["--edition=2018"]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn cfg_in_raw_lifetime_2018() {
+    // before edition 2021, `'r#name` is the lifetime `'r`, a `#` and the identifier `name`
+    let lib = format!(
+        "{SMALL_PRELUDE}macro_rules! c {{ ($l:lifetime # $n:ident) => {{ #[cfg(not($n))] let _b = Box::new(1u64); }} }}\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ c!('r#verus_keep_ghost_body); x }}\n"
+    );
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib)], &["--edition=2018"]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn cfg_name_built_by_concat() {
+    // `${concat(..)}` can build the name from pieces
+    let lib = "#![feature(macro_metavar_expr_concat)]\n#![allow(unused, unexpected_cfgs)]\nuse vstd::prelude::*;\nmacro_rules! compiled_only {\n    ($e:expr) => {\n        #[cfg(not(${concat(verus_keep_ghost, _body)}))]\n        let _b = $e;\n    };\n}\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 { compiled_only!(Box::new(x)); x }\n";
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", lib)], &[]),
+        "-V alloc-check does not allow the feature `macro_metavar_expr_concat`",
+    );
+    // (also when the `$` comes from a macro argument)
+    let lib = "#![feature(macro_metavar_expr_concat)]\n#![allow(unused, unexpected_cfgs)]\nuse vstd::prelude::*;\nmacro_rules! mk { ($d:tt ; $b:tt) => { macro_rules! inner { () => { #[cfg(not($d $b))] let _b = Box::new(1u64); } } } }\nmk!($ ; {concat(verus_keep_, ghost_body)});\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 { inner!(); x }\n";
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", lib)], &[]),
+        "-V alloc-check does not allow the feature `macro_metavar_expr_concat`",
+    );
+}
+
+#[test]
+fn cfg_names_in_comments_and_strings() {
+    // the name in a comment or a string is not a use of the cfg
+    let lib = format!(
+        "{SMALL_PRELUDE}/// not `verus_keep_ghost_body`\n// nor verus_keep_ghost_body\n/* nor verus_keep_ghost_body */\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> &'static str {{ if x == 0 {{ \"verus_keep_ghost_body\" }} else {{ r#\"verus_keep_ghost_body\"# }} }}\n"
+    );
+    let (ok, errors) = verus_alloc_check_files(&[("lib.rs", &lib)], &[]);
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+}
+
+test_verify_one_file_with_options! {
+    // (nothing is verified with --no-verify, and the crate is not marked as checked)
+    #[test] cfg_body_no_verify ["vstd", "-V alloc-check", "--no-verify", "--edition 2024"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            #[cfg(not(verus_keep_ghost_body))]
+            let _b = Box::new(x);
+            x
+        }
+    } => Ok(())
+}
+
+// A macro of another crate can tell the verification and the compilation apart without naming the
+// cfg in this crate's source (a procedural macro, with `expand_expr`), here to `include!` a different
+// file in each; the compiled program must be built from the source files that were verified
+const PICK_FILE_MACRO: &str = r##"
+#![feature(proc_macro_expand)]
+extern crate proc_macro;
+use proc_macro::TokenStream;
+#[proc_macro]
+pub fn pick(_: TokenStream) -> TokenStream {
+    let probe: TokenStream = "cfg!(verus_keep_ghost_body)".parse().unwrap();
+    let verified = probe.expand_expr().map(|t| t.to_string() == "true").unwrap_or(false);
+    let s = if verified { "include!(\"v.rs\")" } else { "include!(\"c.rs\")" };
+    s.parse().unwrap()
+}
+"##;
+
+#[test]
+fn source_file_read_only_for_compilation() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let lib = build_proc_macro(dir, "pick", PICK_FILE_MACRO, true);
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!("{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f() -> u64 {{ pick::pick!() }}\n"),
+    )
+    .expect("write");
+    std::fs::write(dir.join("v.rs"), "0u64\n").expect("write");
+    std::fs::write(dir.join("c.rs"), "{ let _b = Box::new(1u64); 0u64 }\n").expect("write");
+    let (ok, errors) = verus_alloc_check_in(dir, &["--extern", &format!("pick={lib}")]);
+    assert!(!ok);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    assert!(
+        errors[0].contains(
+            "the compiled program would be built from other input than the one Verus verified"
+        ) && errors[0]
+            .contains("`c.rs` (changed after Verus read it, or read only for the compilation)"),
+        "{:?}",
+        errors
+    );
+}
+
+#[test]
+fn source_file_read_only_for_verification() {
+    // (the verification may read more than the compilation: here an `include!` in a proof
+    // function, which the compilation does not have)
+    let lib = format!(
+        "{SMALL_PRELUDE}verus! {{\nproof fn lemma() {{ include!(\"p.rs\") }}\npub fn f(x: u64) -> (r: u64) allocates 0 {{ x }}\n}}\n"
+    );
+    let (ok, errors) = verus_alloc_check_files(&[("lib.rs", &lib), ("p.rs", "()\n")], &[]);
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+}
+
+#[test]
+fn cfg_files_read_by_include_str() {
+    // a text file read by `include_str!` is read as Rust too: prose that does not tokenize as Rust
+    // is fine, and so is one that does but does not name the cfg
+    let lib = format!(
+        "#![doc = include_str!(\"R.md\")]\n{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ x }}\n"
+    );
+    let (ok, errors) = verus_alloc_check_files(
+        &[("lib.rs", &lib), ("R.md", "See the users' guide, and src/*.rs for \"the code.\n")],
+        &[],
+    );
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+    let (ok, errors) =
+        verus_alloc_check_files(&[("lib.rs", &lib), ("R.md", "A crate for things.\n")], &[]);
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+    // (but one that names it is rejected, as it could also be read as Rust)
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(
+            &[("lib.rs", &lib), ("R.md", "Do not use cfg(verus_keep_ghost_body).\n")],
+            &[],
+        ),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+test_verify_one_file_with_options! {
+    // with vstd imported, Verus sets `verus_no_vstd` for neither
+    #[test] cfg_no_vstd_with_vstd ["vstd", "-V alloc-check", "--edition 2024"] => code! {
+        #[cfg(not(verus_no_vstd))]
+        use vstd::prelude::*;
+
+        #[cfg(verus_no_vstd)]
+        pub fn g() {}
+
+        #[verus_spec(r => allocates 0)]
+        pub fn f(x: u64) -> u64 {
+            x
+        }
+    } => Ok(())
+}
+
+#[test]
+fn cfg_keep_ghost_body_no_vstd() {
+    let lib = format!(
+        "{}\nuse verus_builtin::*;\nuse verus_builtin_macros::*;\nverus! {{\npub fn f(x: u64) -> u64 {{\n    #[cfg(not(verus_keep_ghost_body))]\n    let _y = 1u64;\n    x\n}}\n}}\n",
+        FEATURE_PRELUDE
+    );
+    assert_one_alloc_check_error(
+        verus_alloc_check_files(&[("lib.rs", &lib)], &["--no-vstd"]),
+        KEEP_GHOST_BODY_NAMED,
+    );
+}
+
+#[test]
+fn source_files_of_debugger_visualizer() {
+    // (the compilation reads them while it analyzes the crate; so does the verification)
+    let lib = format!(
+        "#![debugger_visualizer(gdb_script_file = \"pretty.py\")]\n{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ x }}\n"
+    );
+    let (ok, errors) = verus_alloc_check_files(
+        &[("lib.rs", &lib), ("pretty.py", "print('it''s \"quoted')\n")],
+        &["--compile"],
+    );
+    assert!(ok && errors.is_empty(), "{:?}", errors);
+}
+
+// (review of the above, third round: what can tell the verification from the compilation without
+// naming the cfg)
+#[test]
+fn verified_twin_name_in_source() {
+    // `_VERUS_VERIFIED_helper` exists only in what is verified; in the compiled program the name
+    // would be the one that the glob import brings in
+    let lib = format!(
+        "#![allow(non_snake_case)]\n{SMALL_PRELUDE}mod b {{\n    pub fn _VERUS_VERIFIED_helper(x: u64, _w: vstd::prelude::Ghost<u64>) -> Option<Box<u64>> {{ Some(Box::new(x)) }}\n}}\nuse b::*;\n#[verus_spec(r => with Ghost(w): Ghost<u64> allocates 0)]\npub fn helper(x: u64) -> Option<Box<u64>> {{ None }}\nverus! {{\npub fn g(x: u64) -> (r: Option<Box<u64>>) allocates 0 {{ _VERUS_VERIFIED_helper(x, Ghost(0)) }}\n}}\n"
+    );
+    let (ok, errors) = verus_alloc_check_files(&[("lib.rs", &lib)], &[]);
+    assert!(!ok);
+    assert_eq!(errors.len(), 2, "{:?}", errors);
+    assert!(
+        errors.iter().all(|e| e.contains("`_VERUS_VERIFIED_helper` has a prefix that is reserved")),
+        "{:?}",
+        errors
+    );
+}
+
+#[test]
+fn cfg_accessible_in_source() {
+    // spec functions exist only in what is verified, so `cfg_accessible` can tell the two apart
+    let lib = "#![feature(cfg_accessible)]\n#![allow(unused, unexpected_cfgs)]\nuse vstd::prelude::*;\nmod probe { use vstd::prelude::*; verus! { pub open spec fn marker() -> bool { true } } }\nmod a { use vstd::prelude::*; verus! { pub fn helper() -> (r: Option<Box<u8>>) allocates 0 { None } } }\nmod b { use vstd::prelude::*; verus! { pub fn helper() -> (r: Option<Box<u8>>) allocates 1 { Some(Box::new(1u8)) } } }\nuse b::*;\n#[cfg_accessible(crate::probe::marker)]\nuse a::helper;\nverus! { pub fn g() -> (r: Option<Box<u8>>) allocates 0 { helper() } }\n";
+    let (ok, errors) = verus_alloc_check_files(&[("lib.rs", lib)], &[]);
+    assert!(!ok);
+    assert_eq!(errors.len(), 2, "{:?}", errors);
+    assert!(
+        errors.iter().all(|e| e.contains("`cfg_accessible` keeps or removes code")),
+        "{:?}",
+        errors
+    );
+}
+
+#[test]
+fn crate_root_from_stdin() {
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let lib = format!(
+        "{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ x }}\n"
+    );
+    let out = run_verus_raw_with_stdin(
+        &["--crate-type=lib", "--edition=2024", "-", "-V", "alloc-check"],
+        tempdir.path(),
+        Some(lib.as_bytes()),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", stderr);
+    assert!(stderr.contains("-V alloc-check: the crate root must be a file"), "{}", stderr);
+}
+
+// Macros that change what the next read of a file gives, while Verus runs: `rewrite_args!` rewrites
+// the `@` file `args` (which rustc reads again for the compilation) to give another cfg, and
+// `read_again!` reads `n.txt` with `include_bytes!` after writing other contents to it the second
+// time it runs (in the compilation)
+const SIDE_EFFECT_MACROS: &str = r##"
+extern crate proc_macro;
+use proc_macro::TokenStream;
+#[proc_macro]
+pub fn rewrite_args(_: TokenStream) -> TokenStream {
+    std::fs::write("args", "--cfg\nslow\n").unwrap();
+    TokenStream::new()
+}
+#[proc_macro]
+pub fn read_again(_: TokenStream) -> TokenStream {
+    let again = std::path::Path::new("count").exists();
+    std::fs::write("count", "").unwrap();
+    std::fs::write("n.txt", if again { "xxxxxxxx" } else { "x" }).unwrap();
+    "include_bytes!(\"n.txt\")".parse().unwrap()
+}
+"##;
+
+#[test]
+fn source_file_read_twice_with_other_contents() {
+    // each read is compared, not only the first one of a file
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let lib = build_proc_macro(dir, "sidefx", SIDE_EFFECT_MACROS, false);
+    std::fs::write(dir.join("n.txt"), "x").expect("write");
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{SMALL_PRELUDE}#[verus_spec(r => allocates 0)]\npub fn f() -> usize {{ let _a = include_bytes!(\"n.txt\"); sidefx::read_again!().len() }}\n"
+        ),
+    )
+    .expect("write");
+    let (ok, errors) = verus_alloc_check_in(dir, &["--extern", &format!("sidefx={lib}")]);
+    assert!(!ok);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    assert!(
+        errors[0].contains("n.txt` (read for the compilation with contents that were not read for the verification)"),
+        "{:?}",
+        errors
+    );
+}
+
+#[test]
+fn cfgs_differ_through_argument_file() {
+    // an `@` file is read again for the compilation
+    let tempdir = tempfile::TempDir::new().expect("temp dir");
+    let dir = tempdir.path();
+    let lib = build_proc_macro(dir, "sidefx", SIDE_EFFECT_MACROS, false);
+    std::fs::write(dir.join("args"), "--cfg\nfast\n").expect("write");
+    std::fs::write(
+        dir.join("lib.rs"),
+        format!(
+            "{SMALL_PRELUDE}sidefx::rewrite_args!();\n#[cfg(fast)]\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ x }}\n#[cfg(not(fast))]\n#[verus_spec(r => allocates 0)]\npub fn f(x: u64) -> u64 {{ let _b = Box::new(x); x }}\n"
+        ),
+    )
+    .expect("write");
+    let (ok, errors) = verus_alloc_check_in(dir, &["@args", "--extern", &format!("sidefx={lib}")]);
+    assert!(!ok);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    assert!(
+        errors[0].contains(
+            "other cfgs (only for the verification: [`fast`]; only for the compilation: [`slow`])"
+        ),
+        "{:?}",
+        errors
+    );
 }
