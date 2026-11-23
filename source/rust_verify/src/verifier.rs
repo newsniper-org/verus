@@ -367,6 +367,11 @@ pub struct Verifier {
     /// bound, own or inherited; their VIR paths): the drop rule leaves the drops of `dyn` values
     /// to `fip_mir`, which checks the drops of their compiled bodies
     pub(crate) alloc_local_drop_rule_fns: Vec<String>,
+    /// -V alloc-check: the bodies of this crate that VIR verified as `#[verifier::fip]`
+    /// (functions by their VIR paths, closures also by their positions), and whether as
+    /// `fip(strict)`: `fip_mir` checks that the compiled program has the same attribute on
+    /// exactly these bodies (an attribute behind `cfg_attr` may be seen by only one of the two)
+    pub(crate) alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
     pub(crate) compile: bool,
 
     // If we've already created the log directory, this is the path to it:
@@ -581,6 +586,7 @@ impl Verifier {
             alloc_local_encapsulates_fns: Vec::new(),
             alloc_local_dealloc_bounded_fns: Vec::new(),
             alloc_local_drop_rule_fns: Vec::new(),
+            alloc_local_fip_fns: Vec::new(),
             compile,
 
             created_log_dir: Arc::new(std::sync::Mutex::new(None)),
@@ -637,6 +643,7 @@ impl Verifier {
             alloc_local_encapsulates_fns: self.alloc_local_encapsulates_fns.clone(),
             alloc_local_dealloc_bounded_fns: self.alloc_local_dealloc_bounded_fns.clone(),
             alloc_local_drop_rule_fns: self.alloc_local_drop_rule_fns.clone(),
+            alloc_local_fip_fns: self.alloc_local_fip_fns.clone(),
             compile: self.compile,
 
             created_log_dir: self.created_log_dir.clone(),
@@ -2946,6 +2953,43 @@ impl Verifier {
                 drop_rule.sort();
                 drop_rule.dedup();
                 self.alloc_local_drop_rule_fns = drop_rule;
+            }
+
+            // The bodies that VIR verified as `#[verifier::fip]`: the functions of this crate
+            // with the attribute and a body (not a trait method without a default, nor the copy
+            // of a default method that an impl inherits), and the fip closures in their bodies
+            // (not those of a body that VIR discarded, `external_body`). Not the allocator
+            // runtime's code, which is fip by definition and is not checked
+            // (`fip_mir::allocator_runtime`).
+            if self.args.alloc_check {
+                let fip_closures = ctxt.fip_closures.borrow();
+                let mut fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)> = vec![];
+                for f in local_crate.functions.iter() {
+                    let Some(body) = &f.x.body else { continue };
+                    // (`encapsulates` also sets `allocator_runtime`, but such a function's body
+                    // is checked like any other)
+                    if f.x.attrs.allocator_runtime && !f.x.attrs.encapsulates_alloc {
+                        continue;
+                    }
+                    let path = format!("{:?}", f.x.name.path);
+                    if f.x.attrs.fip {
+                        fip_fns.push(((path.clone(), None), f.x.attrs.fip_strict));
+                    }
+                    let _ = vir::ast_visitor::expr_visitor_check::<(), _>(body, &mut |_, e| {
+                        if let vir::ast::ExprX::NonSpecClosure { fip: true, .. } = &e.x {
+                            let key = crate::spans::from_raw_span(&e.span.raw_span)
+                                .and_then(|s| crate::fip_mir::closure_key(source_map, s));
+                            if let Some(key) = key {
+                                let strict = fip_closures.get(&key).copied().unwrap_or(false);
+                                fip_fns.push(((path.clone(), Some(key)), strict));
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+                fip_fns.sort();
+                fip_fns.dedup();
+                self.alloc_local_fip_fns = fip_fns;
             }
         }
         self.maybe_log_impl_names(&merged_crate).map_err(map_err_diagnostics)?;

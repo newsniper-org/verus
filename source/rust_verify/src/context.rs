@@ -65,6 +65,10 @@ pub struct ContextX<'tcx> {
     /// their spans (a block with a tail expression, an `if let`): see
     /// `vir::resolution_inference::krate_infer_resolution`
     pub(crate) edition_2024_scopes: RefCell<std::collections::HashSet<vir::messages::AstId>>,
+    /// -V alloc-check: the exec closures translated with `#[verifier::fip]` (by
+    /// `fip_mir::closure_key`), and whether it is `fip(strict)`; VIR records only that a closure
+    /// is fip, and the compiled program must have the same attribute on it (`fip_mir`)
+    pub(crate) fip_closures: RefCell<HashMap<crate::fip_mir::ClosureKey, bool>>,
 }
 
 /// Warnings and notes collected while translating HIR to VIR, waiting to be reported.
@@ -189,6 +193,7 @@ impl<'tcx> ContextX<'tcx> {
             name_def_id_map: Rc::new(RefCell::new(HashMap::new())),
             next_read_kind_id: AtomicU64::new(0),
             edition_2024_scopes: RefCell::new(std::collections::HashSet::new()),
+            fip_closures: RefCell::new(HashMap::new()),
         }
     }
 

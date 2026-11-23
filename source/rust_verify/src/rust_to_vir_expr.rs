@@ -4902,6 +4902,12 @@ pub(crate) fn closure_to_vir<'tcx>(
                     0,
                 ));
             }
+            // (whether it is `fip(strict)`, which the compiled program must agree on)
+            if let Some(key) =
+                crate::fip_mir::closure_key(bctx.ctxt.tcx.sess.source_map(), closure_expr.span)
+            {
+                bctx.ctxt.fip_closures.borrow_mut().insert(key, closure_fip == Some(true));
+            }
         }
 
         let exprx = if is_spec_fn {

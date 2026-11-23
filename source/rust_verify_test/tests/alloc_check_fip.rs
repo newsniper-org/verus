@@ -3561,3 +3561,146 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+// The verification and the compiled program must see `#[verifier::fip]` on the same functions and
+// closures, with the same kind: `cfg_attr` on a cfg that only one of the two sets (Verus sets
+// `verus_keep_ghost_body` only for the verification) would make one trust what the other did not
+// check (portable-fip, 2026-11-23)
+test_verify_one_file_with_options! {
+    #[test] fip_attr_only_for_verification ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[cfg_attr(verus_keep_ghost_body, verifier::fip)]
+        pub fn f(b: Box<u64>) -> u64 {
+            let x = *b;
+            x
+        }
+
+        // (relies on `f` being fip)
+        pub fn caller(b: Box<u64>) -> (r: u64)
+            deallocates 0
+        {
+            f(b)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this function was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_attr_only_in_compiled_program ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[cfg_attr(not(verus_keep_ghost_body), verifier::fip)]
+        pub fn f(x: u64) -> u64 {
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it as `#[verifier::fip]`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_only_for_verification ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[cfg_attr(verus_keep_ghost_body, verifier::fip(strict))]
+        #[cfg_attr(not(verus_keep_ghost_body), verifier::fip)]
+        pub fn sum(n: u64) -> (r: u64)
+            decreases n
+        {
+            if n == 0 { 0 } else { sum(n - 1).wrapping_add(n) }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this function was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_attr_only_for_verification ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn outer() -> u64 {
+            let c = #[cfg_attr(verus_keep_ghost_body, verifier::fip)] |b: Box<u64>| -> (r: u64) { *b };
+            c(Box::new(3))
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this closure was verified as `#[verifier::fip]`, but the compiled program does not have the attribute on it")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_strict_only_for_verification ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn outer() -> u64 {
+            let c = #[cfg_attr(verus_keep_ghost_body, verifier::fip(strict))]
+                #[cfg_attr(not(verus_keep_ghost_body), verifier::fip)]
+                |x: u64| -> (r: u64) { x };
+            c(3)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this closure was verified as `#[verifier::fip(strict)]`, but the compiled program has `#[verifier::fip]` on it")
+}
+
+test_verify_one_file_with_options! {
+    // the attribute seen alike by both: functions, closures, a `const fn` (verified through its
+    // proxy), a default method and its inheriting impl, derived `Clone`s inside and outside `verus!`
+    #[test] fip_attrs_agree ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[cfg_attr(verus_keep_ghost, verifier::fip)]
+        pub fn f(x: u64) -> u64 {
+            let c = #[verifier::fip(strict)] |y: u64| -> (r: u64) { y };
+            let d = #[cfg_attr(verus_keep_ghost, verifier::fip)] |y: u64| -> (r: u64) { y };
+            c(x).wrapping_add(d(x))
+        }
+
+        #[verifier::fip]
+        pub const fn g(x: u64) -> u64 {
+            let c = #[verifier::fip] |y: u64| -> (r: u64) { y };
+            x
+        }
+
+        pub trait Tr {
+            #[verifier::fip]
+            fn m(&self, x: u64) -> u64 {
+                x
+            }
+        }
+
+        pub struct S;
+
+        impl Tr for S {}
+
+        #[derive(Clone, Copy)]
+        pub struct P {
+            pub a: u64,
+        }
+
+        #[verifier::fip]
+        pub fn h(s: &S, p: &P) -> P {
+            let _ = s.m(1);
+            p.clone()
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_derived_clone_outside_verus ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[derive(Clone, Copy)]
+        pub struct R {
+            pub a: u64,
+        }
+
+        #[derive(Clone)]
+        pub struct T {
+            pub a: Box<u64>,
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a fip closure is checked on the compiled program, which `--no-lifetime` skips
+    #[test] fip_closure_no_lifetime ["vstd", "-V alloc-check", "--no-lifetime"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub fn outer() -> u64 {
+            let c = #[verifier::fip] |b: Box<u64>| -> (r: u64) { *b };
+            c(Box::new(3))
+        }
+    } => Err(_)
+}

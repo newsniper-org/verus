@@ -137,6 +137,8 @@ struct CompilerCallbacksEraseMacro {
         Vec<(crate::fip_mir::CountedBodyKey, Vec<crate::fip_mir::DropSiteKey>)>,
     /// see `Verifier::alloc_local_drop_rule_fns`
     pub alloc_local_drop_rule_fns: Vec<String>,
+    /// see `Verifier::alloc_local_fip_fns`
+    pub alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
 }
 
 impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
@@ -181,6 +183,7 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
                 &self.alloc_local_encapsulates_fns,
                 &self.alloc_local_dealloc_bounded_fns,
                 &self.alloc_local_drop_rule_fns,
+                &self.alloc_local_fip_fns,
             );
         }
         if self.fip_lint {
@@ -225,6 +228,7 @@ pub(crate) fn run_with_erase_macro_compile(
         Vec<crate::fip_mir::DropSiteKey>,
     )>,
     alloc_local_drop_rule_fns: Vec<String>,
+    alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool)>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
@@ -238,6 +242,7 @@ pub(crate) fn run_with_erase_macro_compile(
         alloc_local_encapsulates_fns,
         alloc_local_dealloc_bounded_fns,
         alloc_local_drop_rule_fns,
+        alloc_local_fip_fns,
     };
     rustc_args.extend(["--cfg", "verus_only", "--cfg", "verus_keep_ghost"].map(|s| s.to_string()));
     if matches!(vstd, Vstd::IsCore | Vstd::ImportedViaCore) {
@@ -414,15 +419,16 @@ pub fn run(
     let compile_status = if !verifier.compile
         && (verifier.args.no_erasure_check || verifier.args.no_lifetime)
     {
-        // -V alloc-check: the drops of `#[verifier::fip]` functions are only checked on the
-        // compiled program's MIR, by the run that is skipped here
-        let has_fip = verifier
-            .vir_crate
-            .as_ref()
-            .is_some_and(|k| k.functions.iter().any(|f| f.x.attrs.fip && f.x.body.is_some()));
+        // -V alloc-check: the drops of `#[verifier::fip]` functions and closures are only
+        // checked on the compiled program's MIR, by the run that is skipped here
+        let has_fip = !verifier.alloc_local_fip_fns.is_empty()
+            || verifier
+                .vir_crate
+                .as_ref()
+                .is_some_and(|k| k.functions.iter().any(|f| f.x.attrs.fip && f.x.body.is_some()));
         if has_fip {
             eprintln!(
-                "error: `#[verifier::fip]` functions are checked on the compiled program, which --no-lifetime and --no-erasure-check skip"
+                "error: `#[verifier::fip]` functions and closures are checked on the compiled program, which --no-lifetime and --no-erasure-check skip"
             );
             Err(())
         } else if verifier.args.alloc_check && !verifier.alloc_local_dealloc_bounded_fns.is_empty()
@@ -456,6 +462,7 @@ pub fn run(
             verifier.alloc_local_encapsulates_fns.clone(),
             verifier.alloc_local_dealloc_bounded_fns.clone(),
             verifier.alloc_local_drop_rule_fns.clone(),
+            verifier.alloc_local_fip_fns.clone(),
         )
     };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built

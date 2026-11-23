@@ -533,6 +533,9 @@ FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되
 `allocates` 상한이 없으면 `fip`이고, 할당도 하지 않는다는 뜻입니다(`allocates 0`). 이 속성에는
 `-V alloc-check`가 필요하며, 한 함수에는 `#[verifier::fip]`와 `#[verifier::fip(strict)]` 중 하나만 붙일 수 있습니다.
 
+이 속성은 일부를 검증이, 일부를 컴파일된 프로그램이 검사합니다. 그래서 둘이 같은 함수와 클로저에서 같은 종류로
+이 속성을 봐야 합니다. `cfg_attr(verus_keep_ghost_body, ..)` 뒤에 둔 것처럼 한쪽만 보는 속성은 오류입니다.
+
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
 

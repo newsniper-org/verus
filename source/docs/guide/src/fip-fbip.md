@@ -48,6 +48,11 @@ All three are checked when Verus runs with `-V alloc-check`:
 The checks of drops and of the stack run on the compiled program (MIR, after ghost code is erased
 and drops are placed). So they see drops that do not appear in the source.
 
+The attribute is therefore read twice: by the verification, which checks calls and allocations,
+and by the compilation, which checks drops and the stack. Both must see it on the same functions
+and closures, with the same kind. An attribute that only one of them sees is an error, for example
+one behind `cfg_attr(verus_keep_ghost_body, ..)`: Verus sets that cfg only for the verification.
+
 ## Examples
 
 The examples below share this list type:

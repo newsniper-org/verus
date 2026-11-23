@@ -561,6 +561,10 @@ never deallocates memory on a normal return. Without an `allocates` bound it is 
 means no allocation either (`allocates 0`). The attribute needs `-V alloc-check`, and a function
 may carry only one of `#[verifier::fip]` and `#[verifier::fip(strict)]`.
 
+The attribute is checked partly by the verification and partly on the compiled program, so both
+must see it on the same functions and closures, with the same kind. An attribute that only one of
+them sees, such as one behind `cfg_attr(verus_keep_ghost_body, ..)`, is an error.
+
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
 
