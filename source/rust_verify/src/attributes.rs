@@ -1285,6 +1285,8 @@ pub(crate) struct ExternalAttrs {
     pub(crate) external_auto_derives: AutoDerivesAttr,
     pub(crate) uses_unerased_proxy: bool,
     pub(crate) structural_const_wrapper: bool,
+    /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
+    pub(crate) fip: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1435,6 +1437,7 @@ pub(crate) fn get_external_attrs(
         external_auto_derives: AutoDerivesAttr::Regular,
         uses_unerased_proxy: false,
         structural_const_wrapper: false,
+        fip: None,
     };
 
     for attr in parse_attrs(attrs, diagnostics)? {
@@ -1461,6 +1464,10 @@ pub(crate) fn get_external_attrs(
             Attr::StructuralConstWrapper => es.structural_const_wrapper = true,
             Attr::MigratePostconditionsWithMutRefs(_) => {}
             Attr::UnsupportedRustcAttr(..) => {}
+            Attr::Fip(strict) => {
+                es.fip = Some(strict);
+                es.any_other_verus_specific_attribute = true;
+            }
             _ => {
                 es.any_other_verus_specific_attribute = true;
             }

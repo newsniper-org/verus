@@ -536,6 +536,10 @@ FP² 논문(Lorenzen·Leijen·Swierstra, ICFP 2023)은 제자리에서 실행되
 이 속성은 일부를 검증이, 일부를 컴파일된 프로그램이 검사합니다. 그래서 둘이 같은 함수와 클로저에서 같은 종류로
 이 속성을 봐야 합니다. `cfg_attr(verus_keep_ghost_body, ..)` 뒤에 둔 것처럼 한쪽만 보는 속성은 오류입니다.
 
+`-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 이 속성을 붙이면 오류입니다. `#[verus_spec]` 없이
+`verus!` 밖에 있거나, `#[verifier::external]`이 붙었거나, external·`external_body` 항목 안에 있는 경우입니다. 함수가
+아닌 항목에 붙이면 언제나 오류입니다.
+
 ```rust
 pub struct Node { pub val: u64, pub next: Option<Box<Node>> }
 

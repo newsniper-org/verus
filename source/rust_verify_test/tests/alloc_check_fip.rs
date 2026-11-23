@@ -3704,3 +3704,249 @@ test_verify_one_file_with_options! {
         }
     } => Err(_)
 }
+
+// With -V alloc-check, `#[verifier::fip]` on a function or closure that Verus does not verify is an
+// error: VIR would not check it, and the compiled program's check covers only its drops
+// (portable-fip, 2026-11-23)
+test_verify_one_file_with_options! {
+    #[test] fip_on_ignored_fn ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: `#[verifier::fip]` is on a function that Verus is ignoring")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_strict_on_ignored_fn ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip(strict)]
+        pub fn f(x: u64) -> Vec<u64> {
+            let mut v = Vec::new();
+            v.push(x);
+            v
+        }
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: `#[verifier::fip(strict)]` is on a function that Verus is ignoring")
+}
+
+test_verify_one_file_with_options! {
+    // (one error, not also the compiled program's check of its drop)
+    #[test] fip_on_ignored_fn_that_drops ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn f(b: Box<u64>) -> u64 {
+            let x = *b;
+            x
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert_vir_error_msg(err, "is on a function that Verus is ignoring")
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_ignored_methods ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        pub fn free_it(b: Box<u64>) {}
+
+        pub struct S;
+
+        impl S {
+            #[verifier::fip]
+            pub fn m(x: u64) -> Box<u64> {
+                Box::new(x)
+            }
+        }
+
+        pub trait Tr {
+            #[verifier::fip]
+            fn d(b: Box<u64>) -> u64 {
+                let x = *b;
+                x
+            }
+        }
+
+        pub struct Y {
+            pub p: u64,
+        }
+
+        impl Drop for Y {
+            #[verifier::fip]
+            fn drop(&mut self) {
+                free_it(Box::new(self.p))
+            }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 3);
+        assert!(err.errors.iter().all(|e| e.message.contains("is on a function that Verus is ignoring")))
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_external_fn ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::external]
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.warnings.len(), 0);
+        assert_vir_error_msg(err, "is on a function that is marked external")
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_external_fn_in_verus ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::external]
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is on a function that is marked external")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_in_external_mod ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::external]
+        mod m {
+            #[verifier::fip]
+            pub fn f(x: u64) -> Box<u64> {
+                Box::new(x)
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is on a function that is marked external")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_in_external_impl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct S;
+
+        #[verifier::external]
+        impl S {
+            #[verifier::fip]
+            pub fn m(x: u64) -> Box<u64> {
+                Box::new(x)
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is on a function that is marked external")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_in_ignored_fn ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        pub fn helper(b: Box<u64>) {}
+
+        pub fn h(b: Box<u64>) -> u64 {
+            let f = #[verifier::fip] move || {
+                helper(b);
+                0u64
+            };
+            f()
+        }
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: `#[verifier::fip]` is on a closure in a function that Verus does not verify")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_closure_in_external_body_fn ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::external_body]
+        pub fn g(x: u64) -> Box<u64> {
+            let c = #[verifier::fip] |y: u64| Box::new(y);
+            c(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is on a closure in a function that Verus does not verify")
+}
+
+test_verify_one_file_with_options! {
+    // (an attribute that does not parse could hide `#[verifier::fip]`)
+    #[test] fip_closure_in_ignored_fn_bad_attr ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        pub fn outer() -> u64 {
+            let c = #[verifier::fip] #[verifier::no_such_attr] |b: Box<u64>| *b;
+            c(Box::new(3))
+        }
+    } => Err(err) => assert_vir_error_msg(err, "unrecognized verifier attribute")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_struct ["vstd"] => verus_code! {
+        #[verifier::fip]
+        pub struct T {
+            pub x: u64,
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` can only be used on functions and closures")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_impl ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub struct S {
+            pub x: u64,
+        }
+
+        #[verifier::fip]
+        impl S {
+            pub fn take(b: Box<u64>) -> u64 {
+                *b
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` can only be used on functions and closures")
+}
+
+test_verify_one_file_with_options! {
+    // without -V alloc-check nothing is checked as fip: a warning, like other attributes
+    #[test] fip_on_ignored_fn_without_alloc_check ["vstd"] => code! {
+        use vstd::prelude::*;
+
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Ok(err) => {
+        assert!(err.warnings.iter().any(|w| w.message.contains("has no effect because Verus is ignoring this item")))
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_external_body_rejected ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[verifier::external_body]
+        #[verifier::fip]
+        pub fn f(x: u64) -> Box<u64> {
+            Box::new(x)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` needs a verified body")
+}
+
+test_verify_one_file_with_options! {
+    // the remedy: `#[verus_spec]` makes Verus verify the function
+    #[test] fip_with_verus_spec_checked ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        #[verus_spec]
+        #[verifier::fip]
+        pub fn f(b: Box<u64>) -> u64 {
+            let x = *b;
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is dropped here")
+}

@@ -124,6 +124,9 @@ impl CrateItems {
 /// 'External' or 'VerusAware'.
 ///
 /// We should try to never 'error' for anything not marked verification-ready.
+/// (Except: with -V alloc-check, `#[verifier::fip]` on a function or closure that Verus does not
+/// verify is an error, because the attribute claims a check that would not happen; and
+/// `#[verifier::fip]` on an item that is not a function is always an error.)
 ///
 /// Notes:
 ///
@@ -152,6 +155,7 @@ pub(crate) fn get_crate_items<'tcx>(ctxt: &ContextX<'tcx>) -> Result<CrateItems,
         module_path: Some(root_module_path),
         errors: vec![],
         in_impl: None,
+        in_unerased_proxy: false,
     };
     let owner = ctxt.tcx.hir_owner_node(rustc_hir::CRATE_OWNER_ID);
     visitor.visit_mod(root_module, owner.span(), rustc_hir::def_id::CRATE_MOD_ID);
@@ -197,6 +201,10 @@ struct VisitMod<'a, 'tcx> {
     state: VerifState,
     module_path: Option<Path>,
     in_impl: Option<InsideImpl>,
+    /// Inside the erased copy of an item that Verus verifies through its unerased proxy (a
+    /// `const fn`): that copy is external, but its proxy, with the same attributes and body, is
+    /// verified
+    in_unerased_proxy: bool,
 }
 
 impl<'a, 'tcx> rustc_hir::intravisit::Visitor<'tcx> for VisitMod<'a, 'tcx> {
@@ -219,6 +227,15 @@ impl<'a, 'tcx> rustc_hir::intravisit::Visitor<'tcx> for VisitMod<'a, 'tcx> {
         self.visit_general(GeneralItem::TraitItem(item), item.hir_id(), item.span);
     }
 
+    fn visit_expr(&mut self, e: &'tcx rustc_hir::Expr<'tcx>) {
+        // -V alloc-check: `#[verifier::fip]` on a closure in a function that Verus does not
+        // verify (ignored, external or `external_body`): VIR never sees the closure
+        if let rustc_hir::ExprKind::Closure(..) = e.kind {
+            self.check_unverified_fip_closure(e);
+        }
+        rustc_hir::intravisit::walk_expr(self, e)
+    }
+
     fn maybe_tcx(&mut self) -> rustc_middle::ty::TyCtxt<'tcx> {
         self.ctxt.tcx
     }
@@ -236,6 +253,41 @@ fn opts_in_to_verus(eattrs: &ExternalAttrs) -> bool {
 }
 
 impl<'a, 'tcx> VisitMod<'a, 'tcx> {
+    fn check_unverified_fip_closure(&mut self, e: &'tcx rustc_hir::Expr<'tcx>) {
+        if !self.ctxt.cmd_line_args.alloc_check
+            || self.state == VerifState::Verify
+            || self.in_unerased_proxy
+            || self.ctxt.cmd_line_args.vstd == crate::config::Vstd::IsCore
+        {
+            return;
+        }
+        let attrs = self.ctxt.tcx.hir_attrs(e.hir_id);
+        if attrs.is_empty() {
+            return;
+        }
+        // (an attribute that does not parse could hide a `#[verifier::fip]`)
+        match crate::attributes::parse_attrs(attrs, None) {
+            Ok(parsed) => {
+                if let Some(strict) = parsed.iter().find_map(|a| match a {
+                    crate::attributes::Attr::Fip(strict) => Some(*strict),
+                    _ => None,
+                }) {
+                    self.errors.push(
+                        crate::util::err_span_bare(
+                            e.span,
+                            format!(
+                                "-V alloc-check: `{}` is on a closure in a function that Verus does not verify (it ignores the function, or the function is external or `external_body`), so the closure would not be checked as fully in-place",
+                                fip_attr_name(strict)
+                            ),
+                        )
+                        .help(UNVERIFIED_FIP_HELP),
+                    );
+                }
+            }
+            Err(err) => self.errors.push(err),
+        }
+    }
+
     fn visit_general(&mut self, general_item: GeneralItem<'tcx>, hir_id: HirId, span: Span) {
         let attrs = self.ctxt.tcx.hir_attrs(hir_id);
 
@@ -254,6 +306,7 @@ impl<'a, 'tcx> VisitMod<'a, 'tcx> {
             emit_errors_warnings_for_ignored_attrs(
                 self.ctxt,
                 self.state,
+                self.in_unerased_proxy,
                 &eattrs,
                 &mut *self.ctxt.diagnostics.borrow_mut(),
                 &mut self.errors,
@@ -387,9 +440,11 @@ impl<'a, 'tcx> VisitMod<'a, 'tcx> {
         let saved_state = self.state;
         let saved_mod = self.module_path.clone();
         let saved_in_impl = self.in_impl;
+        let saved_in_unerased_proxy = self.in_unerased_proxy;
 
         self.state = state_inside;
         self.in_impl = None;
+        self.in_unerased_proxy |= my_eattrs.uses_unerased_proxy;
 
         match general_item {
             GeneralItem::Item(item) => match item.kind {
@@ -462,13 +517,21 @@ impl<'a, 'tcx> VisitMod<'a, 'tcx> {
         self.state = saved_state;
         self.module_path = saved_mod;
         self.in_impl = saved_in_impl;
+        self.in_unerased_proxy = saved_in_unerased_proxy;
     }
 }
+
+fn fip_attr_name(strict: bool) -> &'static str {
+    if strict { "#[verifier::fip(strict)]" } else { "#[verifier::fip]" }
+}
+
+const UNVERIFIED_FIP_HELP: &str = "`#[verifier::fip]` is checked only on what Verus verifies: wrap the function in the `verus!` macro or apply the `#[verus_spec]` attribute to it (without `#[verifier::external]`), or remove the attribute";
 
 /// Emit warnings and errors from nonsense combinations.
 fn emit_errors_warnings_for_ignored_attrs<'tcx>(
     ctxt: &ContextX<'tcx>,
     state: VerifState,
+    in_unerased_proxy: bool,
     eattrs: &ExternalAttrs,
     diagnostics: &mut Vec<VirErrAs>,
     errors: &mut Vec<VirErr>,
@@ -488,6 +551,37 @@ fn emit_errors_warnings_for_ignored_attrs<'tcx>(
 
     if eattrs.uses_unerased_proxy {
         return;
+    }
+
+    if let Some(strict) = eattrs.fip {
+        // `#[verifier::fip]` means something only on a function (or closure)
+        if !general_item.is_fn() {
+            errors.push(crate::util::err_span_bare(
+                span,
+                format!("`{}` can only be used on functions and closures", fip_attr_name(strict)),
+            ));
+            return;
+        }
+        // -V alloc-check: VIR checks a fip function's allocations and calls, and the compiled
+        // program its drops and stack; on a function that Verus does not verify, the attribute
+        // would claim checks that do not happen
+        let external = eattrs.external || state == VerifState::External;
+        let ignored = state == VerifState::Default && !opts_in_to_verus(&eattrs);
+        if ctxt.cmd_line_args.alloc_check && !in_unerased_proxy && (external || ignored) {
+            let msg = if external {
+                format!(
+                    "-V alloc-check: `{}` is on a function that is marked external (or is inside an external module, impl or function, or an `external_body` function), so it would not be checked as fully in-place",
+                    fip_attr_name(strict)
+                )
+            } else {
+                format!(
+                    "-V alloc-check: `{}` is on a function that Verus is ignoring, so it would not be checked as fully in-place",
+                    fip_attr_name(strict)
+                )
+            };
+            errors.push(crate::util::err_span_bare(span, msg).help(UNVERIFIED_FIP_HELP));
+            return;
+        }
     }
 
     // If an item is external, of if it's in a module that is marked external, then
@@ -626,6 +720,16 @@ impl<'a> GeneralItem<'a> {
                 TraitItemKind::Fn(..) => true,
                 _ => false,
             },
+        }
+    }
+
+    /// A function (or a method, or a trait method declaration)
+    fn is_fn(&self) -> bool {
+        match self {
+            GeneralItem::Item(i) => matches!(i.kind, ItemKind::Fn { .. }),
+            GeneralItem::ForeignItem(f) => matches!(f.kind, ForeignItemKind::Fn(..)),
+            GeneralItem::ImplItem(i) => matches!(i.kind, rustc_hir::ImplItemKind::Fn(..)),
+            GeneralItem::TraitItem(i) => matches!(i.kind, rustc_hir::TraitItemKind::Fn(..)),
         }
     }
 

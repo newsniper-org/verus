@@ -50,6 +50,12 @@ drop 검사와 스택 검사는 컴파일된 프로그램(유령 코드를 지�
 둘은 같은 함수와 클로저에서 같은 종류로 이 속성을 봐야 합니다. 한쪽만 보는 속성은 오류입니다. 예를 들어
 `cfg_attr(verus_keep_ghost_body, ..)` 뒤에 둔 속성이 그렇습니다. Verus는 이 cfg를 검증할 때만 켭니다.
 
+`-V alloc-check`에서는 Verus가 검증하지 않는 함수나 클로저에 붙은 `#[verifier::fip]`이 오류입니다. 두 검사 어느
+쪽도 그것을 다루지 않기 때문입니다. `#[verus_spec]` 없이 `verus!` 밖에 있는 함수, `#[verifier::external]`이
+붙었거나 external인 모듈·impl·함수 안에 있는 함수, 그리고 Verus가 무시하거나 external·`external_body`인 함수 안의
+클로저가 여기에 해당합니다. `-V alloc-check`가 없으면 이런 항목에 붙은 다른 Verus 속성처럼 경고만 냅니다. 함수나
+클로저가 아닌 것에 붙이면 언제나 오류입니다.
+
 ## 예
 
 아래 예들은 다음 리스트 타입을 씁니다.

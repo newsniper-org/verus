@@ -53,6 +53,13 @@ and by the compilation, which checks drops and the stack. Both must see it on th
 and closures, with the same kind. An attribute that only one of them sees is an error, for example
 one behind `cfg_attr(verus_keep_ghost_body, ..)`: Verus sets that cfg only for the verification.
 
+With `-V alloc-check`, `#[verifier::fip]` on a function or closure that Verus does not verify is an
+error, since neither check would cover it. That is a function outside `verus!` without
+`#[verus_spec]`, a function marked `#[verifier::external]` or inside an external module, impl or
+function, and a closure in a function that Verus ignores or that is external or `external_body`.
+Without `-V alloc-check` it is only a warning, as for other Verus attributes on such items. On
+something that is not a function or a closure, the attribute is always an error.
+
 ## Examples
 
 The examples below share this list type:
