@@ -562,6 +562,17 @@ fn emit_errors_warnings_for_ignored_attrs<'tcx>(
             ));
             return;
         }
+        // (whose body would be checked)
+        if let GeneralItem::ForeignItem(_) = general_item {
+            errors.push(crate::util::err_span_bare(
+                span,
+                format!(
+                    "`{}` needs a verified body, which a foreign function does not have",
+                    fip_attr_name(strict)
+                ),
+            ));
+            return;
+        }
         // -V alloc-check: VIR checks a fip function's allocations and calls, and the compiled
         // program its drops and stack; on a function that Verus does not verify, the attribute
         // would claim checks that do not happen

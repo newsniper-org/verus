@@ -3352,6 +3352,16 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                 // crate id, so an unlinked .vir binds to nothing.)
                 let has_checked = krate.functions.iter().any(|f| f.x.attrs.alloc_checked_crate);
                 let msg = match linked {
+                    // (the compiler loads `vstd` only if something names it)
+                    None if has_vstd_items
+                        && !tcx.crates(()).iter().any(|c| tcx.crate_name(*c).as_str() == "vstd") =>
+                    {
+                        Some(if self.verifier.args.vstd == crate::config::Vstd::Imported {
+                            "-V alloc-check: this crate does not use `vstd` (nothing in it names `vstd`, so the compiler does not load it), but Verus imports vstd's specifications, which -V alloc-check trusts only together with the `vstd` that is linked; add `use vstd::prelude::*;` to the crate".to_string()
+                        } else {
+                            "-V alloc-check: an imported library file has items of `vstd`, but this crate is not linked with a crate named `vstd`".to_string()
+                        })
+                    }
                     None if has_vstd_items => Some(
                         "-V alloc-check: an imported library file for `vstd` does not belong to the crate named `vstd` that this crate is linked with (it was built together with a different build of it)".to_string(),
                     ),

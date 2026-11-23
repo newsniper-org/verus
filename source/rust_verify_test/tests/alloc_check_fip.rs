@@ -4024,3 +4024,39 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, "postcondition not satisfied")
 }
+
+// (portable-fip, 2026-11-23) A crate that never names `vstd` does not load it: say so, rather than
+// that it is linked with a different build of it
+test_verify_one_file_with_options! {
+    #[test] alloc_check_vstd_not_used ["vstd", "-V alloc-check"] => code! {
+        pub fn f(x: u64) -> u64 {
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "-V alloc-check: this crate does not use `vstd`")
+}
+
+test_verify_one_file_with_options! {
+    #[test] fip_on_foreign_fn ["vstd", "-V alloc-check"] => code! {
+        use vstd::prelude::*;
+
+        unsafe extern "C" {
+            #[verifier::external_body]
+            #[verifier::fip]
+            pub fn ext_free(p: u64);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`#[verifier::fip]` needs a verified body, which a foreign function does not have")
+}
+
+test_verify_one_file_with_options! {
+    // an attribute that does not parse does not hide `#[verifier::fip]` from the compiled program's
+    // check (here both are seen only by the compilation)
+    #[test] fip_attr_next_to_bad_attr ["vstd", "-V alloc-check"] => verus_code! {
+        use vstd::prelude::*;
+
+        #[cfg_attr(not(verus_keep_ghost_body), verifier::fip)]
+        #[cfg_attr(not(verus_keep_ghost_body), verifier::no_such_attr)]
+        pub fn f(x: u64) -> u64 {
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "this function has `#[verifier::fip]` in the compiled program, but Verus did not verify it")
+}

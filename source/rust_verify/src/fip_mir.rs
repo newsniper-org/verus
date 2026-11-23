@@ -216,12 +216,15 @@ fn vstd_dependency(tcx: TyCtxt<'_>) -> bool {
 }
 
 /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`), as written
-/// on the function or closure
+/// on the function or closure. (Each attribute is parsed on its own: one that does not parse,
+/// which only the verification would report, does not hide the others.)
 fn fip_attr_local(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<bool> {
     let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(def_id));
-    parse_attrs_opt(attrs, None).iter().find_map(|a| match a {
-        Attr::Fip(strict) => Some(*strict),
-        _ => None,
+    attrs.iter().find_map(|attr| {
+        parse_attrs_opt(std::slice::from_ref(attr), None).iter().find_map(|a| match a {
+            Attr::Fip(strict) => Some(*strict),
+            _ => None,
+        })
     })
 }
 
