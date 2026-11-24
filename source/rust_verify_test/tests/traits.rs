@@ -5039,3 +5039,72 @@ test_verify_one_file! {
         }
     } => Err(err) => assert_one_fails(err)
 }
+
+test_verify_one_file_with_options! {
+    // (a supertrait whose argument is the trait's own associated type: Verus selected the impl
+    // of the supertrait clause before normalizing it, and rustc aborted with E0275)
+    #[test] supertrait_arg_own_assoc_type ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+
+        pub trait Spec<Args, Out> {
+            spec fn pre(&self, a: Args) -> bool;
+        }
+
+        pub trait Callable<Args>: Spec<Args, <Self as Callable<Args>>::Output> {
+            type Output;
+            fn call(&self, args: Args) -> Self::Output;
+        }
+
+        pub struct Certified<C> { f: C }
+
+        impl<C, R> Spec<(), R> for Certified<C> where C: Fn() -> R {
+            open spec fn pre(&self, a: ()) -> bool { true }
+        }
+
+        impl<C, R> Callable<()> for Certified<C> where C: Fn() -> R {
+            type Output = R;
+
+            #[verifier::external_body]
+            fn call(&self, _args: ()) -> R {
+                (self.f)()
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] supertrait_arg_own_assoc_type_attr ["vstd"] => code! {
+        use vstd::prelude::*;
+
+        verus! {
+        pub trait Spec<Args, Out> {
+            spec fn pre(&self, a: Args) -> bool;
+        }
+        }
+
+        #[verus_verify]
+        pub trait Callable<Args>: Spec<Args, <Self as Callable<Args>>::Output> {
+            type Output;
+            fn call(&self, args: Args) -> Self::Output;
+        }
+
+        #[verus_verify]
+        pub struct Certified<const N: u64, C> { f: C }
+
+        verus! {
+        impl<const N: u64, C, R> Spec<(), R> for Certified<N, C> where C: Fn() -> R {
+            open spec fn pre(&self, a: ()) -> bool { true }
+        }
+        }
+
+        #[verus_verify]
+        impl<const N: u64, C, R> Callable<()> for Certified<N, C> where C: Fn() -> R {
+            type Output = R;
+
+            #[verifier::external_body]
+            fn call(&self, _args: ()) -> R {
+                (self.f)()
+            }
+        }
+    } => Ok(())
+}

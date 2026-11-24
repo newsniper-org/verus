@@ -1142,8 +1142,10 @@ test_verify_one_file! {
     // Regression test: an associated type fixed only by a where-clause bound
     // normalizes to a bare inference variable, which used to trip an
     // `assert!(!matches!(t.kind(), TyKind::Infer(..)))` in rust_to_vir_base
-    // and panic the verifier. The program is rejected either way -- the point
-    // is that it is rejected with a diagnostic rather than an ICE.
+    // and panic the verifier. (It was then rejected with E0275 "overflow
+    // evaluating the requirement", which came from Verus selecting the impls
+    // of unnormalized clauses, see `supertrait_arg_own_assoc_type` in
+    // traits.rs; rustc accepts the program, and so does Verus now.)
     #[test] external_trait_extension_projection_normalizes_to_infer verus_code! {
         use vstd::prelude::*;
 
@@ -1178,5 +1180,5 @@ test_verify_one_file! {
         {
             closed spec fn items(&self) -> Seq<Self::Item> { Seq::empty() }
         }
-    } => Err(err) => assert_rust_error_msg(err, "overflow evaluating the requirement")
+    } => Ok(())
 }

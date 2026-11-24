@@ -363,6 +363,19 @@ pub(crate) fn get_impl_paths_for_clauses<'tcx>(
                 unreachable!()
             };
 
+            // `codegen_select_candidate` expects normalized input: given an unnormalized
+            // projection (e.g. a supertrait's argument `<Self as Tr>::Output`), selection may run
+            // into a cycle that rustc reports as E0275 and aborts on inside the query, before an
+            // error is returned. So normalize it first, where possible.
+            let trait_refs = if trait_refs.has_aliases() {
+                tcx.try_normalize_erasing_regions(
+                    typing_env,
+                    rustc_middle::ty::Unnormalized::new_wip(trait_refs),
+                )
+                .unwrap_or(trait_refs)
+            } else {
+                trait_refs
+            };
             let candidate_query_input = typing_env.as_query_input(trait_refs);
             let candidate = tcx.codegen_select_candidate(candidate_query_input);
             let candidate = candidate.or_else(|_| {
