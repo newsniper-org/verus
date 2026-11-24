@@ -44,6 +44,7 @@ pub mod context;
 pub mod def;
 pub mod driver;
 pub mod erase;
+mod exec_types;
 mod expand_errors_driver;
 pub mod external;
 pub mod externs;

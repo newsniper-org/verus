@@ -93,6 +93,13 @@ The new checks run only when their option is given (`-V alloc-check`, `-V alloc-
   `Allocator::{deallocate, grow, grow_zeroed, shrink}` (and their implementations) and
   `UnsafeCell::{as_ref_unchecked, as_mut_unchecked, replace}` this way.
 * **`--no-cheating`** rejects `#[verifier::trusted_call]` in the crate being verified.
+* **Exec types decided by ghost code.** Verus type-checks the crate once with its ghost code, to
+  verify it, and once without, to compile it. When only ghost code fixes the type of exec code (an
+  integer literal that a `proof` block uses as a `u64`, for example), the compiled program gets
+  another type (`i32`) and runs code that was not verified (upstream issue #3172). The erase run
+  now compares the types of exec code, what it calls with which type arguments, and its literals,
+  with the verified program, and reports an error where they differ. See
+  [Ghost erasure](./erasure.md#exec-types-must-not-depend-on-ghost-code).
 * **`-V fip-lint=fix`** cannot be combined with options that verify only part of the crate
   (`--no-verify`, `--verify-module`, `--verify-function`, `--no-lifetime`, ...), since a rewrite is
   kept only if the whole crate still verifies.

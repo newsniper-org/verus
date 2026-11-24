@@ -2205,11 +2205,13 @@ test_verify_one_file_with_options! {
                 let ghost expected = 1u64;
             }
 
+            // (`1u64`: only the closure's specification, which the compiled program does not have,
+            // would fix the type of `1`; see exec_types.rs)
             let _closure = #[verus_spec(result: u64 =>
                 ensures
                     result == expected,
             )]
-            || 1;
+            || 1u64;
         }
     } => Ok(())
 }
@@ -2223,11 +2225,13 @@ test_verify_one_file_with_options! {
                 let ghost expected = 1u64;
             }
 
+            // (`1u64`: only the closure's specification, which the compiled program does not have,
+            // would fix the type of `1`; see exec_types.rs)
             let _closure = #[verus_spec(result: u64 =>
                 ensures
                     result == expected,
             )]
-            || 1;
+            || 1u64;
         }
     } => Ok(())
 }

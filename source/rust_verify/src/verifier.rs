@@ -376,6 +376,9 @@ pub struct Verifier {
     /// compilation must be built from the same, checked in `driver`. (None when the crate is not
     /// checked so.)
     pub(crate) alloc_verified_inputs: Option<VerifiedInputs>,
+    /// The types of the exec code that VIR was built from, which the compiled program must have
+    /// too (see `exec_types`)
+    pub(crate) exec_types: Option<crate::exec_types::ExecTypes>,
     /// -V alloc-check: what the verification's file loader read (see `RecordingFileLoader`)
     pub(crate) alloc_file_reads: Option<crate::file_loader::FileReads>,
     pub(crate) compile: bool,
@@ -594,6 +597,7 @@ impl Verifier {
             alloc_local_drop_rule_fns: Vec::new(),
             alloc_local_fip_fns: Vec::new(),
             alloc_verified_inputs: None,
+            exec_types: None,
             alloc_file_reads: None,
             compile,
 
@@ -653,6 +657,7 @@ impl Verifier {
             alloc_local_drop_rule_fns: self.alloc_local_drop_rule_fns.clone(),
             alloc_local_fip_fns: self.alloc_local_fip_fns.clone(),
             alloc_verified_inputs: self.alloc_verified_inputs.clone(),
+            exec_types: self.exec_types.clone(),
             alloc_file_reads: self.alloc_file_reads.clone(),
             compile: self.compile,
 
@@ -2816,6 +2821,7 @@ impl Verifier {
 
         let pre_crate = crate::rust_to_vir::crate_to_vir(ctxtx, &other_vir_crates, &crate_items)
             .map_err(map_errors_query_diagnostics)?;
+        let def_id_to_fun = pre_crate.def_id_to_fun_name_for_erasure.clone();
         if !self.args.no_lifetime {
             crate::erase::check_verus_aware_ids(
                 tcx,
@@ -2861,6 +2867,36 @@ impl Verifier {
             built_as_vstd: matches!(self.args.vstd, crate::config::Vstd::IsVstd),
             crate_hash: None,
         };
+        // The types of the exec code that VIR is built from: the bodies of the exec functions and
+        // constants with a body (not `external_body`), whose compiled code must have the same
+        // types (see `exec_types`; checked by the erase compile, when it runs)
+        if !self.args.no_verify
+            && (self.compile || !(self.args.no_erasure_check || self.args.no_lifetime))
+        {
+            let exec_funs: std::collections::HashSet<&vir::ast::Fun> = local_crate
+                .functions
+                .iter()
+                .filter(|f| f.x.mode == vir::ast::Mode::Exec && f.x.body.is_some())
+                .map(|f| &f.x.name)
+                .collect();
+            let mut owners: Vec<rustc_span::def_id::LocalDefId> = def_id_to_fun
+                .iter()
+                .filter_map(|(def_id, fun)| {
+                    let fun = fun.as_ref()?;
+                    if !exec_funs.contains(fun) || tcx.is_typeck_child(*def_id) {
+                        return None;
+                    }
+                    def_id.as_local()
+                })
+                .collect();
+            // (and the anonymous constants, such as enum discriminants and array lengths, which
+            // rustc evaluates: Verus takes their values from this run)
+            owners.extend(tcx.hir_body_owners().filter(|d| {
+                tcx.def_kind(*d) == rustc_hir::def::DefKind::AnonConst
+                    && !tcx.is_typeck_child(d.to_def_id())
+            }));
+            self.exec_types = Some(crate::exec_types::ExecTypes::of(tcx, Some(&owners)));
+        }
         let alloc_checked = crate::rust_to_vir_func::alloc_checked_whole_crate(&self.args);
         self.alloc_local_encapsulates_fns = local_crate
             .functions

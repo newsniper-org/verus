@@ -87,6 +87,11 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
   부를 수 있고, 값으로 쓸 수 없습니다. vstd는 `Allocator::{deallocate, grow, grow_zeroed, shrink}`(와 그
   구현)와 `UnsafeCell::{as_ref_unchecked, as_mut_unchecked, replace}`에 이 표시를 붙입니다.
 * **`--no-cheating`**은 검증하는 crate 안의 `#[verifier::trusted_call]`을 거부합니다.
+* **ghost 코드가 정하는 exec 타입.** Verus는 crate를 검증할 때는 ghost 코드와 함께, 컴파일할 때는 ghost 코드
+  없이 타입 검사합니다. exec 코드의 타입을 ghost 코드만 정하면(예: `proof` 블록이 `u64`로 쓰는 정수 리터럴)
+  컴파일된 프로그램은 다른 타입(`i32`)을 얻고, 검증되지 않은 코드를 실행합니다(업스트림 이슈 #3172). 이제
+  컴파일 run이 exec 코드의 타입, 무엇을 어떤 타입 인자로 부르는지, 리터럴을 검증된 프로그램과 비교하고, 다르면
+  오류를 냅니다. [Ghost erasure](./erasure.md#exec-types-must-not-depend-on-ghost-code)를 보세요.
 * **`-V fip-lint=fix`**는 crate의 일부만 검증하는 옵션(`--no-verify`, `--verify-module`, `--verify-function`,
   `--no-lifetime` 등)과 함께 쓸 수 없습니다. 재작성은 crate 전체가 여전히 검증될 때만 남기 때문입니다.
 * **vstd.** 위의 모듈 말고도, std 명세에 `allocates` 상한이 붙었습니다. `vstd::std_specs::ptr`는

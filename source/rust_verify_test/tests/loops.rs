@@ -118,7 +118,9 @@ test_verify_one_file! {
 
         fn test1() {
             let mut i = 0;
-            let mut x = 0;
+            // (only the proof block would fix the type of `x`, which the compiled program does
+            // not have: see exec_types.rs)
+            let mut x: u64 = 0;
             while {
                 x = x + 1;
                 proof { check(x); }

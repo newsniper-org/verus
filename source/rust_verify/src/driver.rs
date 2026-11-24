@@ -141,6 +141,8 @@ struct CompilerCallbacksEraseMacro {
     pub alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
     /// see `Verifier::alloc_verified_inputs`
     pub alloc_verified_inputs: Option<crate::verifier::VerifiedInputs>,
+    /// see `Verifier::exec_types`
+    pub exec_types: Option<crate::exec_types::ExecTypes>,
     /// what this compilation's file loader read, when compared with the verification's
     pub alloc_file_reads: Option<crate::file_loader::FileReads>,
 }
@@ -195,6 +197,17 @@ impl rustc_driver::Callbacks for CompilerCallbacksEraseMacro {
                     "-V alloc-check: the compiled program would be built from other input than the one Verus verified: {}",
                     differences.join("; ")
                 ));
+                return rustc_driver::Compilation::Stop;
+            }
+        }
+        // The compiled program's exec code must have the types that Verus verified (see
+        // `exec_types`)
+        if let Some(verified) = &self.exec_types {
+            let differences = verified.differences(tcx);
+            if !differences.is_empty() {
+                for (span, message) in differences {
+                    tcx.dcx().span_err(span, message);
+                }
                 return rustc_driver::Compilation::Stop;
             }
         }
@@ -255,6 +268,7 @@ pub(crate) fn run_with_erase_macro_compile(
     alloc_local_drop_rule_fns: Vec<String>,
     alloc_local_fip_fns: Vec<(crate::fip_mir::CountedBodyKey, bool, String)>,
     alloc_verified_inputs: Option<crate::verifier::VerifiedInputs>,
+    exec_types: Option<crate::exec_types::ExecTypes>,
 ) -> Result<Option<u128>, ()> {
     let mut callbacks = CompilerCallbacksEraseMacro {
         do_compile,
@@ -270,6 +284,7 @@ pub(crate) fn run_with_erase_macro_compile(
         alloc_local_drop_rule_fns,
         alloc_local_fip_fns,
         alloc_verified_inputs,
+        exec_types,
         alloc_file_reads: None,
     };
     rustc_args.extend(["--cfg", "verus_only", "--cfg", "verus_keep_ghost"].map(|s| s.to_string()));
@@ -490,6 +505,7 @@ pub fn run(
             verifier.alloc_local_drop_rule_fns.clone(),
             verifier.alloc_local_fip_fns.clone(),
             verifier.alloc_verified_inputs.clone(),
+            verifier.exec_types.clone(),
         )
     };
     // -V alloc-check: the .vir is marked as checked only once the crate it describes was built

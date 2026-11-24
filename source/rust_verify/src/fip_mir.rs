@@ -54,7 +54,10 @@ pub(crate) fn closure_key(
 }
 
 /// The file and file-relative offsets of a span
-fn span_offsets(sm: &rustc_span::source_map::SourceMap, span: Span) -> Option<(Vec<u8>, u32, u32)> {
+pub(crate) fn span_offsets(
+    sm: &rustc_span::source_map::SourceMap,
+    span: Span,
+) -> Option<(Vec<u8>, u32, u32)> {
     let span = span.data();
     let lo = sm.lookup_byte_offset(span.lo);
     let len = span.hi.0.checked_sub(span.lo.0)?;

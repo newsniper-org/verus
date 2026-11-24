@@ -1107,7 +1107,7 @@ const ATTR_CLOSURES: &str = code_str! {
 
     #[verus_spec(deallocates 2)]
     pub fn local_in_closure() {
-        let f = #[verus_spec(r: u64 => deallocates 1)] |x: u64| { let b = Box::new(x); 0 };
+        let f = #[verus_spec(r: u64 => deallocates 1)] |x: u64| { let b = Box::new(x); 0u64 };
         let y = f(3);
         let z = f(4);
     }
