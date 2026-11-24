@@ -337,17 +337,39 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         state.datatype_decls.push(decl);
     }
 
+    // A trait's bounds on traits that are not declared to Verus (e.g. a plain Rust supertrait)
+    // are left out, as the verifier leaves them out (`vir::traits::trait_bounds_to_ast`): there is
+    // no declaration of such a trait to refer to here. (Leaving out a bound can only make more
+    // impls look like they overlap.)
+    let declared: HashSet<&Path> = vir_crate.traits.iter().map(|t| &t.x.name).collect();
+    let tuple_trait_path = vir::path!(CrateId::Core => "marker", "Tuple");
+    let declared_bounds = |bounds: &GenericBounds| -> GenericBounds {
+        std::sync::Arc::new(
+            bounds
+                .iter()
+                .filter(|b| match &***b {
+                    GenericBoundX::Trait(TraitId::Path(path), _)
+                    | GenericBoundX::TypEquality(path, ..) => {
+                        declared.contains(path) || path == &tuple_trait_path
+                    }
+                    _ => true,
+                })
+                .cloned()
+                .collect(),
+        )
+    };
+
     let mut used_traits: HashSet<Path> = HashSet::new();
     let mut used_assoc_typs: HashSet<(Path, Ident)> = HashSet::new();
     for t in &vir_crate.traits {
         let (t_params, mut t_bounds) = gen_generics(
             state,
             &t.x.typ_params.iter().map(|(x, _)| x.clone()).collect(),
-            &t.x.typ_bounds,
+            &declared_bounds(&t.x.typ_bounds),
             None,
         );
         let (a_params, mut a_bounds) =
-            gen_generics(state, &t.x.assoc_typs, &t.x.assoc_typs_bounds, None);
+            gen_generics(state, &t.x.assoc_typs, &declared_bounds(&t.x.assoc_typs_bounds), None);
         used_traits.insert(t.x.name.clone());
         for a in t.x.assoc_typs.iter() {
             used_assoc_typs.insert((t.x.name.clone(), a.clone()));
@@ -433,13 +455,13 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         let (mut generic_params, mut generic_bounds) = gen_generics(
             state,
             &t.x.typ_params.iter().map(|(x, _)| x.clone()).collect(),
-            &t.x.typ_bounds,
+            &declared_bounds(&t.x.typ_bounds),
             None,
         );
         let t_args =
             generic_params.iter().map(|p| Box::new(TypX::TypParam(p.name.clone()))).collect();
         let (a_params, a_bounds) =
-            gen_generics(state, &t.x.assoc_typs, &t.x.assoc_typs_bounds, None);
+            gen_generics(state, &t.x.assoc_typs, &declared_bounds(&t.x.assoc_typs_bounds), None);
         let mut assoc_typs: Vec<(Id, Vec<GenericParam>, Typ)> = Vec::new();
         for x in &a_params {
             // TODO: test associated types once we support "dyn with more than one trait"

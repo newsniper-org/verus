@@ -5108,3 +5108,40 @@ test_verify_one_file_with_options! {
         }
     } => Ok(())
 }
+
+test_verify_one_file! {
+    // (a verified trait whose supertrait is not declared to Verus: Verus panicked while deciding
+    // whether the trait can be used as `dyn`)
+    #[test] verified_trait_undeclared_supertrait code! {
+        use vstd::prelude::*;
+
+        pub trait Base {
+            const N: u64;
+        }
+
+        #[verus_verify]
+        pub trait T: Base {
+            #[verifier::allow(undeclared_external_trait)]
+            fn f(&self);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] verified_trait_undeclared_supertrait_dyn code! {
+        use vstd::prelude::*;
+
+        pub trait Base {
+            fn g(&self);
+        }
+
+        #[verus_verify]
+        pub trait T: Base {
+            fn f(&self);
+        }
+
+        #[verus_verify]
+        fn use_dyn(x: &dyn T) {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not declared to Verus")
+}

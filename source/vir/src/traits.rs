@@ -1787,7 +1787,15 @@ fn compute_dyn_compatibility(
 ) -> Arc<crate::ast::DynCompatible> {
     use crate::ast::DynCompatible;
     if !tr_map.contains_key(tr_path) {
-        panic!("compute_dyn_compatibility: missing trait {:?}", tr_path);
+        // (a supertrait that is not declared to Verus, e.g. a plain Rust trait: Verus knows
+        // nothing about it, so a `dyn` of a trait that has it is rejected, as a `dyn` of an
+        // undeclared trait is)
+        return Arc::new(DynCompatible::Reject {
+            reason: format!(
+                "trait {} is not declared to Verus",
+                crate::ast_util::path_as_friendly_rust_name(tr_path)
+            ),
+        });
     }
     let tr = &tr_map[tr_path];
     let mut unsized_blanket_super = None;
