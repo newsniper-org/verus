@@ -2087,3 +2087,68 @@ test_verify_one_file! {
         }
     } => Ok(())
 }
+
+test_verify_one_file! {
+    // (an associated const of a trait impl gets no unerased proxy: the proxy would be a method
+    // that the trait does not have, E0407)
+    #[test] test_trait_impl_item_const code!{
+        use vstd::prelude::*;
+
+        #[verus_verify]
+        pub trait B {
+            const N: u64;
+            const M: u64;
+            const L: u64;
+            const K: u64;
+        }
+
+        #[verus_verify]
+        pub struct S;
+
+        #[verus_verify]
+        impl B for S {
+            const N: u64 = 1;
+
+            #[verifier::external_body]
+            const M: u64 = 2;
+
+            #[verus_verify(external_body)]
+            const L: u64 = 3;
+
+            #[verus_verify]
+            const K: u64 = 4;
+        }
+
+        #[verus_spec(ensures true)]
+        fn test() {
+            let n = <S as B>::N;
+            proof! {
+                assert(n == 1);
+                assert(<S as B>::N == 1);
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] test_trait_impl_item_const_unsupported code!{
+        use vstd::prelude::*;
+
+        pub const fn f() -> u64 {
+            3
+        }
+
+        #[verus_verify]
+        pub trait B {
+            const N: u64;
+        }
+
+        #[verus_verify]
+        pub struct S;
+
+        #[verus_verify]
+        impl B for S {
+            const N: u64 = f();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "Verus does not support const items in traits, except for")
+}

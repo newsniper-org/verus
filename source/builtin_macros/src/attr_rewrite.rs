@@ -488,8 +488,48 @@ fn prepare_items_for_verus_spec(span: proc_macro2::Span, i: &mut syn::Item) {
             add_verus_spec_if_needed(attrs, span);
         }
         syn::Item::Impl(i) => {
+            let for_trait = i.trait_.is_some();
             for item in &mut i.items {
                 match item {
+                    // A const in a trait impl gets no unerased proxy (it would be a method that
+                    // the trait does not have), so, as in `verus!`, it is supported only if it is
+                    // external or a simple expression, and is then left as it is (the impl's
+                    // verification state applies to it).
+                    syn::ImplItem::Const(c) if for_trait => {
+                        // (`#[verus_verify(..)]` on the const itself would be expanded as for a
+                        // free const, with a proxy: say what it means directly instead)
+                        let attrs = std::mem::take(&mut c.attrs);
+                        for attr in attrs {
+                            if attr.path().is_ident("verus_verify") {
+                                match &attr.meta {
+                                    syn::Meta::Path(_) => continue,
+                                    syn::Meta::List(list)
+                                        if matches!(
+                                            list.tokens.to_string().as_str(),
+                                            "external" | "external_body"
+                                        ) =>
+                                    {
+                                        let arg = &list.tokens;
+                                        c.attrs.push(mk_verifier_attr_syn(
+                                            attr.span(),
+                                            quote! { #arg },
+                                        ));
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            c.attrs.push(attr);
+                        }
+                        let simple = verus_syn::parse2::<verus_syn::Expr>(c.expr.to_token_stream())
+                            .is_ok_and(|e| crate::unerased_proxies::is_simple_const_expr(&e));
+                        if !has_external_code_syn(&c.attrs) && !simple {
+                            let msg = crate::unerased_proxies::TRAIT_IMPL_CONST_UNSUPPORTED;
+                            *item = syn::ImplItem::Verbatim(
+                                quote_spanned!(c.span() => ::core::compile_error!(#msg);),
+                            );
+                        }
+                    }
                     syn::ImplItem::Const(syn::ImplItemConst { attrs, .. }) => {
                         add_verus_spec_if_needed(attrs, span);
                     }

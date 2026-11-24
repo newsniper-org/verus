@@ -80,7 +80,7 @@ pub(crate) const VERUS_UNERASED_PROXY: &str = "VERUS_UNERASED_PROXY__";
 // Function calls (including overloaded operators) aren't supported yet because only
 // dual-mode spec-exec associated consts are supported, and dual mode consts cannot call
 // spec, proof, or exec functions (and there are no dual-mode functions yet).
-fn is_simple_const_expr(expr: &Expr) -> bool {
+pub(crate) fn is_simple_const_expr(expr: &Expr) -> bool {
     use verus_syn::{BinOp, UnOp};
     match expr {
         Expr::Lit(..) => true,
@@ -119,6 +119,9 @@ fn is_simple_const_expr(expr: &Expr) -> bool {
         _ => false,
     }
 }
+
+/// (for a const in a trait impl, which gets no unerased proxy: see `impl_item_needs_unerased_proxy`)
+pub(crate) const TRAIT_IMPL_CONST_UNSUPPORTED: &str = "Verus does not support const items in traits, except for simple expressions and external_body consts (hint: declare an extra non-trait constant `const C: t = ...` and then define the trait constant to be equal to `C`, or make the trait constant external_body)";
 
 impl crate::syntax::Visitor {
     fn needs_unerased_proxies(&self) -> bool {
@@ -569,7 +572,7 @@ impl crate::syntax::Visitor {
         for item in std::mem::take(impl_items).into_iter() {
             if self.impl_item_needs_unerased_proxy(&item, for_trait) {
                 if for_trait {
-                    let msg = "Verus does not support const items in traits, except for simple expressions and external_body consts (hint: declare an extra non-trait constant `const C: t = ...` and then define the trait constant to be equal to `C`, or make the trait constant external_body)";
+                    let msg = TRAIT_IMPL_CONST_UNSUPPORTED;
                     *impl_items = vec![ImplItem::Verbatim(
                         quote_spanned!(item.span() => ::core::compile_error!(#msg);),
                     )];
