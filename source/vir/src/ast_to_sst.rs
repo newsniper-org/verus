@@ -1699,32 +1699,60 @@ fn stm_call(
     } else {
         None
     };
-    // `T: Tr with { fn drop allocates 0; }` on the callee: check the instantiation's drop glue
-    // (with -V alloc-check), then the marker holds
-    for (marker, t) in crate::alloc_check::bound_drop_markers(&fun.x.require) {
+    // `T: Tr with { fn drop allocates 0; }` on the callee (the precondition
+    // `bound_drop_alloc_free::<T>()`, which may also be written directly): with -V alloc-check,
+    // check the instantiation's drop glue, then the marker holds. Without it, nothing is checked,
+    // so the marker is not assumed either: the caller must already have it (from its own
+    // requires). (Otherwise a crate verified without -V alloc-check could prove the marker for
+    // any type, e.g. in the `ensures` of a proof function, and export it.)
+    // (A spec function's `require` is its `recommends`: never a precondition to establish, so
+    // nothing is checked or assumed for it. A spec call only reaches here in a termination or
+    // recommends check, where assuming the marker would let the function's definition prove it.)
+    let markers = if fun.x.mode == Mode::Spec {
+        vec![]
+    } else {
+        crate::alloc_check::bound_drop_markers(&fun.x.require)
+    };
+    for (marker, t) in markers {
         let substs: HashMap<Ident, Typ> =
             fun.x.typ_params.iter().cloned().zip(typs.iter().cloned()).collect();
         let t = crate::sst_util::subst_typ(&substs, &t);
-        if ctx.global.alloc_check {
-            if let Some(fctx) = &ctx.fun {
-                if let Some(caller) = ctx.func_map.get(&fctx.current_fun) {
-                    crate::alloc_check::check_bound_drop_at_call(ctx, caller, span, &t).map_err(
-                        |e| {
-                            e.secondary_label(
-                                &fun.span,
-                                "the callee requires that dropping this type allocates nothing (`with { fn drop allocates 0; }`)",
-                            )
-                        },
-                    )?;
-                }
-            }
-        }
         let m = SpannedTyped::new(
             span,
             &Arc::new(TypX::Bool),
-            ExpX::Call(CallFun::Fun(marker, None), Arc::new(vec![t]), Arc::new(vec![])),
+            ExpX::Call(CallFun::Fun(marker, None), Arc::new(vec![t.clone()]), Arc::new(vec![])),
         );
-        stms.push(Spanned::new(span.clone(), StmX::Assume(m)));
+        if ctx.global.alloc_check {
+            let caller = ctx.fun.as_ref().and_then(|fctx| ctx.func_map.get(&fctx.current_fun));
+            let Some(caller) = caller else {
+                return Err(internal_error(
+                    span,
+                    "no enclosing function for the check of `with { fn drop allocates 0; }`",
+                ));
+            };
+            crate::alloc_check::check_bound_drop_at_call(ctx, caller, span, &t).map_err(|e| {
+                e.secondary_label(
+                    &fun.span,
+                    "the callee requires that dropping this type allocates nothing (`with { fn drop allocates 0; }`)",
+                )
+            })?;
+            stms.push(Spanned::new(span.clone(), StmX::Assume(m)));
+        } else {
+            let err = error(
+                span,
+                format!(
+                    "the callee requires that dropping a `{}` allocates nothing (`with {{ fn drop allocates 0; }}`, or `bound_drop_alloc_free` in its `requires`), which is only checked with -V alloc-check: verify this crate with -V alloc-check",
+                    crate::ast_util::typ_to_diagnostic_str(&t)
+                ),
+            )
+            .secondary_label(&fun.span, "the callee");
+            // (then assumed, so that the callee's precondition does not fail a second time)
+            stms.push(Spanned::new(
+                span.clone(),
+                StmX::Assert(state.next_assert_id(), Some(err), m.clone()),
+            ));
+            stms.push(Spanned::new(span.clone(), StmX::Assume(m)));
+        }
     }
     let dest_for_handout = dest.clone();
     let call = StmX::Call {

@@ -442,6 +442,32 @@ fn dup<T: Clone with { fn clone(&self) -> Self allocates 0; fn drop allocates 0;
 매개변수를 인스턴스화한 타입에 대해 받음)에 쓸 수 있습니다. trait impl에서는 메서드가 `requires`를 가질 수
 없으므로 거부됩니다.
 
+`fn drop allocates 0;`은 전제 `vstd::alloc_check::bound_drop_alloc_free::<T>()`를 뜻하며, 이 전제는
+`requires`에 직접 쓸 수도 있습니다. 예를 들어 `with`를 쓸 자리가 없는 `#[verus_spec]` 속성에서는 이렇게 씁니다:
+
+```rust
+#[verus_spec(r =>
+    requires
+        vstd::alloc_check::bound_drop_alloc_free::<F>(),
+        f.requires((&x,)),
+    allocates call_allocations(f, (&x,))
+)]
+pub fn apply<F: Fn(&u8) -> bool>(x: u8, f: F) -> bool {
+    f(&x)
+}
+```
+
+어느 쪽으로 쓰든:
+
+* `requires` 절 하나 또는 그 conjunct(`&&`)로 쓸 때만 인식되고, `||`, `==>`, `!`, `if`, spec 함수 안에서는
+  인식되지 않습니다(spec 함수의 `recommends`에서도 효과가 없습니다). 함수 안에서는 그 타입 매개변수의
+  값을 drop할 수 있게 하며, 그 함수가 만드는 `allocates` 상한이 있는 클로저도 마찬가지입니다(타입
+  매개변수가 아닌 타입이면 호출 지점에서 검사만 합니다).
+* 그 타입 매개변수를 클로저로 인스턴스화하려면 클로저에 `allocates` 상한(예: `allocates 0`)이 있거나
+  클로저가 `Copy`여야 합니다. 클로저가 잡은 값은 상한이 있는 클로저에서만 검사되기 때문입니다.
+* 호출자는 `-V alloc-check`로 검증되어야 하며, 그때 호출 지점에서 타입을 검사합니다. 그 옵션 없이
+  검증되는 크레이트에서는 호출자 자신이 같은 전제를 가져야 합니다.
+
 ## 해제 상한: `deallocates`
 
 `deallocates d`는 `allocates`가 할당 횟수를 제한하듯이, exec 함수가 정상적으로 반환할 때까지 하는 해제 횟수를 제한합니다.

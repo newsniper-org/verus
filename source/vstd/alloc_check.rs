@@ -22,7 +22,10 @@ pub unsafe trait AllocFreeDrop {
 /// `T: Tr with { fn drop allocates 0; }` on a function's type parameter stands for the
 /// precondition `bound_drop_alloc_free::<T>()`: inside the function, dropping a `T` allocates
 /// nothing; at a call, Verus checks it for the type `T` is instantiated with (its drop glue) and
-/// then assumes it. (No other code can show it.)
+/// then assumes it. (No other code can show it.) The precondition may also be written directly
+/// as a `requires` clause (or a conjunct `&&` of one), e.g. in a `#[verus_spec]` attribute. A
+/// closure that instantiates `T` must have an `allocates` bound (or be `Copy`), and the check
+/// needs -V alloc-check: without it, a caller must have the precondition itself.
 pub uninterp spec fn bound_drop_alloc_free<T: ?Sized>() -> bool;
 
 unsafe impl AllocFreeDrop for () {

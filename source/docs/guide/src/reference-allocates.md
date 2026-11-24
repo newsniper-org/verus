@@ -465,6 +465,33 @@ on a struct's type parameter (every inherent impl block of the struct in the sam
 block gets it, for the type it instantiates the parameter with). It is rejected on a trait impl,
 whose methods cannot have `requires`.
 
+`fn drop allocates 0;` stands for the precondition `vstd::alloc_check::bound_drop_alloc_free::<T>()`,
+which may also be written directly in `requires`, for example in a `#[verus_spec]` attribute, which
+has no place for `with`:
+
+```rust
+#[verus_spec(r =>
+    requires
+        vstd::alloc_check::bound_drop_alloc_free::<F>(),
+        f.requires((&x,)),
+    allocates call_allocations(f, (&x,))
+)]
+pub fn apply<F: Fn(&u8) -> bool>(x: u8, f: F) -> bool {
+    f(&x)
+}
+```
+
+Either way:
+
+* It is recognized as a `requires` clause, or a conjunct (`&&`) of one, and not inside `||`, `==>`,
+  `!`, `if` or a spec function (nor in a spec function's `recommends`). Inside the function it lets
+  a value of the type parameter be dropped, also by a closure with an `allocates` bound that the
+  function creates (for a type that is not a type parameter, it is only checked at a call).
+* A closure that instantiates the type parameter must have an `allocates` bound (for example
+  `allocates 0`), or be `Copy`: what a closure captures is only checked for a closure with a bound.
+* The callers must be verified with `-V alloc-check`, which checks the type at the call. In a crate
+  verified without it, a caller must have the same precondition itself.
+
 ## Deallocation bounds: `deallocates`
 
 `deallocates d` bounds the number of deallocations of an exec function on a normal return, as

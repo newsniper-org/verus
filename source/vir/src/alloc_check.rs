@@ -473,6 +473,10 @@ struct DropGlueCheck<'a> {
     /// Leave `dyn` values to the MIR check (`fip_mir::check_no_dyn_drops`), which sees the
     /// drops that really happen (only for the drop rule of a function's own body)
     defer_dyn: bool,
+    /// At a call (`check_bound_drop_at_call`), the closures of the caller whose captures are
+    /// checked: those with an `allocates` bound (`check_closures_with_bounds`). `None` where the
+    /// enclosing function's own drop rule sees the captures (`collect_expr_typs`).
+    checked_closures: Option<HashSet<Path>>,
 }
 
 /// Maximum nesting depth of the drop-glue walk
@@ -519,6 +523,22 @@ impl<'a> DropGlueCheck<'a> {
             on_stack: HashMap::new(),
             depth: 0,
             defer_dyn: false,
+            checked_closures: None,
+        }
+    }
+
+    /// A closure type (by its datatype's path): dropping it drops its captures. Where the
+    /// captures are not seen (at a call, `checked_closures`), only a closure whose captures are
+    /// checked (one with an `allocates` bound) or that has no drop glue at all (`Copy`) is known
+    /// not to allocate when dropped.
+    fn check_closure(&self, span: &Span, typ: &Typ, path: &Path) -> Result<(), VirErr> {
+        match &self.checked_closures {
+            None => Ok(()),
+            Some(checked) if checked.contains(path) || self.is_copy(typ, 16) => Ok(()),
+            Some(_) => Err(error(
+                span,
+                "cannot bound the allocations of dropping this closure: what it captures is only checked for a closure with an `allocates` bound; add one to the closure (for example `allocates 0`)",
+            )),
         }
     }
 
@@ -811,7 +831,7 @@ impl<'a> DropGlueCheck<'a> {
             // A closure type is also represented as an (opaque) internal datatype; its drop glue
             // drops its captures, which are collected like for `TypX::AnonymousClosure` below
             TypX::Datatype(Dt::Path(path), _, _) if crate::def::is_closure_type_path(path) => {
-                Ok(())
+                self.check_closure(span, typ, path)
             }
             // std types with no drop glue at all: `ManuallyDrop<T>` never drops its `T`, and
             // `PhantomData<T>` holds no `T`
@@ -945,8 +965,10 @@ impl<'a> DropGlueCheck<'a> {
             // Dropping a closure drops its captures, which are variables of the function that
             // creates it: their types are the types of the variable uses inside the closure
             // body, which `collect_expr_typs` includes (and a closure's parameters and return
-            // type are collected there too).
-            TypX::AnonymousClosure(..) => Ok(()),
+            // type are collected there too). (At a call, see `check_closure`.)
+            TypX::AnonymousClosure(_, _, _, id) => {
+                self.check_closure(span, typ, &crate::def::prefix_closure_type(*id))
+            }
             _ => Err(self.unsupported(span, typ, "this kind of type is not supported yet")),
         }
     }
@@ -1010,8 +1032,42 @@ pub(crate) fn check_bound_drop_at_call(
         &ctx.global.allocator_dts,
     );
     checker.copy_closures = Some(&ctx.global.alloc_copy_closures);
-    checker.alloc_free_params.extend(marked_params(&caller.x.require));
+    // (a spec function's `require` is its `recommends`, which nothing establishes: e.g. its
+    // termination check calls lemmas, or itself, without them)
+    if caller.x.mode != crate::ast::Mode::Spec {
+        checker.alloc_free_params.extend(marked_params(&caller.x.require));
+    }
+    // (the caller's drop rule, if any, sees what its closures capture, but it is not run for a
+    // caller without an `allocates` bound; a closure's captures are only checked for a closure
+    // with its own bound)
+    checker.checked_closures = Some(closures_with_bounds(caller));
     checker.check(span, typ)
+}
+
+/// The closures of `function`'s body (by their types' paths) whose captures
+/// `check_closures_with_bounds` checks: those with an `allocates` bound
+fn closures_with_bounds(function: &Function) -> HashSet<Path> {
+    let mut paths: HashSet<Path> = HashSet::new();
+    // (`check_closures_with_bounds` does not check the allocator runtime's code)
+    if function.x.attrs.allocator_runtime || function.x.mode != crate::ast::Mode::Exec {
+        return paths;
+    }
+    let Some(body) = &function.x.body else { return paths };
+    let _ = crate::ast_visitor::expr_visitor_check::<(), _>(body, &mut |_scope, e| {
+        if let ExprX::NonSpecClosure { allocates: Some(_), .. } = &e.x {
+            match &*e.typ {
+                TypX::Datatype(Dt::Path(path), _, _) => {
+                    paths.insert(path.clone());
+                }
+                TypX::AnonymousClosure(_, _, _, id) => {
+                    paths.insert(crate::def::prefix_closure_type(*id));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    });
+    paths
 }
 
 /// Drop rule: every `Drop::drop` that `function` may run must be bounded by `allocates 0`.
@@ -1204,6 +1260,9 @@ pub(crate) fn check_closures_with_bounds(
             &ctx.global.allocator_dts,
         );
         checker.copy_closures = Some(&ctx.global.alloc_copy_closures);
+        // (`T: Tr with { fn drop allocates 0; }` on the enclosing function, where the closure is
+        // created: there, dropping a `T` allocates nothing)
+        checker.alloc_free_params.extend(marked_params(&function.x.require));
         // Dropping a value of a closure type drops that closure's captures. The bounded closure's
         // own captures are uses inside its body, but a capture may itself be (or contain) another
         // closure of the enclosing function, whose captures are only visible in that closure's
