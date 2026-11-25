@@ -222,18 +222,38 @@ impl TCFileLoader {
     const FILENAME: &'static str = "dummyrs.rs";
 }
 
+// The generated program is the only file. rustc may still ask for others, e.g. the standard
+// library source to show where a trait named in a note ("similarly named trait `ToString`
+// defined here") is defined: those are not found, and rustc leaves the snippet out.
+impl TCFileLoader {
+    fn is_generated(path: &std::path::Path) -> bool {
+        path.display().to_string() == Self::FILENAME
+    }
+
+    fn not_found(path: &std::path::Path) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is not available to the trait-conflict check", path.display()),
+        )
+    }
+}
+
 impl rustc_span::source_map::FileLoader for TCFileLoader {
-    fn file_exists(&self, _path: &std::path::Path) -> bool {
-        panic!("unexpected call to file_exists")
+    fn file_exists(&self, path: &std::path::Path) -> bool {
+        Self::is_generated(path)
     }
 
     fn read_file(&self, path: &std::path::Path) -> Result<String, std::io::Error> {
-        assert!(path.display().to_string() == Self::FILENAME);
+        if !Self::is_generated(path) {
+            return Err(Self::not_found(path));
+        }
         Ok(self.rust_code.clone())
     }
 
     fn read_binary_file(&self, path: &std::path::Path) -> Result<Arc<[u8]>, std::io::Error> {
-        assert!(path.display().to_string() == Self::FILENAME);
+        if !Self::is_generated(path) {
+            return Err(Self::not_found(path));
+        }
         Ok(self.rust_code.as_bytes().into())
     }
 
@@ -297,15 +317,24 @@ pub(crate) fn check_trait_conflicts<'tcx>(
         .expect("failed to send code to trait-conflict rustc");
     std::mem::drop(child_stdin);
     let run = child.wait_with_output().expect("trait-conflict rustc wait failed");
-    let rust_output = std::str::from_utf8(&run.stderr[..]).unwrap().trim();
+    let rust_output = String::from_utf8_lossy(&run.stderr[..]);
+    let rust_output = rust_output.trim();
     let mut msgs: Vec<Message> = Vec::new();
+    // Lines that are not rustc's JSON diagnostics, e.g. a panic of the trait-conflict rustc
+    let mut unexpected_output: Vec<&str> = Vec::new();
     let debug = false;
     if rust_output.len() > 0 {
         for ss in rust_output.split("\n") {
             if let Some(ss) = ss.strip_prefix(LDBG_PREFIX) {
                 eprintln!("{}", ss);
             } else {
-                let diag: Diagnostic = serde_json::from_str(ss).expect("serde_json from_str");
+                let diag: Diagnostic = match serde_json::from_str(ss) {
+                    Ok(diag) => diag,
+                    Err(_) => {
+                        unexpected_output.push(ss);
+                        continue;
+                    }
+                };
                 if diag.level == "failure-note" {
                     continue;
                 }
@@ -314,7 +343,8 @@ pub(crate) fn check_trait_conflicts<'tcx>(
                     dbg!(diag);
                     continue;
                 }
-                assert!(diag.level == "error");
+                // "error", or anything else unexpected (e.g. "error: internal compiler error"),
+                // is reported as an error
                 let msg_text = gen_state.unmangle_names(&diag.message);
                 let mut msg = message_bare(MessageLevel::Error, &msg_text);
                 if debug {
@@ -367,7 +397,13 @@ pub(crate) fn check_trait_conflicts<'tcx>(
     if debug {
         dbg!(msgs.len());
     }
-    if msgs.len() == 0 && !run.status.success() {
+    if unexpected_output.len() > 0 {
+        Err(error(format!(
+            "internal error: trait-conflict checking failed ({}):\n{}",
+            run.status,
+            unexpected_output.join("\n")
+        )))
+    } else if msgs.len() == 0 && !run.status.success() {
         Err(error("trait-conflict checking failed"))
     } else {
         Ok(msgs)

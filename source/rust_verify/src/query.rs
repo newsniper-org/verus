@@ -674,6 +674,10 @@ impl<'tcx> Query<'tcx> {
         let krate = vir::traits::inherit_default_bodies(&krate, &mut new_warning_ctx)
             .map_err(|e| self.emit_error(e))?;
 
+        // (after pruning: a bound's trait, and its associated type, that is in some crate is
+        // reached through the bound; after the warnings about undeclared traits)
+        let krate = vir::traits::remove_undeclared_typ_equality_bounds(&krate);
+
         // Resolution inference
         // Make sure to do this before the res_info goes stale
         let mut res_infos = HashMap::<Fun, Arc<ResolutionInfo>>::new();

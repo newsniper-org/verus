@@ -323,6 +323,46 @@ const ALLOC_DROPS: &str = verus_code_str! {
 };
 
 test_verify_one_file_with_options! {
+    // `A: Sub<O = u8>` puts an equality on the associated type of `Out`, which Verus does not
+    // know, so it is left out of the impl's bounds. The `Copy` impl must not then count as
+    // applying to `W<u16>`: `<u16 as Out>::O` is `Bad`, so `W<u16>` is not `Copy`, and dropping it
+    // runs `Bad::drop`, which allocates.
+    #[test] alloc_check_copy_impl_undeclared_assoc_eq ["vstd", "-V alloc-check"] => code_str! {
+        use vstd::prelude::*;
+        pub trait Out { type O; }
+        impl Out for u8 { type O = u8; }
+        impl Out for u16 { type O = Bad; }
+        verus! {
+        pub struct Bad { pub x: u8 }
+        impl Drop for Bad {
+            #[verifier::external_body]
+            fn drop(&mut self)
+                opens_invariants none
+                no_unwind
+            {
+                let _b = Box::new(1u8);
+            }
+        }
+        pub trait Sub: Out {}
+        impl Sub for u8 {}
+        impl Sub for u16 {}
+        #[verifier::external_body]
+        #[verifier::reject_recursive_types(A)]
+        pub struct W<A: Sub> { a: <A as Out>::O }
+        impl<A: Sub<O = u8> + Copy> Copy for W<A> {}
+        impl<A: Sub<O = u8> + Copy> Clone for W<A> {
+            #[verifier::external_body]
+            fn clone(&self) -> Self { *self }
+        }
+        fn p(w: W<u16>)
+            allocates 0
+        {
+        }
+        }
+    }.to_string() => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
+}
+
+test_verify_one_file_with_options! {
     #[test] alloc_check_drop_bounded_ok ["vstd", "-V alloc-check"] => ALLOC_DROPS.to_string() + verus_code_str! {
         fn p(g: Good, v: Vec<u8>, b: Box<u8>, o: Option<Box<u8>>)
             allocates 0

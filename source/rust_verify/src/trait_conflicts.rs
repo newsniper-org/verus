@@ -299,6 +299,32 @@ pub(crate) fn gen_check_trait_impl_conflicts(
     vir_crate: &vir::ast::Krate,
     state: &mut State,
 ) {
+    // Bounds on traits that are not declared to Verus (a plain Rust supertrait, or an impl's
+    // `C: ToString` when vstd does not declare `ToString`) are left out, of traits, datatypes and
+    // impls alike. The verifier leaves them out too (`vir::traits::trait_bounds_to_ast`; a bound on
+    // an associated type of such a trait is already gone from the crate,
+    // `vir::traits::remove_undeclared_typ_equality_bounds`), so an impl bounded by one applies to
+    // every type in its model, and this check must see the same overlaps: `impl T for S` and
+    // `impl<A: ToString> T for A` both apply to `S` there, even when rustc accepts them because
+    // `S` does not implement `ToString`. (There is also no declaration of such a trait to refer
+    // to here. Leaving out a bound can only make more impls overlap.) This holds for
+    // `core::marker::Tuple` too: only vstd declares it, and without vstd `A: Tuple` is not in the
+    // verifier's model either.
+    let declared: HashSet<&Path> = vir_crate.traits.iter().map(|t| &t.x.name).collect();
+    let declared_bounds = |bounds: &GenericBounds| -> GenericBounds {
+        std::sync::Arc::new(
+            bounds
+                .iter()
+                .filter(|b| match &***b {
+                    GenericBoundX::Trait(TraitId::Path(path), _)
+                    | GenericBoundX::TypEquality(path, ..) => declared.contains(path),
+                    _ => true,
+                })
+                .cloned()
+                .collect(),
+        )
+    };
+
     for d in &vir_crate.datatypes {
         let Dt::Path(path) = &d.x.name else {
             panic!("Verus internal error: gen_check_trait_impl_conflicts expects Dt::Path");
@@ -307,7 +333,7 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         let (generic_params, generic_bounds) = gen_generics(
             state,
             &d.x.typ_params.iter().map(|(x, _)| x.clone()).collect(),
-            &d.x.typ_bounds,
+            &declared_bounds(&d.x.typ_bounds),
             None,
         );
         let mut fields: Vec<Typ> = Vec::new();
@@ -336,28 +362,6 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         };
         state.datatype_decls.push(decl);
     }
-
-    // A trait's bounds on traits that are not declared to Verus (e.g. a plain Rust supertrait)
-    // are left out, as the verifier leaves them out (`vir::traits::trait_bounds_to_ast`): there is
-    // no declaration of such a trait to refer to here. (Leaving out a bound can only make more
-    // impls look like they overlap.)
-    let declared: HashSet<&Path> = vir_crate.traits.iter().map(|t| &t.x.name).collect();
-    let tuple_trait_path = vir::path!(CrateId::Core => "marker", "Tuple");
-    let declared_bounds = |bounds: &GenericBounds| -> GenericBounds {
-        std::sync::Arc::new(
-            bounds
-                .iter()
-                .filter(|b| match &***b {
-                    GenericBoundX::Trait(TraitId::Path(path), _)
-                    | GenericBoundX::TypEquality(path, ..) => {
-                        declared.contains(path) || path == &tuple_trait_path
-                    }
-                    _ => true,
-                })
-                .cloned()
-                .collect(),
-        )
-    };
 
     let mut used_traits: HashSet<Path> = HashSet::new();
     let mut used_assoc_typs: HashSet<(Path, Ident)> = HashSet::new();
@@ -408,7 +412,7 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         }
         let span = spans.from_air_span(&i.span, None);
         let (generic_params, generic_bounds) =
-            gen_generics(state, &*i.x.typ_params, &i.x.typ_bounds, Some(i));
+            gen_generics(state, &*i.x.typ_params, &declared_bounds(&i.x.typ_bounds), Some(i));
         let self_typ = gen_typ(state, &i.x.trait_typ_args[0]);
         let trait_as_datatype = Box::new(TypX::Datatype(
             state.trait_name(&i.x.trait_path),

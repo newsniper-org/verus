@@ -1719,8 +1719,9 @@ pub struct FunctionAttrsX {
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,
     /// `-V alloc-check`: the function (or its impl) has trait bounds that do not appear in
-    /// `typ_bounds` (auto traits such as `Send`), so its `call_allocates` axiom cannot be guarded
-    /// by them and is not emitted
+    /// `typ_bounds` (auto traits such as `Send`, or a bound on an associated type of a trait Verus
+    /// does not know, `traits::remove_undeclared_typ_equality_bounds`), so its `call_allocates`
+    /// axiom cannot be guarded by them and is not emitted
     pub alloc_unmodeled_bounds: bool,
     /// Is this function `tracked_swap`, which requires special handling
     pub tracked_swap: bool,
@@ -2111,8 +2112,10 @@ pub struct TraitImplX {
     pub auto_imported: bool,
     // Is a blanket implementation declared by external_trait_extension:
     pub external_trait_blanket: bool,
-    /// -V alloc-check: the impl has bounds on auto traits (`Send`, `Sync`, `Unpin`), which are not
-    /// in `typ_bounds`, so `typ_bounds` overstates where the impl applies
+    /// -V alloc-check: the impl has bounds that are not in `typ_bounds` (on auto traits `Send`,
+    /// `Sync`, `Unpin`, or on an associated type of a trait Verus does not know,
+    /// `traits::remove_undeclared_typ_equality_bounds`), so `typ_bounds` overstates where the impl
+    /// applies
     pub has_auto_trait_bounds: bool,
 }
 

@@ -231,6 +231,87 @@ pub fn method_if_not_demoted(lookup: &DemoteTraitLookup, function: &Function) ->
     }
 }
 
+/// Leave out each bound `A: Tr<.., X = T>` (on an associated type) that Verus does not know: its
+/// trait `Tr` is not declared to Verus (not among `krate.traits`), or `Tr`'s declaration lacks
+/// `X` (an `external_trait_specification` may leave out associated types). Examples:
+/// `C: FromStr<Err = u8>` with vstd, which does not declare `FromStr`; the `FnOnce::Output` of
+/// `C: Fn() -> R` without vstd. Verus does not model such a trait: it already leaves out a bound
+/// `A: Tr` on it (`trait_bounds_to_ast`, `trait_bound_to_air`), and it has no projection function
+/// for the associated type, so encoding the equality gave ill-typed AIR.
+///
+/// Leaving out a bound only weakens what a function assumes. An impl, or the definition of a
+/// trait method in it, then applies to more types, as with a left-out `A: Tr`; the trait-conflict
+/// check sees the same bounds (`krate` is what it checks), so it reports an overlap that this
+/// creates. What reads `typ_bounds` as the exact condition under which an impl applies is told
+/// that it is not (`TraitImplX::has_auto_trait_bounds`, `FunctionAttrsX::alloc_unmodeled_bounds`):
+/// -V alloc-check's `Copy` impls and `call_allocates` axioms.
+///
+/// Runs after `demote_external_traits`, which warns about bounds on undeclared traits.
+pub fn remove_undeclared_typ_equality_bounds(krate: &Krate) -> Krate {
+    let declared: HashMap<&Path, &Arc<Vec<Ident>>> =
+        krate.traits.iter().map(|t| (&t.x.name, &t.x.assoc_typs)).collect();
+    let undeclared = |b: &GenericBound| match &**b {
+        GenericBoundX::TypEquality(path, _, name, _) => match declared.get(path) {
+            Some(assoc_typs) => !assoc_typs.contains(name),
+            None => true,
+        },
+        _ => false,
+    };
+    let strip = |bounds: &GenericBounds| -> Option<GenericBounds> {
+        if !bounds.iter().any(|b| undeclared(b)) {
+            return None;
+        }
+        Some(Arc::new(bounds.iter().filter(|b| !undeclared(b)).cloned().collect()))
+    };
+    let mut kratex = (**krate).clone();
+    for f in kratex.functions.iter_mut() {
+        if let Some(typ_bounds) = strip(&f.x.typ_bounds) {
+            let attrs = Arc::new(crate::ast::FunctionAttrsX {
+                alloc_unmodeled_bounds: true,
+                ..(*f.x.attrs).clone()
+            });
+            *f = f.new_x(FunctionX { typ_bounds, attrs, ..f.x.clone() });
+        }
+    }
+    for d in kratex.datatypes.iter_mut() {
+        if let Some(typ_bounds) = strip(&d.x.typ_bounds) {
+            *d = d.new_x(crate::ast::DatatypeX { typ_bounds, ..d.x.clone() });
+        }
+    }
+    for o in kratex.opaque_types.iter_mut() {
+        if let Some(typ_bounds) = strip(&o.x.typ_bounds) {
+            *o = o.new_x(crate::ast::OpaqueTypeX { typ_bounds, ..o.x.clone() });
+        }
+    }
+    for t in kratex.traits.iter_mut() {
+        let typ_bounds = strip(&t.x.typ_bounds);
+        let assoc_typs_bounds = strip(&t.x.assoc_typs_bounds);
+        if typ_bounds.is_some() || assoc_typs_bounds.is_some() {
+            *t = t.new_x(TraitX {
+                typ_bounds: typ_bounds.unwrap_or_else(|| t.x.typ_bounds.clone()),
+                assoc_typs_bounds: assoc_typs_bounds
+                    .unwrap_or_else(|| t.x.assoc_typs_bounds.clone()),
+                ..t.x.clone()
+            });
+        }
+    }
+    for a in kratex.assoc_type_impls.iter_mut() {
+        if let Some(typ_bounds) = strip(&a.x.typ_bounds) {
+            *a = a.new_x(crate::ast::AssocTypeImplX { typ_bounds, ..a.x.clone() });
+        }
+    }
+    for i in kratex.trait_impls.iter_mut() {
+        if let Some(typ_bounds) = strip(&i.x.typ_bounds) {
+            *i = i.new_x(crate::ast::TraitImplX {
+                typ_bounds,
+                has_auto_trait_bounds: true,
+                ..i.x.clone()
+            });
+        }
+    }
+    Arc::new(kratex)
+}
+
 // We consider methods for external traits to be static.
 pub fn demote_external_traits(
     diagnostics: &(impl air::messages::Diagnostics + ?Sized),
