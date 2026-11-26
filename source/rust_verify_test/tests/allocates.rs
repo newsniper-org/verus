@@ -350,9 +350,10 @@ test_verify_one_file_with_options! {
         #[verifier::reject_recursive_types(A)]
         pub struct W<A: Sub> { a: <A as Out>::O }
         impl<A: Sub<O = u8> + Copy> Copy for W<A> {}
-        impl<A: Sub<O = u8> + Copy> Clone for W<A> {
+        // (with the bound `O = u8`, `clone` would be rejected for its bound on `Out`)
+        impl<A: Sub> Clone for W<A> {
             #[verifier::external_body]
-            fn clone(&self) -> Self { *self }
+            fn clone(&self) -> Self { unimplemented!() }
         }
         fn p(w: W<u16>)
             allocates 0

@@ -5120,11 +5120,24 @@ test_verify_one_file! {
         }
 
         #[verus_verify]
+        pub trait T: Base {}
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // a method of such a trait has the bound `Self: Base`
+    #[test] verified_trait_undeclared_supertrait_method code! {
+        use vstd::prelude::*;
+
+        pub trait Base {
+            const N: u64;
+        }
+
+        #[verus_verify]
         pub trait T: Base {
-            #[verifier::allow(undeclared_external_trait)]
             fn f(&self);
         }
-    } => Ok(())
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `test_crate::Base` as a bound without declaring the trait")
 }
 
 test_verify_one_file! {
@@ -5208,16 +5221,15 @@ test_verify_one_file! {
 test_verify_one_file! {
     #[test] fn_bound_undeclared_assoc_eq verus_code! {
         use vstd::prelude::*;
-        #[verifier::allow(undeclared_external_trait)]
+        // (this gave ill-typed AIR when it was a warning)
         pub fn foo<C: core::str::FromStr<Err = ()>>(c: C) {}
-    } => Ok(())
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `core::str::traits::FromStr` as a bound without declaring the trait")
 }
 
 test_verify_one_file! {
     #[test] fn_bound_undeclared_fn_trait_no_vstd verus_code! {
-        #[verifier::allow(undeclared_external_trait)]
         pub fn apply<F: Fn(u8) -> u8>(f: F, x: u8) -> u8 { 0 }
-    } => Ok(())
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `core::ops::function::Fn` as a bound without declaring the trait")
 }
 
 test_verify_one_file! {
@@ -5233,15 +5245,15 @@ test_verify_one_file! {
 }
 
 test_verify_one_file! {
-    #[test] fn_bound_assoc_eq_of_undeclared_supertrait_warns code! {
+    #[test] fn_bound_assoc_eq_of_undeclared_supertrait code! {
         use vstd::prelude::*;
         pub trait Super { type X; }
         verus! {
         pub trait Sub: Super {}
-        // the bound on `<A as Super>::X` is left out, with the usual warning
+        // the bound is on `<A as Super>::X`
         pub fn foo<A: Sub<X = u8>>(a: A) {}
         }
-    } => Ok(err) => assert!(err.warnings.iter().any(|w| w.message.contains("cannot use external trait") && w.message.contains("Super")))
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `test_crate::Super` as a bound without declaring the trait")
 }
 
 test_verify_one_file! {
@@ -5251,15 +5263,20 @@ test_verify_one_file! {
         impl Out for u8 { type O = u16; }
         verus! {
         pub struct S<A> { pub a: A }
-        pub trait T { spec fn f() -> int; }
+        pub trait Val { spec fn v() -> int; }
+        impl Val for u8 { open spec fn v() -> int { 1 } }
+        impl Val for u16 { open spec fn v() -> int { 2 } }
+        pub trait T { type X: Val; }
         // rustc accepts this, because `<u8 as Out>::O` is `u16`. Verus does not know `Out` and
         // leaves out the bound, so both impls apply to `S<u8>` in its model; without the
-        // trait-conflict check, `assert(false)` verifies.
-        impl<A> T for S<A> where A: Out<O = u32> { open spec fn f() -> int { 1 } }
-        impl T for S<u8> { open spec fn f() -> int { 2 } }
+        // trait-conflict check, `assert(false)` verifies. (A method that the impl defines would be
+        // rejected for its bound on `Out`.)
+        impl<A> T for S<A> where A: Out<O = u32> { type X = u16; }
+        impl T for S<u8> { type X = u8; }
+        pub open spec fn g<A: T>() -> int { <A::X as Val>::v() }
         proof fn test() {
-            assert(<S<u8> as T>::f() == 2);
-            assert(<S<u8> as T>::f() == 1);
+            assert(g::<S<u8>>() == 1);
+            assert(g::<S<u8>>() == 2);
             assert(false);
         }
         }
@@ -5268,16 +5285,20 @@ test_verify_one_file! {
 
 test_verify_one_file! {
     #[test] impl_bound_tuple_no_vstd_overlap verus_code! {
-        struct S;
-        trait T { spec fn f() -> int; }
-        impl T for S { spec fn f() -> int { 100 } }
+        pub struct S;
+        pub trait Val { spec fn v() -> int; }
+        impl Val for u8 { open spec fn v() -> int { 1 } }
+        impl Val for u16 { open spec fn v() -> int { 2 } }
+        pub trait T { type X: Val; }
+        impl T for S { type X = u8; }
         // without vstd, nothing declares `Tuple` to Verus, so its model leaves out this bound,
         // and `assert(false)` verified: the trait-conflict check kept `A: Tuple`, for which
         // rustc knows that `S` is not a tuple
-        impl<A: core::marker::Tuple> T for A { spec fn f() -> int { 200 } }
+        impl<A: core::marker::Tuple> T for A { type X = u16; }
+        pub open spec fn g<A: T>() -> int { <A::X as Val>::v() }
         proof fn test() {
-            assert(<S as T>::f() == 100);
-            assert(<S as T>::f() == 200);
+            assert(g::<S>() == 1);
+            assert(g::<S>() == 2);
             assert(false);
         }
     } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
@@ -5298,16 +5319,20 @@ test_verify_one_file! {
 test_verify_one_file! {
     #[test] impl_bound_undeclared_std_trait_overlap verus_code! {
         use vstd::prelude::*;
-        struct S;
-        trait T { spec fn f() -> int; }
-        impl T for S { spec fn f() -> int { 100 } }
+        pub struct S;
+        pub trait Val { spec fn v() -> int; }
+        impl Val for u8 { open spec fn v() -> int { 1 } }
+        impl Val for u16 { open spec fn v() -> int { 2 } }
+        pub trait T { type X: Val; }
+        impl T for S { type X = u8; }
         // rustc accepts this, because `S` does not implement `ToString`. Verus leaves out the
         // bound on the undeclared `ToString`, so both impls apply to `S` in its model; without
         // the trait-conflict check, `assert(false)` verifies.
-        impl<A: ToString> T for A { spec fn f() -> int { 200 } }
+        impl<A: ToString> T for A { type X = u16; }
+        pub open spec fn g<A: T>() -> int { <A::X as Val>::v() }
         proof fn test() {
-            assert(<S as T>::f() == 100);
-            assert(<S as T>::f() == 200);
+            assert(g::<S>() == 1);
+            assert(g::<S>() == 2);
             assert(false);
         }
     } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
@@ -5317,10 +5342,51 @@ test_verify_one_file! {
     #[test] impl_bound_undeclared_std_trait_overlap_write verus_code! {
         use vstd::prelude::*;
         struct S;
+        trait T { type X; }
+        impl T for S { type X = u8; }
+        impl<A: std::io::Write> T for A { type X = u16; }
+    } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
+}
+
+test_verify_one_file! {
+    // a copy of a default method in an impl has the impl's bounds, but the error for a bound on an
+    // undeclared trait is given before the copies are made
+    #[test] impl_bound_undeclared_default_method verus_code! {
+        use vstd::prelude::*;
+        pub trait T { open spec fn f() -> int { 0 } }
+        pub struct W<A> { pub a: A }
+        impl<A: ToString> T for W<A> {}
+        pub struct V<A> { pub a: A }
+        impl<A> T for V<A> where A: core::str::FromStr<Err = core::convert::Infallible> {}
+        proof fn test<A: T>() {}
+        proof fn test2() { test::<V<String>>(); }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] impl_bound_undeclared_default_method_overlap verus_code! {
+        use vstd::prelude::*;
+        pub struct S;
+        pub trait T { open spec fn f() -> int { 0 } }
+        impl T for S { open spec fn f() -> int { 100 } }
+        // without the trait-conflict check, `assert(false)` verifies
+        impl<A: ToString> T for A {}
+        proof fn test() {
+            assert(<S as T>::f() == 100);
+            assert(false);
+        }
+    } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
+}
+
+test_verify_one_file! {
+    // the methods that an impl defines have its bounds
+    #[test] impl_bound_undeclared_std_trait_spec_fn verus_code! {
+        use vstd::prelude::*;
+        struct S;
         trait T { spec fn f() -> int; }
         impl T for S { spec fn f() -> int { 100 } }
-        impl<A: std::io::Write> T for A { spec fn f() -> int { 200 } }
-    } => Err(err) => assert_vir_error_msg(err, "conflicting implementations")
+        impl<A: ToString> T for A { spec fn f() -> int { 200 } }
+    } => Err(err) => assert_vir_error_msg(err, "cannot use external trait `alloc::string::ToString` as a bound without declaring the trait")
 }
 
 test_verify_one_file! {

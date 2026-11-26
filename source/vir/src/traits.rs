@@ -233,11 +233,11 @@ pub fn method_if_not_demoted(lookup: &DemoteTraitLookup, function: &Function) ->
 
 /// Leave out each bound `A: Tr<.., X = T>` (on an associated type) that Verus does not know: its
 /// trait `Tr` is not declared to Verus (not among `krate.traits`), or `Tr`'s declaration lacks
-/// `X` (an `external_trait_specification` may leave out associated types). Examples:
-/// `C: FromStr<Err = u8>` with vstd, which does not declare `FromStr`; the `FnOnce::Output` of
-/// `C: Fn() -> R` without vstd. Verus does not model such a trait: it already leaves out a bound
-/// `A: Tr` on it (`trait_bounds_to_ast`, `trait_bound_to_air`), and it has no projection function
-/// for the associated type, so encoding the equality gave ill-typed AIR.
+/// `X` (an `external_trait_specification` may leave out associated types). Examples, on an impl
+/// or a datatype: `C: FromStr<Err = u8>` with vstd, which does not declare `FromStr`; the
+/// `FnOnce::Output` of `C: Fn() -> R` without vstd. Verus does not model such a trait: it already
+/// leaves out a bound `A: Tr` on it (`trait_bounds_to_ast`, `trait_bound_to_air`), and it has no
+/// projection function for the associated type, so encoding the equality gave ill-typed AIR.
 ///
 /// Leaving out a bound only weakens what a function assumes. An impl, or the definition of a
 /// trait method in it, then applies to more types, as with a left-out `A: Tr`; the trait-conflict
@@ -246,7 +246,11 @@ pub fn method_if_not_demoted(lookup: &DemoteTraitLookup, function: &Function) ->
 /// that it is not (`TraitImplX::has_auto_trait_bounds`, `FunctionAttrsX::alloc_unmodeled_bounds`):
 /// -V alloc-check's `Copy` impls and `call_allocates` axioms.
 ///
-/// Runs after `demote_external_traits`, which warns about bounds on undeclared traits.
+/// Runs after `demote_external_traits`, which rejects a function with a bound on an undeclared
+/// trait, and after `inherit_default_bodies`, whose copy of a default method in an impl has the
+/// impl's bounds without that check. So from a function, this leaves out a bound on an undeclared
+/// trait only in such a copy, and otherwise only a bound on an associated type that its trait's
+/// declaration lacks.
 pub fn remove_undeclared_typ_equality_bounds(krate: &Krate) -> Krate {
     let declared: HashMap<&Path, &Arc<Vec<Ident>>> =
         krate.traits.iter().map(|t| (&t.x.name, &t.x.assoc_typs)).collect();

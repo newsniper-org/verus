@@ -1719,8 +1719,8 @@ pub struct FunctionAttrsX {
     /// bound (if any, and if the function has a body) was checked
     pub alloc_checked_crate: bool,
     /// `-V alloc-check`: the function (or its impl) has trait bounds that do not appear in
-    /// `typ_bounds` (auto traits such as `Send`, or a bound on an associated type of a trait Verus
-    /// does not know, `traits::remove_undeclared_typ_equality_bounds`), so its `call_allocates`
+    /// `typ_bounds` (auto traits such as `Send`, or a bound on an associated type that Verus does
+    /// not know, `traits::remove_undeclared_typ_equality_bounds`), so its `call_allocates`
     /// axiom cannot be guarded by them and is not emitted
     pub alloc_unmodeled_bounds: bool,
     /// Is this function `tracked_swap`, which requires special handling
