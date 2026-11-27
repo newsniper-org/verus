@@ -324,9 +324,9 @@ const ALLOC_DROPS: &str = verus_code_str! {
 
 test_verify_one_file_with_options! {
     // `A: Sub<O = u8>` puts an equality on the associated type of `Out`, which Verus does not
-    // know, so it is left out of the impl's bounds. The `Copy` impl must not then count as
-    // applying to `W<u16>`: `<u16 as Out>::O` is `Bad`, so `W<u16>` is not `Copy`, and dropping it
-    // runs `Bad::drop`, which allocates.
+    // know. Left out of the impl's bounds, it let the `Copy` impl apply to `W<u16>`, although
+    // `<u16 as Out>::O` is `Bad`, so `W<u16>` is not `Copy`, and dropping it runs `Bad::drop`,
+    // which allocates. Such an impl is rejected.
     #[test] alloc_check_copy_impl_undeclared_assoc_eq ["vstd", "-V alloc-check"] => code_str! {
         use vstd::prelude::*;
         pub trait Out { type O; }
@@ -360,7 +360,7 @@ test_verify_one_file_with_options! {
         {
         }
         }
-    }.to_string() => Err(err) => assert_vir_error_msg(err, "its fields are not visible")
+    }.to_string() => Err(err) => assert_vir_error_msg(err, "cannot use external trait `test_crate::Out` as a bound of a trait impl without declaring the trait")
 }
 
 test_verify_one_file_with_options! {

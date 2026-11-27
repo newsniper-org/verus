@@ -299,17 +299,24 @@ pub(crate) fn gen_check_trait_impl_conflicts(
     vir_crate: &vir::ast::Krate,
     state: &mut State,
 ) {
-    // Bounds on traits that are not declared to Verus (a plain Rust supertrait, or an impl's
-    // `C: ToString` when vstd does not declare `ToString`) are left out, of traits, datatypes and
-    // impls alike. The verifier leaves them out too (`vir::traits::trait_bounds_to_ast`; a bound on
-    // an associated type of such a trait is already gone from the crate,
-    // `vir::traits::remove_undeclared_typ_equality_bounds`), so an impl bounded by one applies to
-    // every type in its model, and this check must see the same overlaps: `impl T for S` and
-    // `impl<A: ToString> T for A` both apply to `S` there, even when rustc accepts them because
-    // `S` does not implement `ToString`. (There is also no declaration of such a trait to refer
-    // to here. Leaving out a bound can only make more impls overlap.) This holds for
-    // `core::marker::Tuple` too: only vstd declares it, and without vstd `A: Tuple` is not in the
-    // verifier's model either.
+    // Bounds on traits that are not declared to Verus (a plain Rust supertrait, or a datatype's
+    // `C: ToString` when vstd does not declare `ToString`) are left out of traits and datatypes.
+    // The verifier leaves them out too (`vir::traits::trait_bounds_to_ast`; a bound on an
+    // associated type of such a trait is already gone from the crate,
+    // `vir::traits::remove_undeclared_assoc_typ_bounds`), and there is no declaration of such a
+    // trait to refer to here. This holds for `core::marker::Tuple` too: only vstd declares it.
+    //
+    // A trait impl with such a bound was rejected before (`vir::traits::check_trait_impl_bounds`).
+    // In the verifier's model it would apply to more types than in Rust, and this program could
+    // not see the overlaps that this creates: it has only the impls that Verus has, so it decides
+    // a bound such as `I: Iterator` from them, and Verus does not have an impl whose types it does
+    // not know (`impl Iterator for I { type Item = Foreign; .. }`). Leaving out an impl's bound
+    // here made fewer impls overlap, not only more. The impls here have their own bounds, and for
+    // the impls that this program lacks, rustc's check of the real impls covers their overlaps.
+    //
+    // A bound on an auto trait (`Send`, `Sync`, `Unpin`) is not in VIR either
+    // (`TraitImplX::has_auto_trait_bounds`), and the same happens with `impl<C: Iterator + Send>`
+    // and an `impl !Send` for `I`, also on the upstream release; that is not checked.
     let declared: HashSet<&Path> = vir_crate.traits.iter().map(|t| &t.x.name).collect();
     let declared_bounds = |bounds: &GenericBounds| -> GenericBounds {
         std::sync::Arc::new(

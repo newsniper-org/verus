@@ -671,7 +671,8 @@ impl<'tcx> Query<'tcx> {
 
         // (after pruning: a bound's trait, and its associated type, that is in some crate is
         // reached through the bound; after the error for a function's bound on an undeclared trait)
-        let krate = vir::traits::remove_undeclared_typ_equality_bounds(&krate);
+        vir::traits::check_trait_impl_bounds(&krate).map_err(|e| self.emit_error(e))?;
+        let krate = vir::traits::remove_undeclared_assoc_typ_bounds(&krate);
 
         // Resolution inference
         // Make sure to do this before the res_info goes stale

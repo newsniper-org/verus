@@ -231,36 +231,29 @@ pub fn method_if_not_demoted(lookup: &DemoteTraitLookup, function: &Function) ->
     }
 }
 
-/// Leave out each bound `A: Tr<.., X = T>` (on an associated type) that Verus does not know: its
-/// trait `Tr` is not declared to Verus (not among `krate.traits`), or `Tr`'s declaration lacks
-/// `X` (an `external_trait_specification` may leave out associated types). Examples, on an impl
-/// or a datatype: `C: FromStr<Err = u8>` with vstd, which does not declare `FromStr`; the
-/// `FnOnce::Output` of `C: Fn() -> R` without vstd. Verus does not model such a trait: it already
-/// leaves out a bound `A: Tr` on it (`trait_bounds_to_ast`, `trait_bound_to_air`), and it has no
-/// projection function for the associated type, so encoding the equality gave ill-typed AIR.
+/// Leave out each bound on an associated type that Verus does not know, or with such an associated
+/// type in its types: `A: Tr<.., X = T>`, or `<A as Tr>::X: Tr2`, where the trait `Tr` is not
+/// declared to Verus (not among `krate.traits`), or `Tr`'s declaration lacks `X` (an
+/// `external_trait_specification` may leave out associated types). Examples: `C: FromStr<Err = u8>`
+/// or `C::Err: Tr2` with vstd, which does not declare `FromStr`; the `FnOnce::Output` of
+/// `C: Fn() -> R` without vstd. Verus does not model such a trait: it already leaves out a bound
+/// `A: Tr` on it (`trait_bounds_to_ast`, `trait_bound_to_air`), and it has no projection function
+/// for the associated type, so encoding the bound gave ill-typed AIR.
 ///
-/// Leaving out a bound only weakens what a function assumes. An impl, or the definition of a
-/// trait method in it, then applies to more types, as with a left-out `A: Tr`; the trait-conflict
-/// check sees the same bounds (`krate` is what it checks), so it reports an overlap that this
-/// creates. What reads `typ_bounds` as the exact condition under which an impl applies is told
-/// that it is not (`TraitImplX::has_auto_trait_bounds`, `FunctionAttrsX::alloc_unmodeled_bounds`):
-/// -V alloc-check's `Copy` impls and `call_allocates` axioms.
+/// This is for functions, datatypes, opaque types and traits, where leaving out a bound only
+/// weakens what is assumed. A trait impl with such a bound is rejected before this
+/// (`check_trait_impl_bounds`): in the model, it would apply to more types than in Rust. -V
+/// alloc-check guards a function's `call_allocates` axiom with its `typ_bounds`, so a function
+/// that lost a bound is marked (`FunctionAttrsX::alloc_unmodeled_bounds`).
 ///
 /// Runs after `demote_external_traits`, which rejects a function with a bound on an undeclared
-/// trait, and after `inherit_default_bodies`, whose copy of a default method in an impl has the
-/// impl's bounds without that check. So from a function, this leaves out a bound on an undeclared
-/// trait only in such a copy, and otherwise only a bound on an associated type that its trait's
-/// declaration lacks.
-pub fn remove_undeclared_typ_equality_bounds(krate: &Krate) -> Krate {
-    let declared: HashMap<&Path, &Arc<Vec<Ident>>> =
-        krate.traits.iter().map(|t| (&t.x.name, &t.x.assoc_typs)).collect();
-    let undeclared = |b: &GenericBound| match &**b {
-        GenericBoundX::TypEquality(path, _, name, _) => match declared.get(path) {
-            Some(assoc_typs) => !assoc_typs.contains(name),
-            None => true,
-        },
-        _ => false,
-    };
+/// trait, and after `check_trait_impl_bounds`. So from a function, this leaves out a bound on an
+/// associated type that its trait's declaration lacks, or a bound on a declared trait for an
+/// associated type that Verus does not know (`fn f<C: Tr>(c: C) where C::Err: Tr2` with
+/// `trait Tr: FromStr`: the error for undeclared traits looks only at the bound's own trait).
+pub fn remove_undeclared_assoc_typ_bounds(krate: &Krate) -> Krate {
+    let declared = declared_assoc_typs(krate);
+    let undeclared = |b: &GenericBound| unknown_assoc_typ_in_bound(&declared, b).is_some();
     let strip = |bounds: &GenericBounds| -> Option<GenericBounds> {
         if !bounds.iter().any(|b| undeclared(b)) {
             return None;
@@ -304,16 +297,111 @@ pub fn remove_undeclared_typ_equality_bounds(krate: &Krate) -> Krate {
             *a = a.new_x(crate::ast::AssocTypeImplX { typ_bounds, ..a.x.clone() });
         }
     }
-    for i in kratex.trait_impls.iter_mut() {
-        if let Some(typ_bounds) = strip(&i.x.typ_bounds) {
-            *i = i.new_x(crate::ast::TraitImplX {
-                typ_bounds,
-                has_auto_trait_bounds: true,
-                ..i.x.clone()
-            });
+    Arc::new(kratex)
+}
+
+fn declared_assoc_typs(krate: &Krate) -> HashMap<&Path, &Arc<Vec<Ident>>> {
+    krate.traits.iter().map(|t| (&t.x.name, &t.x.assoc_typs)).collect()
+}
+
+/// A projection in `typ` (the trait and the name of the associated type) through a trait that is
+/// not declared to Verus, or through an associated type that the trait's declaration lacks
+fn unknown_projection(
+    declared: &HashMap<&Path, &Arc<Vec<Ident>>>,
+    typ: &Typ,
+) -> Option<(Path, Ident)> {
+    let known = |path: &Path, name: &Ident| declared.get(path).is_some_and(|a| a.contains(name));
+    let r = crate::ast_visitor::typ_visitor_check(typ, &mut |t: &Typ| match &**t {
+        TypX::Projection { trait_path, name, .. } if !known(trait_path, name) => {
+            Err((trait_path.clone(), name.clone()))
+        }
+        _ => Ok(()),
+    });
+    r.err()
+}
+
+/// The associated type that Verus does not know (the trait and its name) that the bound `b` is
+/// on, or that is in its types, if there is one
+fn unknown_assoc_typ_in_bound(
+    declared: &HashMap<&Path, &Arc<Vec<Ident>>>,
+    b: &GenericBound,
+) -> Option<(Path, Ident)> {
+    match &**b {
+        GenericBoundX::TypEquality(path, typs, name, typ) => {
+            if !declared.get(path).is_some_and(|a| a.contains(name)) {
+                return Some((path.clone(), name.clone()));
+            }
+            typs.iter().chain(std::iter::once(typ)).find_map(|t| unknown_projection(declared, t))
+        }
+        GenericBoundX::Trait(_, typs) => typs.iter().find_map(|t| unknown_projection(declared, t)),
+        GenericBoundX::ConstTyp(..) => None,
+    }
+}
+
+/// Reject a trait impl with a bound that Verus would leave out: a bound on a trait that is not
+/// declared to Verus (`trait_bounds_to_ast`), or one on an associated type that Verus does not
+/// know or with such an associated type in its types (`remove_undeclared_assoc_typ_bounds`).
+///
+/// In Verus's model, such an impl would apply to more types than in Rust: its axioms
+/// (`trait_impl_to_air`, `assoc_type_impls_to_air`) would be guarded by its other bounds only. It
+/// then makes `tr_bound` of its trait true for types that do not implement the trait, and that
+/// reaches every impl, of any trait, with a bound on that trait, and the supertraits and the
+/// bounds on associated types of the trait. Neither rustc's check of the real impls nor the
+/// trait-conflict check can see the overlaps that this creates: the trait-conflict check's
+/// generated program has only the impls that Verus has, so it decides bounds such as
+/// `I: Iterator` from them, and Verus does not have an impl whose types it does not know
+/// (`impl Iterator for I { type Item = Foreign; .. }`). With
+/// `impl<C: Iterator + FusedIterator> T for S<C> {}`, `impl<C: T> U for C { type X = bool; }` and
+/// `impl U for S<I> { type X = u16; }`, `ensures false` verified. When no impl is weaker in the
+/// model than in Rust, every `tr_bound` fact is true in Rust (a generic function's bounds are
+/// checked by rustc where the function is instantiated), so an overlap of impls in the model is an
+/// overlap of the real impls.
+///
+/// Bounds on auto traits (`Send`, `Sync`, `Unpin`) are not in VIR either
+/// (`TraitImplX::has_auto_trait_bounds`), and the same happens with an `impl !Send`; that is not
+/// rejected here. Impls of traits that are not declared to Verus are not modeled and not checked.
+pub fn check_trait_impl_bounds(krate: &Krate) -> Result<(), VirErr> {
+    let declared = declared_assoc_typs(krate);
+    let undeclared_trait = |span: &Span, path: &Path| {
+        error(
+            span,
+            format!(
+                "cannot use external trait `{}` as a bound of a trait impl without declaring the trait",
+                path_as_friendly_rust_name(path)
+            ),
+        )
+        .help("use `#[verifier::external_trait_specification]` to declare the trait")
+    };
+    for i in krate.trait_impls.iter() {
+        if !declared.contains_key(&i.x.trait_path) {
+            continue;
+        }
+        for b in i.x.typ_bounds.iter() {
+            if let GenericBoundX::Trait(TraitId::Path(path), _) = &**b {
+                if !declared.contains_key(path) {
+                    return Err(undeclared_trait(&i.span, path));
+                }
+            }
+            if let Some((path, name)) = unknown_assoc_typ_in_bound(&declared, b) {
+                if !declared.contains_key(&path) {
+                    return Err(undeclared_trait(&i.span, &path));
+                }
+                return Err(error(
+                    &i.span,
+                    format!(
+                        "cannot use associated type `{}` of trait `{}` in a bound of a trait impl: the declaration of the trait to Verus does not have it",
+                        name,
+                        path_as_friendly_rust_name(&path)
+                    ),
+                )
+                .help(format!(
+                    "add `type {};` to the trait's `#[verifier::external_trait_specification]`",
+                    name
+                )));
+            }
         }
     }
-    Arc::new(kratex)
+    Ok(())
 }
 
 fn is_copy_trait(trait_path: &Path) -> bool {
