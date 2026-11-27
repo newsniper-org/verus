@@ -154,6 +154,9 @@ pub(crate) struct BodyCtxt<'tcx> {
     /// the goal of a `by(tactic)` script after `unfold`, which `tactic_goal()` stands for
     /// (`tactic_to_vir.rs`)
     pub(crate) tactic_goal: Option<vir::ast::Expr>,
+    /// what `show()` says of that goal, besides its text: the arguments of the functions that
+    /// `unfold` put into it, and the parts of a `split` that share the rest of the script
+    pub(crate) tactic_goal_desc: Arc<Vec<String>>,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

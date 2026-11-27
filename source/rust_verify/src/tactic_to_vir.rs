@@ -43,6 +43,8 @@ pub(crate) fn tactic_step_to_vir<'tcx>(
         AssertItem::TacticSplit => ("tactic_split", 1),
         AssertItem::TacticSplitEach => ("tactic_split_each", 1),
         AssertItem::TacticGoal => ("tactic_goal", 0),
+        AssertItem::TacticIntro => ("tactic_intro", 1),
+        AssertItem::TacticShow => ("tactic_show", 1),
         _ => unreachable!(),
     };
     if !bctx.in_tactic || !bctx.in_assert_by_proof {
@@ -56,7 +58,10 @@ pub(crate) fn tactic_step_to_vir<'tcx>(
     }
     match item {
         AssertItem::TacticGoal => match &bctx.tactic_goal {
-            Some(goal) => Ok(bctx.clone_expr_with_fresh_ids(goal).x.clone()),
+            // (in a block, so that the goal keeps its own span: what `show()` prints)
+            Some(goal) => {
+                Ok(ExprX::Block(Arc::new(vec![]), Some(bctx.clone_expr_with_fresh_ids(goal))))
+            }
             None => err_span(
                 expr.span,
                 "`tactic_goal()` is the goal of a `by(tactic)` script after `unfold`, and is used only there",
@@ -65,6 +70,8 @@ pub(crate) fn tactic_step_to_vir<'tcx>(
         AssertItem::TacticUnfold => unfold_to_vir(bctx, expr, args),
         AssertItem::TacticSplit => split_to_vir(bctx, expr, args[0]),
         AssertItem::TacticSplitEach => split_each_to_vir(bctx, expr, args[0]),
+        AssertItem::TacticIntro => intro_to_vir(bctx, expr, args[0]),
+        AssertItem::TacticShow => show_to_vir(bctx, expr, args[0]),
         _ => unreachable!(),
     }
 }
@@ -129,15 +136,41 @@ fn unfold_to_vir<'tcx>(
     };
     let name = fun_name(&f);
     let function = unfold_target(bctx, span, &f, &name)?;
-    let goal = expr_to_vir_consume(bctx, args[0])?;
+    let goal = untrigger(expr_to_vir_consume(bctx, args[0])?);
     let count = Cell::new(0usize);
     let unfolded = inline_calls(bctx, &goal, &function, &count)?;
+    // (for `show()`: the arguments in place of `f`'s parameters, for each call)
+    let mut desc = (*bctx.tactic_goal_desc).clone();
+    let _ = vir::ast_visitor::expr_visitor_check::<VirErr, _>(&goal, &mut |_, e| {
+        if let ExprX::Call {
+            target: vir::ast::CallTarget::Fun(vir::ast::CallTargetKind::Static, g, ..),
+            args,
+            ..
+        } = &e.x
+        {
+            if *g == function.x.name {
+                let substs: Vec<String> = function
+                    .x
+                    .params
+                    .iter()
+                    .zip(args.iter())
+                    .map(|(p, a)| format!("`{}` is `{}`", p.x.name.0, source_text(bctx, a)))
+                    .collect();
+                desc.push(format!("(`{name}` unfolded: in its body, {})", substs.join(", ")));
+            }
+        }
+        Ok(())
+    });
     if count.get() == 0 {
         return err_span(span, format!("`unfold({name})`: the goal has no call of `{name}`"));
     }
     // (fresh ids for the copy, whose parts came from `f` and from the goal)
     let unfolded = bctx.clone_expr_with_fresh_ids(&unfolded);
-    let rest_bctx = BodyCtxt { tactic_goal: Some(unfolded.clone()), ..bctx.clone() };
+    let rest_bctx = BodyCtxt {
+        tactic_goal: Some(unfolded.clone()),
+        tactic_goal_desc: Arc::new(desc),
+        ..bctx.clone()
+    };
     let proof = expr_to_vir_consume(&rest_bctx, args[2])?;
     let fuel = if k == 1 { String::new() } else { format!(", fuel {k}") };
     let ensure = with_note(
@@ -496,14 +529,143 @@ enum Shape {
     If(VExpr, VExpr, VExpr),
 }
 
-fn shape(goal: &VExpr) -> Option<Shape> {
-    fn peel(e: &VExpr) -> &VExpr {
-        match &e.x {
-            ExprX::UnaryOpr(UnaryOpr::ProofNote(_), inner) => peel(inner),
-            ExprX::Block(stmts, Some(inner)) if stmts.is_empty() => peel(inner),
-            _ => e,
+/// The goal without its notes and empty blocks
+fn peel(e: &VExpr) -> &VExpr {
+    match &e.x {
+        ExprX::UnaryOpr(UnaryOpr::ProofNote(_), inner) => peel(inner),
+        ExprX::Block(stmts, Some(inner)) if stmts.is_empty() => peel(inner),
+        _ => e,
+    }
+}
+
+/// The source text of an expression (`?` if it has none): through the span context, since the
+/// spans of a body from another crate are packed (they have no raw span)
+fn source_text(bctx: &BodyCtxt, e: &VExpr) -> String {
+    let source_map = bctx.ctxt.tcx.sess.source_map();
+    let span = if crate::spans::from_raw_span(&e.span.raw_span).is_some() || e.span.data.len() >= 2
+    {
+        bctx.ctxt.spans.from_air_span(&e.span, Some(source_map))
+    } else {
+        None
+    };
+    span.and_then(|s| source_map.span_to_snippet(s).ok())
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_else(|| "?".to_string())
+}
+
+/// The text of a goal, by its structure where an `unfold` put a body into it (the text of the
+/// whole would show the call), and else by its source text
+fn goal_text(bctx: &BodyCtxt, e: &VExpr) -> String {
+    match &peel(e).x {
+        ExprX::Logical(LogicalOp::And, a, b) => {
+            format!("{} && {}", goal_text(bctx, a), goal_text(bctx, b))
+        }
+        ExprX::Logical(LogicalOp::Or, a, b) => {
+            format!("({}) || ({})", goal_text(bctx, a), goal_text(bctx, b))
+        }
+        ExprX::Logical(LogicalOp::Implies, a, b) => {
+            format!("({}) ==> ({})", goal_text(bctx, a), goal_text(bctx, b))
+        }
+        ExprX::If(c, t, Some(f)) => format!(
+            "if {} {{ {} }} else {{ {} }}",
+            goal_text(bctx, c),
+            goal_text(bctx, t),
+            goal_text(bctx, f)
+        ),
+        _ => {
+            let text = source_text(bctx, peel(e));
+            if text == "?" { render(bctx, peel(e)) } else { text }
         }
     }
+}
+
+/// The text of an expression by its structure, for one without source text (in the body of a
+/// function of another crate whose source is not at hand): the common forms, `?` for others
+fn render(bctx: &BodyCtxt, e: &VExpr) -> String {
+    let sub = |e: &VExpr| {
+        let text = source_text(bctx, e);
+        if text == "?" { render(bctx, e) } else { text }
+    };
+    fn place_text(bctx: &BodyCtxt, p: &vir::ast::Place) -> String {
+        match &p.x {
+            PlaceX::Local(x) => x.0.to_string(),
+            PlaceX::Field(f, p) => format!("{}.{}", place_text(bctx, p), f.field),
+            PlaceX::Temporary(e) => {
+                let text = source_text(bctx, e);
+                if text == "?" { render(bctx, e) } else { text }
+            }
+            _ => "?".to_string(),
+        }
+    }
+    use vir::ast::{ArithOp, BinaryOp, InequalityOp, UnaryOp};
+    match &e.x {
+        ExprX::Const(Constant::Bool(b)) => b.to_string(),
+        ExprX::Const(Constant::Int(i)) => i.to_string(),
+        ExprX::Var(x) => x.0.to_string(),
+        ExprX::ReadPlace(p, _) => place_text(bctx, p),
+        ExprX::UnaryOpr(_, inner) => sub(inner),
+        ExprX::Unary(UnaryOp::Not, inner) => format!("!({})", sub(inner)),
+        ExprX::Unary(_, inner) => sub(inner),
+        ExprX::Block(stmts, Some(inner)) if stmts.is_empty() => sub(inner),
+        ExprX::Call { target: vir::ast::CallTarget::Fun(_, f, ..), args, .. } => {
+            let args: Vec<String> = args.iter().map(|a| sub(a)).collect();
+            format!("{}({})", fun_name(f), args.join(", "))
+        }
+        ExprX::Logical(op, a, b) => {
+            let op = match op {
+                LogicalOp::And => "&&",
+                LogicalOp::Or => "||",
+                LogicalOp::Implies => "==>",
+            };
+            format!("({}) {} ({})", sub(a), op, sub(b))
+        }
+        ExprX::Binary(op, a, b) => {
+            let op = match op {
+                BinaryOp::Eq(_) => "==",
+                BinaryOp::Ne => "!=",
+                BinaryOp::Inequality(InequalityOp::Le) => "<=",
+                BinaryOp::Inequality(InequalityOp::Lt) => "<",
+                BinaryOp::Inequality(InequalityOp::Ge) => ">=",
+                BinaryOp::Inequality(InequalityOp::Gt) => ">",
+                BinaryOp::Arith(ArithOp::Add(_)) => "+",
+                BinaryOp::Arith(ArithOp::Sub(_)) => "-",
+                BinaryOp::Arith(ArithOp::Mul(_)) => "*",
+                _ => "?",
+            };
+            format!("{} {} {}", sub(a), op, sub(b))
+        }
+        ExprX::Quant(q, bs, body) => {
+            let q = if q.quant == air::ast::Quant::Forall { "forall" } else { "exists" };
+            let vars: Vec<String> = bs.iter().map(|b| b.name.0.to_string()).collect();
+            format!("{}|{}| {}", q, vars.join(", "), sub(body))
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// `e` without its top-level `#[trigger]` marks (they mean nothing outside their quantifier,
+/// and a goal that `intro` took out of a `forall` may have one)
+fn untrigger(e: VExpr) -> VExpr {
+    fn has_trigger(e: &VExpr) -> bool {
+        match &e.x {
+            ExprX::Unary(vir::ast::UnaryOp::Trigger(_), _) => true,
+            ExprX::UnaryOpr(UnaryOpr::ProofNote(_), inner) => has_trigger(inner),
+            ExprX::Block(stmts, Some(inner)) if stmts.is_empty() => has_trigger(inner),
+            _ => false,
+        }
+    }
+    if !has_trigger(&e) {
+        return e;
+    }
+    match &e.x {
+        ExprX::Unary(vir::ast::UnaryOp::Trigger(_), inner)
+        | ExprX::UnaryOpr(UnaryOpr::ProofNote(_), inner)
+        | ExprX::Block(_, Some(inner)) => untrigger(inner.clone()),
+        _ => e,
+    }
+}
+
+fn shape(goal: &VExpr) -> Option<Shape> {
     fn conjuncts(e: &VExpr, parts: &mut Vec<VExpr>) {
         match &peel(e).x {
             ExprX::Logical(LogicalOp::And, a, b) => {
@@ -535,7 +697,7 @@ fn current_goal<'a>(
         None => err_span(
             span,
             format!(
-                "`{name}` is the `split` step of a `by(tactic)` script after `unfold`, and is not used directly"
+                "`{name}` is a step of a `by(tactic)` script after `unfold`, and is not used directly"
             ),
         ),
     }
@@ -565,7 +727,25 @@ fn split_to_vir<'tcx>(
     );
     let placeholder_expr =
         bctx.spanned_typed_new(span, &bool_typ(), ExprX::Var(placeholder.clone()));
-    let rest_bctx = BodyCtxt { tactic_goal: Some(placeholder_expr), ..bctx.clone() };
+    let mut desc = (*bctx.tactic_goal_desc).clone();
+    let part_texts: Vec<String> = match &shape {
+        Shape::Parts(parts) => {
+            parts.iter().map(|p| format!("`{}`", source_text(bctx, p))).collect()
+        }
+        Shape::If(c, t, e) => vec![
+            format!("`{}` (where `{}`)", source_text(bctx, t), source_text(bctx, c)),
+            format!("`{}` (where it does not hold)", source_text(bctx, e)),
+        ],
+    };
+    desc.push(format!(
+        "(the rest of the script is shared by the parts of the `split` after `unfold`: {})",
+        part_texts.join("; ")
+    ));
+    let rest_bctx = BodyCtxt {
+        tactic_goal: Some(placeholder_expr),
+        tactic_goal_desc: Arc::new(desc),
+        ..bctx.clone()
+    };
     let rest = expr_to_vir_consume(&rest_bctx, rest)?;
     let fill = |k: usize, part: &VExpr| -> Result<VExpr, VirErr> {
         let body = if k == 0 { rest.clone() } else { bctx.clone_expr_with_fresh_ids(&rest) };
@@ -678,4 +858,136 @@ fn split_each_to_vir<'tcx>(
             Ok(ExprX::If(fresh(&c), then_check, Some(else_check)))
         }
     }
+}
+
+/// `tactic_intro({ rest })`: the body of a `forall` (with its variables, unnamed in the script),
+/// or the conclusion of an `==>` under its condition, asserted with the rest as its proof
+fn intro_to_vir<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    expr: &Expr<'tcx>,
+    rest: &'tcx Expr<'tcx>,
+) -> Result<ExprX, VirErr> {
+    let span = expr.span;
+    let goal = current_goal(bctx, span, "tactic_intro")?.clone();
+    let fresh = |e: &VExpr| bctx.clone_expr_with_fresh_ids(e);
+    let note = "from the tactic step `intro` (after `unfold`)".to_string();
+    // (for `show()`: what `intro` introduced)
+    let lower_rest = |goal: &VExpr, introduced: String| {
+        let mut desc = (*bctx.tactic_goal_desc).clone();
+        desc.push(introduced);
+        let rest_bctx = BodyCtxt {
+            tactic_goal: Some(fresh(goal)),
+            tactic_goal_desc: Arc::new(desc),
+            ..bctx.clone()
+        };
+        expr_to_vir_consume(&rest_bctx, rest)
+    };
+    match &peel(&goal).x {
+        ExprX::Quant(q, bs, body) if q.quant == air::ast::Quant::Forall => {
+            // (the triggers of the `forall` stay with it, on the condition)
+            let (triggers, body) = match &peel(body).x {
+                ExprX::WithTriggers { triggers, body } => (Some(triggers.clone()), body.clone()),
+                _ => (None, body.clone()),
+            };
+            // (`#![auto]`, `#![all_triggers]`: on the condition too, as for `assert forall`)
+            let (annotation, body) = match &peel(&body).x {
+                ExprX::Unary(
+                    vir::ast::UnaryOp::Trigger(
+                        a @ (vir::ast::TriggerAnnotation::AutoTrigger
+                        | vir::ast::TriggerAnnotation::AllTriggers),
+                    ),
+                    inner,
+                ) => (Some(a.clone()), inner.clone()),
+                _ => (None, body.clone()),
+            };
+            let (require, ensure) = match &peel(&body).x {
+                ExprX::Logical(LogicalOp::Implies, a, b) => (a.clone(), b.clone()),
+                _ => (
+                    bctx.spanned_typed_new(span, &bool_typ(), ExprX::Const(Constant::Bool(true))),
+                    body.clone(),
+                ),
+            };
+            let require = match annotation {
+                Some(a) => {
+                    require.new_x(ExprX::Unary(vir::ast::UnaryOp::Trigger(a), require.clone()))
+                }
+                None => require,
+            };
+            let require = match triggers {
+                Some(triggers) => {
+                    require.new_x(ExprX::WithTriggers { triggers, body: require.clone() })
+                }
+                None => require,
+            };
+            let names: Vec<String> = bs.iter().map(|b| format!("`{}`", b.name.0)).collect();
+            let condition = match &peel(&body).x {
+                ExprX::Logical(LogicalOp::Implies, a, _) => {
+                    format!(", with `{}`", source_text(bctx, a))
+                }
+                _ => String::new(),
+            };
+            let introduced = format!("(introduced by `intro`: {}{condition})", names.join(", "));
+            let proof = lower_rest(&ensure, introduced)?;
+            Ok(ExprX::AssertBy {
+                vars: bs.clone(),
+                require: fresh(&require),
+                ensure: with_note(fresh(&ensure), note),
+                proof,
+                isolate: None,
+            })
+        }
+        ExprX::Logical(LogicalOp::Implies, a, b) => {
+            let introduced = format!("(introduced by `intro`: `{}`)", source_text(bctx, a));
+            let proof = lower_rest(b, introduced)?;
+            let check = assert_by(bctx, span, with_note(fresh(b), note), proof);
+            Ok(ExprX::If(fresh(a), check, None))
+        }
+        _ => err_span(span, "`intro`: after `unfold`, the goal is not a `forall` or an `==>`"),
+    }
+}
+
+/// `tactic_show("facts")`: a note with the goal (its text, and what `unfold` put into it) and the
+/// facts that the script added (from the macro); nothing is checked
+fn show_to_vir<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    expr: &Expr<'tcx>,
+    facts: &'tcx Expr<'tcx>,
+) -> Result<ExprX, VirErr> {
+    let span = expr.span;
+    let facts = match &facts.kind {
+        ExprKind::Lit(l) => match l.node {
+            rustc_ast::LitKind::Str(sym, _) => sym.to_string(),
+            _ => return err_span(span, "`tactic_show`: expected a string"),
+        },
+        _ => return err_span(span, "`tactic_show`: expected a string"),
+    };
+    let goal = current_goal(bctx, span, "tactic_show")?;
+    let placeholder = matches!(&goal.x, ExprX::Var(x) if *x.0 == "tactic%goal");
+    let mut msg = if placeholder {
+        "tactic: the goal here is each part of the `split` after `unfold`".to_string()
+    } else {
+        format!("tactic: the goal here is\n    {}", goal_text(bctx, goal))
+    };
+    for line in bctx.tactic_goal_desc.iter() {
+        msg.push_str("\n");
+        msg.push_str(line);
+    }
+    if facts.is_empty() {
+        msg.push_str("\nthe script has added no facts before this step");
+    } else {
+        msg.push_str("\nfacts that the script added before this step:");
+        for fact in facts.lines() {
+            msg.push_str("\n    ");
+            msg.push_str(fact);
+        }
+    }
+    msg.push_str(
+        "\n(nothing here has been checked yet, and the facts of the context, such as `requires` and the statements before the assertion, are not listed)",
+    );
+    let vspan = bctx.ctxt.spans.to_air_span(span);
+    bctx.ctxt
+        .diagnostics
+        .borrow_mut()
+        .push(vir::ast::VirErrAs::Note(vir::messages::note(&vspan, msg)));
+    Ok(ExprX::Block(Arc::new(vec![]), None))
 }

@@ -1332,12 +1332,30 @@ test_verify_one_file! {
 }
 
 test_verify_one_file! {
-    #[test] error_unfold_then_intro INV.to_string() + verus_code_str! {
-        spec fn q(x: int) -> bool { forall|i: int| i > x ==> i > x - 1 }
+    // `intro()` on the goal after `unfold`: the `forall` (its variables unnamed) or the `==>`
+    #[test] unfold_intro verus_code! {
+        spec fn p(i: int) -> bool { i > 0 }
+        #[verifier::opaque]
+        spec fn q(x: int) -> bool { forall|i: int| i > x && x >= 0 ==> #[trigger] p(i) }
+        #[verifier::opaque]
+        spec fn imp(x: int) -> bool { x > 0 ==> x + 0 > 0 && x + 1 > 1 }
+        #[verifier::opaque]
+        spec fn both(x: int) -> bool { q(x) && forall|i: int| 0 < i < x ==> #[trigger] p(i) }
         proof fn t(x: int) {
-            assert(q(x)) by(tactic) { unfold(q); split({ intro(); }, { }); }
+            assert(q(x)) by(tactic) { unfold(q); intro(); }
+            assert(imp(x)) by(tactic) { unfold(imp); intro(); split(); }
+            assert(both(x)) by(tactic) { unfold(both); split({ unfold(q); intro(); }, { intro(); }); }
         }
-    } => Err(err) => assert!(err.errors[0].message.contains("`intro()` on the goal after `unfold` is not supported yet"))
+        proof fn bad(x: int) {
+            assert(q(x)) by(tactic) { unfold(q); intro(); have(false); } // FAILS
+        }
+        proof fn bad2(x: int) {
+            assert(imp(x)) by(tactic) { unfold(imp); intro(); split({ }, { have(x > 5); }); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `have`")));
+    }
 }
 
 test_verify_one_file! {
@@ -1415,4 +1433,86 @@ test_verify_one_file! {
             assert(x == x) by(tactic) { ::verus_builtin::tactic_split({ }); }
         }
     } => Err(err) => assert_vir_error_msg(err, "is not used directly")
+}
+
+test_verify_one_file! {
+    // `show()` after `unfold`: the goal's text, the arguments in place of `f`'s parameters, and
+    // the parts that share the rest of a `split`
+    #[test] unfold_show INV.to_string() + verus_code_str! {
+        proof fn t(y: int) requires y == 2 {
+            assert(inv(y + 1)) by(tactic) { have(y > 1); unfold(inv); show(); split(); show(); }
+        }
+    } => Ok(err) => {
+        assert_eq!(err.notes.iter().filter(|n| n.message.starts_with("tactic: the goal here is")).count(), 2);
+        let first = err.notes.iter().find(|n| n.message.contains("x > 0 && x < 10 && x != 5")).unwrap();
+        assert!(first.message.contains("(`inv` unfolded: in its body, `x` is `y + 1`)"));
+        assert!(first.message.contains("y > 1"));
+        assert!(err.notes.iter().any(|n| n.message.contains("each part of the `split` after `unfold`")
+            && n.message.contains("`x > 0`; `x < 10`; `x != 5`")));
+    }
+}
+
+test_verify_one_file! {
+    // `intro()` asserts the conclusion it introduces (on a `forall` and on an `==>`), with its
+    // note; and keeps the condition of a `forall` with `#![auto]`
+    #[test] unfold_intro_conclusion verus_code! {
+        spec fn p(i: int) -> bool { i > 0 }
+        #[verifier::opaque]
+        spec fn qf(x: int) -> bool { forall|i: int| i > x ==> #[trigger] p(i) }
+        #[verifier::opaque]
+        spec fn impf(x: int) -> bool { x > 0 ==> x > 5 }
+        #[verifier::opaque]
+        spec fn autof(x: int) -> bool { forall|i: int| #![auto] i > x && x >= 0 ==> p(i) }
+        proof fn b1(x: int) {
+            assert(qf(x)) by(tactic) { unfold(qf); intro(); } // FAILS
+        }
+        proof fn b2(x: int) {
+            assert(impf(x)) by(tactic) { unfold(impf); intro(); } // FAILS
+        }
+        proof fn a(x: int) {
+            assert(autof(x)) by(tactic) { unfold(autof); intro(); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().all(|e| e.rendered.contains("from the tactic step `intro` (after `unfold`)")));
+    }
+}
+
+test_verify_one_file! {
+    // `intro()` on a `forall` whose body is a call marked `#[trigger]`, then `unfold` and `split`
+    // on it; `show()` after two `unfold`s shows both bodies
+    #[test] unfold_intro_unfold verus_code! {
+        #[verifier::opaque]
+        spec fn small(i: int) -> bool { i >= 0 && i < 100 }
+        #[verifier::opaque]
+        spec fn all_small(n: int) -> bool { forall|i: int| 0 <= i < n ==> #[trigger] small(i) }
+        #[verifier::opaque]
+        spec fn g(x: int) -> bool { x > 1 }
+        #[verifier::opaque]
+        spec fn f(x: int) -> bool { g(x) && x < 10 }
+        proof fn t(n: int) requires n <= 100 {
+            assert(all_small(n)) by(tactic) { unfold(all_small); intro(); unfold(small); split(); }
+        }
+        proof fn u(y: int) requires y == 3 {
+            assert(f(y)) by(tactic) { unfold(f); unfold(g); show(); split(); }
+        }
+    } => Ok(err) => {
+        assert!(err.notes.iter().any(|n| n.message.contains("x > 1 && x < 10")));
+    }
+}
+
+test_verify_one_file_with_options! {
+    // `show()` after `unfold` of a function of another crate: the text of its body
+    #[test] unfold_show_imported ["vstd"] => verus_code! {
+        use vstd::relations::*;
+        proof fn po(r: spec_fn(int, int) -> bool)
+            requires reflexive(r), transitive(r), antisymmetric(r)
+        {
+            assert(partial_ordering(r)) by(tactic) { unfold(partial_ordering); show(); split(); }
+        }
+    } => Ok(err) => {
+        let note = err.notes.iter().find(|n| n.message.starts_with("tactic: the goal here is")).unwrap();
+        assert!(note.message.contains("reflexive(r)"));
+        assert!(!note.message.contains("\n    ?"));
+    }
 }

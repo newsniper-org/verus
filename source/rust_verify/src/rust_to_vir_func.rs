@@ -425,6 +425,7 @@ fn mk_bctx<'tcx>(
         in_tactic: false,
         in_assert_by_proof: false,
         tactic_goal: None,
+        tactic_goal_desc: Arc::new(vec![]),
         atomically: None,
         migrate_postcondition_vars,
         in_fn_sig: false,

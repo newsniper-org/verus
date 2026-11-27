@@ -294,6 +294,8 @@ pub(crate) enum AssertItem {
     TacticSplit,
     TacticSplitEach,
     TacticGoal,
+    TacticIntro,
+    TacticShow,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -659,6 +661,8 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::tactic_split",            VerusItem::Assert(AssertItem::TacticSplit)),
         ("verus::verus_builtin::tactic_split_each",       VerusItem::Assert(AssertItem::TacticSplitEach)),
         ("verus::verus_builtin::tactic_goal",             VerusItem::Assert(AssertItem::TacticGoal)),
+        ("verus::verus_builtin::tactic_intro",            VerusItem::Assert(AssertItem::TacticIntro)),
+        ("verus::verus_builtin::tactic_show",             VerusItem::Assert(AssertItem::TacticShow)),
         ("verus::verus_builtin::use_type_invariant",      VerusItem::UseTypeInvariant),
 
         ("verus::verus_builtin::with_triggers",           VerusItem::WithTriggers),

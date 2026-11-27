@@ -51,7 +51,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `cases(e)` (a value of an enum) | any | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`, an arm for each variant ([below](#cases-on-an-enum)) |
 | `cases(match e { P => { .. }, .. })` | any | the `match`, with `G` asserted in every arm |
 | `induct(n)` (a `nat`), `induct(i, from(lo))` (an `int`) | any | the base case and the step of an induction on the variable, each `assert(G) by { .. }`, and a vstd lemma ([below](#induction-induct)) |
-| `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);`; before a `split` that needs it, also the goal with `f` unfolded ([below](#unfolding-the-goal-unfold-then-split)) |
+| `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);`; before a `split` or an `intro()` that needs it, also the goal with `f` unfolded ([below](#unfolding-the-goal-unfold-then-split)) |
 | `apply(L(a))` | any | `L(a);` (its `ensures` become facts) |
 | `inst(forall\|x: T\| Q, t)` | any | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
 | `smt()` | any | `assert(G);` |
@@ -74,11 +74,14 @@ The `..` in a step's expansion is where the rest of the script goes.
   (an error), and for a reference, write `cases(*e)`.
 - <a id="unfolding-the-goal-unfold-then-split"></a>**Unfolding the goal: `unfold` then `split`.**
   When a `split` comes after `unfold(f)` and the goal as written is not one that `split` can
-  split (a conjunction, an `<==>` or an `if`; a call of `f`, say), `unfold(f)` also works on the
-  goal: rust_verify replaces each call of `f` in it by `f`'s body (one level: the calls of `f` in
+  split (a conjunction, an `<==>` or an `if`; a call of `f`, say), or an `intro()` that the goal
+  as written does not fit (a `forall` or an `==>`), `unfold(f)` also works on the goal: rust_verify replaces each call of `f` in it by `f`'s body (one level: the calls of `f` in
   the body stay calls), with the arguments in place of the parameters, and the rest of the
   script proves that goal. `split` then splits it into its parts (a conjunction, or an `if` with
-  an `else`; an `<==>` is not split there yet).
+  an `else`; an `<==>` is not split there yet), and `intro()` proves the body of its `forall`
+  (whose variables are not named in the script) or the conclusion of its `==>` under the
+  condition. `show()` shows the goal as the text of `f`'s body, with the arguments in place of
+  the parameters listed after it.
   - Between the `unfold` and the `split` there may be `have`, `apply`, `inst`, `show`, `cases(b)`
     and `isolate`. Another `unfold(g)` there works on the result when the goal calls `f`
     (`unfold(f); unfold(g); split()`); otherwise only the `unfold` nearest the `split` works on the
@@ -103,9 +106,8 @@ The `..` in a step's expansion is where the rest of the script goes.
     hold (not a closure, a comparison or a boolean operator): bind it to a variable first.
   - After `unfold` and `split()`, the rest of the script is shared by the parts, whose goals are
     not known when it is expanded: there, no step may look at the goal (`unfold` before a
-    `split`, `split`). Give each part its own block, `split({ .. }, { .. })`, for such steps.
-    `intro()` and `induct` after such an `unfold` are not supported yet, and `show()` does not
-    show the unfolded goal yet.
+    `split` or an `intro`, `split`, `intro`). Give each part its own block, `split({ .. }, { .. })`, for such
+    steps. `induct` after such an `unfold` is not supported.
 - <a id="induction-induct"></a>**Induction: `induct`.** `induct(n)` proves the goal `G` for a
   variable `n` of type `nat` by induction on `n`. The goal as a function of `n`
   (`let p = |n: nat| G`) is proved for `n == 0` (the base case) and, for `n > 0`, from the goal
@@ -143,8 +145,9 @@ proof fn t(x: int, y: int) {
 
 When an assertion that `have`, `inst`, `split`, `cases`, `induct`, `smt()` or `intro` (on an `==>`)
 generated fails, the error says which step it came from (for `induct`, whether it was the base case
-or the step). For `intro` on a `forall`, `smt(<prover>, ..)` and
-`compute()`, it points at the goal without naming the step.
+or the step). For `intro` on a `forall` written in the goal, `smt(<prover>, ..)` and
+`compute()`, it points at the goal without naming the step; on the goal after `unfold`, `intro`
+names the step (`intro` (after `unfold`)).
 
 ```
 error: assertion failed
@@ -175,7 +178,8 @@ called.
 
 `show()` prints the goal at that step and the facts the script added before it (`have`, the
 condition of a case, what `intro` introduced). It works on the source text, at macro-expansion
-time, so:
+time (after `unfold`, rust_verify makes the note instead, from the text of the unfolded bodies,
+with the arguments in place of the parameters listed after it), so:
 - the facts of the context, such as `requires` and the statements before the assertion, are
   not listed;
 - nothing it prints has been checked yet;

@@ -106,9 +106,16 @@ fn hole(span: Span) -> Result<Expr> {
 }
 
 fn is_hole(goal: &Expr) -> bool {
+    // (the path that `hole` writes: `verus_builtin::tactic_goal` or `prelude::tactic_goal`)
     match strip_parens(goal) {
         Expr::Call(c) if c.args.is_empty() => match &*c.func {
-            Expr::Path(p) => p.path.segments.last().map_or(false, |s| s.ident == "tactic_goal"),
+            Expr::Path(p) => {
+                let segs: Vec<String> =
+                    p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+                segs.len() >= 2
+                    && segs[segs.len() - 1] == "tactic_goal"
+                    && matches!(segs[segs.len() - 2].as_str(), "verus_builtin" | "prelude")
+            }
             _ => false,
         },
         _ => false,
@@ -128,8 +135,10 @@ fn unfold_is_semantic(goal: &Expr, f: &Expr, rest: &[Item]) -> bool {
                 return is_hole(goal) || split_goal(goal, step.span).is_err();
             }
             StepKind::Unfold(..) if is_hole(goal) || calls(goal, f) => {}
-            StepKind::Intro
-            | StepKind::Cases(_, Some(_))
+            StepKind::Intro => {
+                return is_hole(goal) || (as_forall(goal).is_none() && as_implies(goal).is_none());
+            }
+            StepKind::Cases(_, Some(_))
             | StepKind::CasesMatch(..)
             | StepKind::Induct(..)
             | StepKind::Unfold(..)
@@ -744,7 +753,10 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 // the goal with `f` unfolded, for the later steps: rust_verify unfolds it
                 // (`tactic_to_vir.rs`), and the rest of the script proves it
                 if facts.1 {
-                    return Err(shared_err(span, "`unfold` (with a `split` after it)"));
+                    return Err(shared_err(
+                        span,
+                        "`unfold` (with a `split` or an `intro` after it, which works on its goal)",
+                    ));
                 }
                 let reveal = match fuel {
                     None => quote_spanned!(span => reveal(#f);),
@@ -794,6 +806,13 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 stmts.push(assert_stmt(span, "inst", &instance, vec![])?);
                 facts = facts.with(show_expr(&instance));
             }
+            StepKind::Show if is_hole(goal) => {
+                // the goal after `unfold`: rust_verify shows it (`tactic_to_vir.rs`)
+                let facts = facts.0.join("\n");
+                stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                    #verus_builtin::tactic_show(#facts);
+                ))?);
+            }
             StepKind::Show => {
                 show_note(span, goal, &facts);
             }
@@ -836,10 +855,16 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 stmts.push(parse_stmt(quote_spanned!(span => assert(#goal) by(compute);))?);
             }
             StepKind::Intro if is_hole(goal) => {
-                return Err(Error::new(
-                    span,
-                    "`intro()` on the goal after `unfold` is not supported yet: introduce the variables before `unfold`, or use `assert forall` in the script",
-                ));
+                // the goal after `unfold`: rust_verify introduces its `forall` or `==>`
+                // (`tactic_to_vir.rs`); the variables are not named in the script
+                if facts.1 {
+                    return Err(shared_err(span, "`intro`"));
+                }
+                let body = expand_items(goal, rest, &facts)?;
+                stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                    #verus_builtin::tactic_intro({ #(#body)* });
+                ))?);
+                return Ok(stmts);
             }
             StepKind::Intro => {
                 if let Some((pats, attrs, body)) = as_forall(goal) {

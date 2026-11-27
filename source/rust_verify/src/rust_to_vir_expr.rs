@@ -1191,7 +1191,12 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
         }
         // (a script starts with its own goal: `tactic_goal()` of an enclosing script does not
         // reach into it)
-        tactic_bctx = BodyCtxt { in_tactic: true, tactic_goal: None, ..bctx.clone() };
+        tactic_bctx = BodyCtxt {
+            in_tactic: true,
+            tactic_goal: None,
+            tactic_goal_desc: Arc::new(vec![]),
+            ..bctx.clone()
+        };
         &tactic_bctx
     } else {
         bctx

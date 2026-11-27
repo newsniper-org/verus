@@ -542,6 +542,24 @@ pub fn tactic_split_each<A>(_parts: A) {
     unimplemented!();
 }
 
+/// The `intro()` step of a `by(tactic)` script on the goal after `unfold` (a `forall` or an `==>`):
+/// `rest` proves its body (its variables are not named)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_intro"]
+#[verifier::proof]
+pub fn tactic_intro(_rest: ()) {
+    unimplemented!();
+}
+
+/// The `show()` step of a `by(tactic)` script on the goal after `unfold`: a note with the goal and
+/// `facts` (what the script added before it)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_show"]
+#[verifier::proof]
+pub fn tactic_show(_facts: &str) {
+    unimplemented!();
+}
+
 /// The current goal of a `by(tactic)` script, after `unfold` (which the macro cannot write)
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::tactic_goal"]
