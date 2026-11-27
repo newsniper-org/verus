@@ -1152,10 +1152,7 @@ impl Verifier {
                         reporter.report(&message(level, msg, &context.span).to_any());
                     }
                     if self.args.report_abductive_on_unknown {
-                        self.record_func_abductive_candidates(
-                            context.fun.clone(),
-                            candidates,
-                        );
+                        self.record_func_abductive_candidates(context.fun.clone(), candidates);
                     }
                     break;
                 }
@@ -1649,10 +1646,16 @@ impl Verifier {
                 air_context.set_solver_option(&option, &value);
             }
         } else if self.args.solver_version_check {
-            air_context.set_expected_solver_version(match solver {
-                SmtSolver::Z3 => cargo_verus_toolchains::external_deps::Z3_VERSION.to_string(),
-                SmtSolver::Cvc5 => cargo_verus_toolchains::external_deps::CVC5_VERSION.to_string(),
-            });
+            match solver {
+                SmtSolver::Z3 => air_context.set_expected_solver_version(
+                    cargo_verus_toolchains::external_deps::Z3_VERSION.to_string(),
+                ),
+                SmtSolver::Cvc5 => air_context.set_expected_solver_version(
+                    cargo_verus_toolchains::external_deps::CVC5_VERSION.to_string(),
+                ),
+                // (not reached: `isolate(backend = ..)` names Z3 or cvc5)
+                _ => {}
+            }
         }
         if !bitvector {
             if self.args.axiom_usage_info {
@@ -1820,9 +1823,7 @@ impl Verifier {
                     cargo_verus_toolchains::external_deps::CVC5_VERSION.to_string()
                 }
                 air::context::SmtSolver::OxiZ => crate::consts::EXPECTED_OXIZ_VERSION.to_string(),
-                air::context::SmtSolver::Adsmt => {
-                    crate::consts::EXPECTED_ADSMT_VERSION.to_string()
-                }
+                air::context::SmtSolver::Adsmt => crate::consts::EXPECTED_ADSMT_VERSION.to_string(),
             });
         }
 
@@ -1907,9 +1908,9 @@ impl Verifier {
             // `(abduce …)` can suggest "call lemma L". Adsmt-only; gated on the
             // flag, no-op for other backends.
             if self.args.request_abductive_on_unknown {
-                air_context.set_extra_abducibles(
-                    vir::sst_to_air_func::lemma_ens_abducibles(function_opgen.ctx()),
-                );
+                air_context.set_extra_abducibles(vir::sst_to_air_func::lemma_ens_abducibles(
+                    function_opgen.ctx(),
+                ));
             }
             let diagnostics_to_report: std::cell::RefCell<
                 Option<PanicOnDropVec<(Message, MessageLevel)>>,
@@ -1984,9 +1985,7 @@ impl Verifier {
                         let mut func_curr_smt_time = Duration::ZERO;
 
                         let mut func_curr_smt_rlimit_count = match self.args.solver {
-                            air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => {
-                                Some(0)
-                            }
+                            air::context::SmtSolver::Z3 | air::context::SmtSolver::OxiZ => Some(0),
                             air::context::SmtSolver::Cvc5 => None,
                             air::context::SmtSolver::Adsmt => None,
                         };
@@ -1994,6 +1993,8 @@ impl Verifier {
                         // (a function that the user filter leaves out runs no query)
                         let function_included =
                             self.user_filter.as_ref().unwrap().includes_function(&function.x.name);
+                        // `isolate(..)` with a solver other than Z3 and cvc5: warn once
+                        let mut isolate_unsupported_warned = false;
                         for cmds in commands_with_context_list.iter() {
                             if is_recommend && cmds.skip_recommends {
                                 continue;
@@ -2101,8 +2102,29 @@ impl Verifier {
                             // with an rlimit that this context cannot set (cvc5, once started), is
                             // not checked here, but in a context of its own, below.
                             let mut isolates_elsewhere: Vec<usize> = Vec::new();
+                            // Only with Z3 and cvc5: the other backends answer `unknown` and
+                            // report labels differently (OxiZ; adsmt, with its abductive
+                            // verdicts), so the query is checked as a whole there.
+                            let isolate_solver_ok =
+                                matches!(self.args.solver, SmtSolver::Z3 | SmtSolver::Cvc5);
                             if cmds.isolates.len() > 0
                                 && function_included
+                                && !isolate_solver_ok
+                                && level == MessageLevel::Error
+                                && !isolate_unsupported_warned
+                            {
+                                isolate_unsupported_warned = true;
+                                reporter.report(
+                                    &warning(
+                                        &function.span,
+                                        "`isolate(..)` needs Z3 or cvc5 as the solver of the run; the query is checked as a whole",
+                                    )
+                                    .to_any(),
+                                );
+                            }
+                            if cmds.isolates.len() > 0
+                                && function_included
+                                && isolate_solver_ok
                                 && matches!(
                                     cmds.prover_choice,
                                     vir::def::ProverChoice::DefaultProver
@@ -2220,6 +2242,8 @@ impl Verifier {
                                 let prefix = match solver {
                                     SmtSolver::Z3 => "isolated proof, checked by Z3: ",
                                     SmtSolver::Cvc5 => "isolated proof, checked by cvc5: ",
+                                    // (not reached: `isolate` runs only with Z3 and cvc5)
+                                    _ => "isolated proof, checked by another solver: ",
                                 };
                                 let result = self.run_commands_queries(
                                     reporter,
@@ -3733,11 +3757,7 @@ impl Verifier {
     /// passed `--output-json` — but the flag-gating is the caller's
     /// responsibility (`run_command_queries` checks
     /// `args.report_abductive_on_unknown` before invoking this).
-    fn record_func_abductive_candidates(
-        &mut self,
-        func: Fun,
-        candidates: Vec<AbductiveCandidate>,
-    ) {
+    fn record_func_abductive_candidates(&mut self, func: Fun, candidates: Vec<AbductiveCandidate>) {
         use std::collections::hash_map::Entry;
         let mut func_details = self.func_details.lock().unwrap();
         match func_details.entry(func) {
@@ -3745,10 +3765,8 @@ impl Verifier {
                 occupied_entry.get_mut().abductive_candidates.extend(candidates);
             }
             Entry::Vacant(vacant_entry) => {
-                let _ = vacant_entry.insert(FuncDetails {
-                    abductive_candidates: candidates,
-                    ..Default::default()
-                });
+                let _ = vacant_entry
+                    .insert(FuncDetails { abductive_candidates: candidates, ..Default::default() });
             }
         }
     }
