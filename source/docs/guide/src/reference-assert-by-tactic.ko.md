@@ -178,6 +178,68 @@ proof fn p() {
   `#[verifier::bit_vector]`·`#[verifier::integer_ring]` 함수는 나눌 수 없는 단일 질의이므로, 그 안의
   `isolate`는 효과가 없습니다.
 
+## rlimit을 소스 밖에 두기: `.verus-hints`
+
+증명에 필요한 rlimit은 기계와 solver 버전에 따라 달라집니다. hints 파일은 이런 설정을 소스 밖에 둡니다.
+이 파일은 obligation을 *어떻게* 검사할지만 말하고, *무엇을* 검사할지는 말하지 않습니다. 말할 수 있는 것은
+함수의 rlimit, 그리고 함수의 `ensures` 검사 중 어느 것을 질의의 독립된 부분으로 검사할지(`isolate`와 그
+rlimit, solver)뿐입니다. 그래서 hint가 적용되든 안 되든, 성립하지 않는 프로그램을 검증되게 만들 수는
+없습니다.
+
+```toml
+# .verus-hints
+[[hint]]
+function = "m::f"            # crate 안에서의 함수 경로 (또는 `crate::m::f`)
+hash = "2b0eec1c584267d1"    # 이 hint가 대상으로 하는 코드
+rlimit = 30                  # #[verifier::rlimit(30)]과 같습니다. 숫자 또는 "infinity"
+
+[[hint]]
+function = "m::g"
+ensures = 2                  # 두 번째 `ensures` 절. 또는 proof_note = "절의 proof note"
+hash = "4bad7b5d14bdf35f"
+isolate = { rlimit = 10, backend = "cvc5" }   # 그 절의 #![verifier::tactic(isolate(..))]와 같습니다
+
+[[hint]]
+function = "m::h"
+hash = "05a5f377e6de6c25"
+isolate = {}                 # 모든 `ensures` 절. h의 #[verifier::tactic(isolate())]와 같습니다
+```
+
+- **위치:** `-V hints=<path>`(Verus를 실행하는 디렉터리 기준 상대 경로). 없으면 crate root 파일이 있는
+  디렉터리부터 위로 올라가며, `Cargo.toml`이 있는 가장 가까운 디렉터리까지에서 처음 찾은 `.verus-hints`를
+  씁니다. cargo에서 `-V hints`는 검증하는 패키지(primary package)에만 적용됩니다. 검증하지 않는
+  crate(`--no-verify`, 예를 들어 의존성)에는 hint가 적용되지 않습니다. 파일이 바뀌면 cargo가 crate를 다시
+  검사합니다.
+- **이름:** 함수는 crate 안에서의 경로(`m::f`, `S::f`, 앞에 `crate::`를 붙여도 됨)나, rustc의 전체
+  경로(`<S as T>::f`)로 부릅니다. 전체 경로를 쓰면 여러 `impl`에 있는 같은 이름의 메서드를 구별할 수
+  있습니다. 한 이름이 여러 함수를 가리키면, hash가 코드와 맞는 함수에 적용됩니다.
+- **한 파일을 여러 crate가 공유할 때:** 패키지의 라이브러리·바이너리·테스트는 그 패키지의
+  `.verus-hints`를 함께 씁니다. `root = "src/main.rs"`(hints 파일 기준 상대 경로)로 hint가 어느 crate의
+  것인지 밝히면, 다른 crate는 그 hint를 건너뜁니다.
+- **hint가 하는 일:** hint는 자기가 대신하는 속성(`#[verifier::rlimit(..)]`, 또는 함수나 절의
+  `isolate`)을 대체합니다. 검증 중인 crate의 함수에만 적용되고, 그 crate를 쓰는 crate에는 보이지 않습니다.
+- **hash:** 각 hint는 작성 대상 코드의 텍스트(공백 정규화) hash로 그 코드에 묶입니다. 함수에 대한
+  hint는 함수 전체, 절에 대한 hint는 그 절의 텍스트입니다. 처음에는 `hash` 없이 hint를 쓰세요. Verus는
+  그 hint를 적용하지 않고, 현재 코드의 hash가 들어간 항목을 경고에 보여 줍니다. 그것을 파일에 붙여
+  넣으면 됩니다. (`macro_rules!` 매크로가 만든 함수에서는 hash가 매크로 호출의 인자가 아니라 매크로의
+  텍스트를 덮습니다.)
+- **적용되지 않는 hint:** 적용되지 않으며, 그 obligation은 소스만으로 검사되고 경고가 나옵니다. hash가
+  코드와 맞지 않거나 없으면, 경고가 현재 코드에 맞는 항목을 보여 줍니다(이름이 여러 함수를 가리키면 함수마다
+  하나씩). 그런 함수나 절, 검사할 본문이 없으면 경고가 그렇게 알려 줍니다. `-V hints-locked`(CI용)에서는
+  이런 hint가 오류입니다.
+- **오류:** 다음 hint는 `-V hints-locked`와 상관없이 오류입니다.
+  - 위에 없는 키가 있는 것
+  - `ensures`와 `proof_note`를 함께 쓴 것, `ensures`가 1보다 작은 것
+  - 절에 대한 hint에 `rlimit`이 있는 것(`isolate = { rlimit = .. }`에 쓰세요), `isolate`가 없는 것. 함수에
+    대한 hint에 `rlimit`도 `isolate`도 없는 것
+  - rlimit이 0 이상의 숫자나 `"infinity"`가 아닌 것
+  - backend가 `"z3"`·`"cvc5"`가 아닌 것, cvc5용 인코딩(`-V cvc5-smtlib`이나 `-V cvc5`) 없이
+    `backend = "cvc5"`인 것
+  - trait 메서드 선언에 `isolate`를 쓴 것
+  - 함수의 여러 절이 가진 `proof_note`를 쓴 것
+  - 다른 hint와 같은 함수나 절을 대상으로 하는 것
+- hint가 적용되면, 몇 개를 어느 파일에서 적용했는지 note로 알려 줍니다.
+
 ## solver가 막힌 obligation 찾기: `-V triage`
 
 `-V triage`를 주면, 함수가 검증에 실패하거나 rlimit을 넘을 때 Verus가 그 함수의 proof obligation을

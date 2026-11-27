@@ -75,6 +75,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | solver가 막힌 proof obligation 찾기 | `-V triage` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `-V triage` 절 |
 | tactic script (검사되는 증명 코드로 펼쳐짐) | `assert(P) by(tactic) { split(); intro(); cases(b); unfold(f, k); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md) |
 | 증명을 따로, 자기 rlimit이나 solver로 검사 | `by(tactic)` script 안의 `isolate()`, `isolate(rlimit = N, backend = cvc5)`. `ensures` 절의 `#![verifier::tactic(isolate(..))]`, 함수의 `#[verifier::tactic(isolate(..))]` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절 |
+| rlimit과 `isolate`를 소스 밖에 두고, hash로 코드에 묶기 | `.verus-hints` 파일 (`-V hints=<path>`, `-V hints-locked`) | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `.verus-hints` 절 |
 
 이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop` 같은 marker trait, 그리고
 `FipAdd`, `FipOrd` 같은 연산자 marker)에 있습니다.

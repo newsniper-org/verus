@@ -855,3 +855,18 @@ test_verify_one_file! {
         struct S { x: u8 }
     } => Err(err) => assert_vir_error_msg(err, "is only allowed on an `ensures` clause or a function")
 }
+
+test_verify_one_file! {
+    // a clause of a function with parameter patterns
+    #[test] isolate_ensures_param_pattern SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        proof fn t((a, b): (nat, nat))
+            ensures
+                a + b == b + a,
+                #![verifier::tactic(isolate(rlimit = 10))]
+                sum(12) + a == 78 + a,
+        {
+            reveal_with_fuel(sum, 13);
+        }
+    } => Ok(())
+}

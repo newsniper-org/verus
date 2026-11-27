@@ -408,7 +408,23 @@ pub(crate) fn add_param_decls<'tcx>(
     let (body_decls, spec_decls): (Vec<_>, Vec<_>) = param_decls.into_iter().unzip();
     let wrap = |e: &vir::ast::Expr| {
         let decls = bctx.clone_stmts_with_fresh_ids(&spec_decls);
-        bctx.ctxt.spanned_typed_new_vir(&e.span, &e.typ, ExprX::Block(decls, Some(e.clone())))
+        match &e.x {
+            // a clause's label (`proof_note`, `custom_err`, `isolate`) stays at its top, where
+            // the label is looked for
+            ExprX::UnaryOpr(UnaryOpr::ProofNote(label), inner) => {
+                let block = bctx.ctxt.spanned_typed_new_vir(
+                    &inner.span,
+                    &inner.typ,
+                    ExprX::Block(decls, Some(inner.clone())),
+                );
+                e.new_x(ExprX::UnaryOpr(UnaryOpr::ProofNote(label.clone()), block))
+            }
+            _ => bctx.ctxt.spanned_typed_new_vir(
+                &e.span,
+                &e.typ,
+                ExprX::Block(decls, Some(e.clone())),
+            ),
+        }
     };
     let wrap_all = |es: &vir::ast::Exprs| Arc::new(es.iter().map(wrap).collect::<Vec<_>>());
     *require = wrap_all(require);

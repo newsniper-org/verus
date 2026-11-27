@@ -408,6 +408,9 @@ pub struct Verifier {
     /// While a query is checked in several contexts (`isolate(backend = ..)`): how many of them
     /// found it valid so far. It counts as verified only if all of them did.
     valid_parts_runs: Option<usize>,
+    /// The hints file of this crate (`hints.rs`), chosen when the crate is read so that cargo
+    /// learns of it (`file_depinfo`)
+    hints_file: Option<std::path::PathBuf>,
 
     error_format: Option<ErrorOutputType>,
 }
@@ -625,6 +628,7 @@ impl Verifier {
 
             expand_flag: false,
             valid_parts_runs: None,
+            hints_file: None,
             error_format: None,
         }
     }
@@ -686,6 +690,7 @@ impl Verifier {
 
             expand_flag: self.expand_flag,
             valid_parts_runs: None,
+            hints_file: None,
             error_format: self.error_format,
         }
     }
@@ -3501,7 +3506,6 @@ impl Verifier {
             }
         }
         self.maybe_log_impl_names(&merged_crate).map_err(map_err_diagnostics)?;
-        self.maybe_log_vir_crate(&merged_crate).map_err(map_err_diagnostics)?;
 
         let user_filter =
             UserFilter::from_args(&self.args, &local_crate).map_err(map_err_diagnostics)?;
@@ -3511,6 +3515,21 @@ impl Verifier {
             vir::safe_api::check_safe_api(&merged_crate, self.args.alloc_check)
                 .map_err(map_err_diagnostics)?;
         }
+
+        // `.verus-hints`: how some obligations of this crate's functions are checked (after the
+        // export, so that other crates never see the hints)
+        let merged_crate = crate::hints::apply_hints(
+            tcx,
+            &self.args,
+            self.hints_file.as_deref(),
+            &local_crate,
+            merged_crate,
+            &def_id_to_fun,
+            diagnostics,
+        )
+        .map_err(map_err_diagnostics)?;
+        // (the log shows the crate as verified, with the hints)
+        self.maybe_log_vir_crate(&merged_crate).map_err(map_err_diagnostics)?;
 
         self.vir_crate = Some(merged_crate.clone());
         self.warning_ctx = Some(query.get_updated_warning_ctx().map_err(map_query_err)?);
@@ -3825,6 +3844,24 @@ impl rustc_driver::Callbacks for VerifierCallbacksEraseMacro {
                 }
             }
         }
+
+        // The hints file (`hints.rs`): cargo checks the crate again when it changes. With cargo,
+        // `-V hints=<path>` is for the crates being verified (the primary packages), not for
+        // their dependencies.
+        let explicit_applies = self.verifier.via_cargo_args.is_none()
+            || std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
+        let hints_file = crate::hints::hints_file(
+            &self.verifier.args,
+            crate::hints::crate_root(tcx).as_deref(),
+            explicit_applies,
+        );
+        if let Some(path) = &hints_file {
+            let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if let Some(path) = path.to_str() {
+                tcx.sess.file_depinfo.lock().insert(rustc_span::Symbol::intern(path));
+            }
+        }
+        self.verifier.hints_file = hints_file;
 
         rustc_interface::passes::write_dep_info(tcx);
         self.verifier.crate_id = Some(mk_crate_id(tcx, LOCAL_CRATE));

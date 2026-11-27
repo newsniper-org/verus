@@ -495,7 +495,7 @@ fn split_goal(goal: &Expr, span: Span) -> Result<SplitGoal> {
 fn imply_tokens(span: Span) -> TokenStream {
     use proc_macro2::{Punct, Spacing};
     [('=', Spacing::Joint), ('=', Spacing::Joint), ('>', Spacing::Alone)]
-        .into_iter()
+        .iter()
         .map(|(c, spacing)| {
             let mut p = Punct::new(*c, *spacing);
             p.set_span(span);

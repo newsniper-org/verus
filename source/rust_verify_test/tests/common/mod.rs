@@ -453,7 +453,10 @@ pub fn run_verus(
         } else if *option == "cvc5" {
             verus_args.push("-V".to_string());
             verus_args.push("cvc5".to_string());
-        } else if option.starts_with("observer=") {
+        } else if option.starts_with("observer=")
+            || option.starts_with("hints=")
+            || *option == "hints-locked"
+        {
             verus_args.push("-V".to_string());
             verus_args.push(option.to_string());
         } else if *option == "--edition 2021" {
@@ -776,6 +779,16 @@ pub const USE_PRELUDE: &str = crate::common::code_str! {
 };
 
 pub fn verify_one_file(name: &str, code: String, options: &[&str]) -> Result<TestErr, TestErr> {
+    verify_one_file_with_files(name, code, vec![], options)
+}
+
+/// `verify_one_file`, with more files (name, contents) next to `test.rs`
+pub fn verify_one_file_with_files(
+    name: &str,
+    code: String,
+    more_files: Vec<(String, String)>,
+    options: &[&str],
+) -> Result<TestErr, TestErr> {
     let mut options: Vec<_> = options.into_iter().map(|x| *x).collect();
     let mut no_prelude = false;
     let mut exec_allows_no_decreases_clause = false;
@@ -809,7 +822,8 @@ pub fn verify_one_file(name: &str, code: String, options: &[&str]) -> Result<Tes
         )
     };
 
-    let files = vec![("test.rs".to_string(), code)];
+    let mut files = vec![("test.rs".to_string(), code)];
+    files.extend(more_files);
     verify_files_vstd_all_diags(name, files, "test.rs".to_string(), vstd, &options[..])
 }
 

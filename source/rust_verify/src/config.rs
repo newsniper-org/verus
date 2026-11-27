@@ -126,6 +126,10 @@ pub struct ArgsX {
     pub no_bv_simplify: bool,
     pub triage: bool,
     pub observer: Option<String>,
+    /// the hints file (`-V hints=<path>`; else `.verus-hints` is looked for, see `hints.rs`)
+    pub hints: Option<String>,
+    /// a hint that does not apply to the code is an error (`-V hints-locked`)
+    pub hints_locked: bool,
 }
 
 impl ArgsX {
@@ -181,6 +185,8 @@ impl ArgsX {
             no_bv_simplify: Default::default(),
             triage: Default::default(),
             observer: None,
+            hints: None,
+            hints_locked: false,
         }
     }
 }
@@ -258,13 +264,10 @@ fn parse_opts_or_pairs(strs: Vec<String>) -> std::collections::HashMap<String, O
     let mut parsed: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     for o in strs {
-        let oo: Vec<_> = o.split("=").collect();
-        match &oo[..] {
-            [opt] => parsed.insert((*opt).to_owned(), None),
-            [key, val] => parsed.insert((*key).to_owned(), Some((*val).to_owned())),
-            _ => {
-                error(format!("invalid parsed option `-V {}`", o));
-            }
+        // (a value may contain `=`, as a path can)
+        match o.split_once('=') {
+            None => parsed.insert(o.clone(), None),
+            Some((key, val)) => parsed.insert(key.to_owned(), Some(val.to_owned())),
         };
     }
     parsed
@@ -432,6 +435,8 @@ pub fn parse_args_with_imports(
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
     const EXTENDED_TRIAGE: &str = "triage";
     const EXTENDED_OBSERVER: &str = "observer";
+    const EXTENDED_HINTS: &str = "hints";
+    const EXTENDED_HINTS_LOCKED: &str = "hints-locked";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
         (EXTENDED_IGNORE_UNEXPECTED_SMT, "Ignore unexpected SMT output"),
         (
@@ -476,6 +481,14 @@ pub fn parse_args_with_imports(
             "When a function fails to verify or exceeds the rlimit, check each of its proof obligations alone (the others disabled) and report which ones are not proved and why. Diagnostics only: the result of verification does not change",
         ),
         (EXTENDED_OBSERVER, "Observer to run during verification (e.g., test)"),
+        (
+            EXTENDED_HINTS,
+            "=<path>: read the hints file at <path> (by default, `.verus-hints` is looked for next to the crate root file and in its parents up to the nearest `Cargo.toml`). A hints file says only how obligations are checked (rlimit, isolate), never what",
+        ),
+        (
+            EXTENDED_HINTS_LOCKED,
+            "A hint that does not apply to the code (stale hash, no such function or clause) is an error, not a warning",
+        ),
     ];
 
     let default_num_threads: usize = std::thread::available_parallelism()
@@ -905,6 +918,15 @@ pub fn parse_args_with_imports(
                 EXTENDED_OBSERVER, EXTENDED_OBSERVER
             )),
         },
+        hints: match extended.get(EXTENDED_HINTS) {
+            None => None,
+            Some(Some(path)) => Some(path.clone()),
+            Some(None) => error(format!(
+                "-V {} needs the path of a hints file, e.g. -V {}=.verus-hints",
+                EXTENDED_HINTS, EXTENDED_HINTS
+            )),
+        },
+        hints_locked: extended.contains_key(EXTENDED_HINTS_LOCKED),
     };
 
     if args.no_cheating {

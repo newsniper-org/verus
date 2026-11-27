@@ -179,6 +179,72 @@ For why the second holds, see `smt_check_partitions` in `air/src/smt_verify.rs`.
   `#[verifier::bit_vector]` or `#[verifier::integer_ring]` function, is a single query with no
   parts (an `isolate` there has no effect).
 
+## Keeping the rlimits out of the source: `.verus-hints`
+
+An rlimit that a proof needs depends on the machine and the solver version. A hints file keeps
+such settings out of the source. It says only *how* an obligation is checked, never *what*: a
+function's rlimit, and which of its `ensures` checks are a part of the query of their own
+(`isolate`, with its rlimit and solver). So a hint, applied or not, cannot make a program verify
+that does not hold.
+
+```toml
+# .verus-hints
+[[hint]]
+function = "m::f"            # the function's path in the crate (or `crate::m::f`)
+hash = "2b0eec1c584267d1"    # the code the hint is for
+rlimit = 30                  # as #[verifier::rlimit(30)]; a number, or "infinity"
+
+[[hint]]
+function = "m::g"
+ensures = 2                  # the second `ensures` clause; or proof_note = "the clause's note"
+hash = "4bad7b5d14bdf35f"
+isolate = { rlimit = 10, backend = "cvc5" }   # as #![verifier::tactic(isolate(..))] on it
+
+[[hint]]
+function = "m::h"
+hash = "05a5f377e6de6c25"
+isolate = {}                 # all its `ensures` clauses, as #[verifier::tactic(isolate())] on h
+```
+
+- **Where.** `-V hints=<path>` (relative to the directory Verus runs in), or else the first
+  `.verus-hints` found in the directory of the crate root file and its parents, up to the nearest
+  one with a `Cargo.toml`. With cargo, `-V hints` is for the packages being verified (the primary
+  packages); a crate that is not verified (`--no-verify`, such as a dependency) takes no hints.
+  When the file changes, cargo checks the crate again.
+- **Names.** A function is named by its path in the crate (`m::f`, `S::f`), with or without
+  `crate::` in front, or by rustc's full path (`<S as T>::f`), which tells apart methods of the
+  same name in several `impl`s. If a name stands for several functions, the hint is for the one
+  whose code the hash matches.
+- **Several crates, one file.** A package's library, binaries and tests share its
+  `.verus-hints`. `root = "src/main.rs"` (relative to the hints file) says which crate a hint is
+  for; other crates skip it.
+- **What a hint does.** A hint replaces the attribute it stands for: `#[verifier::rlimit(..)]`,
+  or `isolate` on the function or on the clause. Only the functions of the crate being verified
+  take hints; crates that use it do not see them.
+- **The hash.** Each hint is pinned to the code it was written for by a hash of that code's text,
+  with the whitespace normalized: the whole function for a hint about a function, the clause for
+  a hint about a clause. Write a hint without a `hash` first: Verus does not apply it, and its
+  warning shows the entry with the hash of the current code, to paste into the file. (For a
+  function that a `macro_rules!` macro generates, the hash covers the macro's text, not the
+  arguments of its call.)
+- **A hint that does not apply** is not applied: the obligation is checked as the source alone
+  says, with a warning. If its hash does not match the code or it has none, the warning shows
+  the entry for the current code (one per function, if the name stands for several). If there is
+  no such function, clause or body to check, the warning says so. With `-V hints-locked` (for
+  CI), such a hint is an error.
+- **Errors.** These hints are errors, with or without `-V hints-locked`:
+  - a key other than those above;
+  - both `ensures` and `proof_note`, or `ensures` less than 1;
+  - a hint for a clause with `rlimit` (put it in `isolate = { rlimit = .. }`), or without
+    `isolate`; a hint for a function with neither `rlimit` nor `isolate`;
+  - an rlimit that is not a number (at least 0) or `"infinity"`;
+  - a backend other than `"z3"` and `"cvc5"`, or `backend = "cvc5"` without the encoding for cvc5
+    (`-V cvc5-smtlib` or `-V cvc5`);
+  - `isolate` for a trait method declaration;
+  - a `proof_note` that several clauses of the function have;
+  - the same function or clause as another hint.
+- When hints are applied, a note says how many and from which file.
+
 ## Finding the obligation the solver is stuck on: `-V triage`
 
 With `-V triage`, when a function fails to verify or exceeds the rlimit, Verus checks each of
