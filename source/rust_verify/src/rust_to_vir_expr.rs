@@ -1176,8 +1176,11 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
         // goal is proved, never what is proved, so they may not assume anything. The mark only
         // adds this restriction; the block is lowered as usual below. The macro puts it on a
         // plain block inside the proof of `assert(P) by { .. }`, so a block in executable code,
-        // or a ghost block, did not come from a script.
+        // a ghost block, or a block outside such a proof did not come from a script. (Its steps
+        // are erased as spec code: outside such a proof, where variables are not all spec, they
+        // could move tracked values unseen by the borrow checker.)
         if !bctx.in_ghost
+            || !bctx.in_assert_by_proof
             || get_ghost_block_opt(bctx.ctxt.tcx.hir_attrs(expr.hir_id)).is_some()
             || block_attrs.trusted_call
         {

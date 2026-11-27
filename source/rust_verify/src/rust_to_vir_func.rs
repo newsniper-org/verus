@@ -423,6 +423,7 @@ fn mk_bctx<'tcx>(
         in_ghost: mode != Mode::Exec,
         in_trusted_call: false,
         in_tactic: false,
+        in_assert_by_proof: false,
         atomically: None,
         migrate_postcondition_vars,
         in_fn_sig: false,

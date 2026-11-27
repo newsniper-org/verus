@@ -287,6 +287,8 @@ pub(crate) enum AssertItem {
     AssertBitvectorBy,
     AssertForallBy,
     AssertBitVector,
+    // the `cases(e)` step of a `by(tactic)` script
+    TacticCases,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -647,6 +649,7 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::assert_bitvector_by",     VerusItem::Assert(AssertItem::AssertBitvectorBy)),
         ("verus::verus_builtin::assert_forall_by",        VerusItem::Assert(AssertItem::AssertForallBy)),
         ("verus::verus_builtin::assert_bit_vector",       VerusItem::Assert(AssertItem::AssertBitVector)),
+        ("verus::verus_builtin::tactic_cases",            VerusItem::Assert(AssertItem::TacticCases)),
         ("verus::verus_builtin::use_type_invariant",      VerusItem::UseTypeInvariant),
 
         ("verus::verus_builtin::with_triggers",           VerusItem::WithTriggers),

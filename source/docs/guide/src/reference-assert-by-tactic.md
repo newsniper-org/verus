@@ -47,7 +47,8 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `intro()` | `forall\|x\| A ==> B` | `assert forall\|x\| A implies B by { .. }` |
 | | `forall\|x\| B` | `assert forall\|x\| B by { .. }` |
 | | `A ==> B` | `if A { assert(B) by { .. } }` |
-| `cases(b)` | any | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
+| `cases(b)` (a `bool`) | any | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
+| `cases(e)` (a value of an enum) | any | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`, an arm for each variant ([below](#cases-on-an-enum)) |
 | `cases(match e { P => { .. }, .. })` | any | the `match`, with `G` asserted in every arm |
 | `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);` |
 | `apply(L(a))` | any | `L(a);` (its `ensures` become facts) |
@@ -59,11 +60,17 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `isolate()`, `isolate(rlimit = N, backend = cvc5)` | any | `assert(G) by { .. }`, checked as a part of the query of its own ([below](#checking-a-proof-on-its-own-isolate)) |
 
 The `..` in a step's expansion is where the rest of the script goes.
-- **Rest of the script.** After `split()` or `cases(b)`, it applies to each part. After
+- **Rest of the script.** After `split()` or `cases(e)`, it applies to each part. After
   `intro()`, it proves the new goal (`B`, with `x` in scope).
 - **Parts with their own steps.** `split({ .. }, { .. })` and `cases(b, { .. }, { .. })` take one
   block of steps per part instead, and `cases(match ..)` takes the arms' blocks. The rest of the
   script then goes in those blocks: nothing may follow these forms.
+- <a id="cases-on-an-enum"></a>**`cases(e)` on an enum.** The step takes the variants from the
+  type of `e`: each arm has the rest of the script. An error names the variant whose case
+  failed: the assertion of the goal in the arm says ``(`e` is `E::C`)``, and the assertions of
+  the steps in the rest add ``where `e` is `E::C` ``. The `match` also checks that its arms cover every value. The arms do not bind the
+  fields; to name them, use `cases(match ..)`. An enum with one variant has nothing to split
+  (an error), and for a reference, write `cases(*e)`.
 - **Steps that close the goal.** `smt(..)` and `compute()` prove the goal; nothing may follow
   them, neither a step nor a statement.
 - **When the script ends.** If the script ends without closing the goal, the solver proves it
@@ -118,7 +125,10 @@ time, so:
 - the facts of the context, such as `requires` and the statements before the assertion, are
   not listed;
 - nothing it prints has been checked yet;
-- it prints even when the proof later fails, and also when verification passes.
+- it prints even when the proof later fails, and also when verification passes;
+- after a bare `cases(e)`, the rest of the script is expanded once for all the cases (the type of
+  `e` is not known yet), so `show()` prints one note that names `e` but not the case. To see
+  each case's condition, use `cases(b, { ..; show(); }, { ..; show(); })` or `cases(match ..)`.
 
 ### Checking a proof on its own: `isolate`
 

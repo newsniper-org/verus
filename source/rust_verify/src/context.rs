@@ -147,6 +147,10 @@ pub(crate) struct BodyCtxt<'tcx> {
     /// inside the block that a `by(tactic)` script expands to, where `assume`, `admit` and
     /// inline AIR are not allowed
     pub(crate) in_tactic: bool,
+    /// inside the proof of `assert(P) by { .. }`, where the mode checker makes every variable a
+    /// spec one and allows no assignment (`in_assert_by_body`): the only place for the block
+    /// of a `by(tactic)` script, since its steps (`tactic_cases`) are erased as spec code
+    pub(crate) in_assert_by_proof: bool,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

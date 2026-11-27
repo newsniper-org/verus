@@ -870,3 +870,136 @@ test_verify_one_file! {
         }
     } => Ok(())
 }
+
+// `cases(e)` on a value of an enum: the rest of the script in an arm for each variant
+
+const ENUM: &str = verus_code_str! {
+    enum E { A, B(int), C { x: int } }
+    spec fn f(e: E) -> int { match e { E::A => 1, E::B(n) => 2, E::C { x } => 3 } }
+};
+
+test_verify_one_file! {
+    // each variant is a case of its own: the one that fails is named
+    #[test] cases_enum ENUM.to_string() + verus_code_str! {
+        proof fn ok(e: E) {
+            assert(f(e) > 0) by(tactic) { cases(e); }
+        }
+        proof fn bad(e: E) {
+            assert(f(e) < 3) by(tactic) { cases(e); } // FAILS
+        }
+        proof fn bad_b(e: E) {
+            assert(f(e) != 2) by(tactic) { cases(e); } // FAILS
+        }
+        proof fn bad_rest(e: E) {
+            assert(f(e) != 1) by(tactic) { cases(e); have(f(e) >= 1); smt(); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 3);
+        let on = |goal: &str| err.errors.iter().find(|e| e.rendered.contains(goal)).expect(goal);
+        assert!(on("f(e) < 3").rendered.contains("from the tactic step `cases` (`e` is `E::C`)"));
+        assert!(on("f(e) != 2").rendered.contains("from the tactic step `cases` (`e` is `E::B`)"));
+        // a step in the rest says in which case it failed
+        assert!(on("f(e) != 1").rendered.contains("from the tactic step `smt`, where `e` is `E::A`"));
+        assert!(!on("f(e) < 3").rendered.contains("`e` is `E::A`"));
+    }
+}
+
+test_verify_one_file! {
+    // the cases of a `bool` (as before), and of a generic enum
+    #[test] cases_bool_and_generic verus_code! {
+        enum O<T> { N, S(T) }
+        spec fn n<T>(o: O<T>) -> int { match o { O::N => 0, O::S(_) => 1 } }
+        proof fn t<T>(o: O<T>) {
+            assert(n(o) >= 0) by(tactic) { cases(o); }
+        }
+        proof fn b(x: int) {
+            assert(x * x >= 0) by(tactic) { cases(x >= 0); smt(nonlinear_arith); }
+        }
+        proof fn b_bad(x: int) {
+            assert(x >= 0) by(tactic) { cases(x > 5); } // FAILS
+        }
+    } => Err(err) => {
+        assert_one_fails(err.clone());
+        assert!(err.errors[0].rendered.contains("from the tactic step `cases` (the condition does not hold)"));
+    }
+}
+
+test_verify_one_file! {
+    // the rest is copied into every arm: its own statements, an `assert forall`, a closure and
+    // an isolated proof get through every copy
+    #[test] cases_enum_copies ENUM.to_string() + SUM + verus_code_str! {
+        proof fn t(e: E) {
+            assert(f(e) > 0 && sum(3) == 6) by(tactic) {
+                cases(e);
+                let k: int = 2;
+                assert forall|j: int| #[trigger] f(E::B(j)) == 2 by {}
+                have(k + k == 4);
+                split();
+                isolate(rlimit = 10);
+                unfold(sum, 4);
+            }
+        }
+        proof fn nested(e: E, d: E) {
+            assert(f(e) + f(d) > 1) by(tactic) { cases(e); cases(d); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] error_cases_not_enum verus_code! {
+        struct P { a: int }
+        enum One { X(int) }
+        proof fn s(p: P) {
+            assert(p.a == p.a) by(tactic) { cases(p); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`cases(e)` takes a `bool` or a value of an enum")
+}
+
+test_verify_one_file! {
+    #[test] error_cases_one_variant verus_code! {
+        enum One { X(int) }
+        proof fn s(o: One) {
+            assert(o == o) by(tactic) { cases(o); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "has only one variant")
+}
+
+test_verify_one_file! {
+    #[test] error_cases_marker_direct verus_code! {
+        proof fn s(b: bool) {
+            ::verus_builtin::tactic_cases(b, {});
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not used directly")
+}
+
+test_verify_one_file! {
+    #[test] error_cases_assume_in_rest ENUM.to_string() + verus_code_str! {
+        proof fn s(e: E) {
+            assert(f(e) > 5) by(tactic) { cases(e); admit(); }
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("are not allowed in a `by(tactic)` script")))
+}
+
+test_verify_one_file! {
+    // the block of a script outside the proof of an `assert .. by`: there, a step could move a
+    // tracked value unseen by the borrow checker
+    #[test] error_tactic_mark_outside_assert_by verus_code! {
+        proof fn dup<T>(tracked t: T, tracked u: T) -> (tracked r: (T, T))
+            ensures r.0 == t, r.1 == t
+        {
+            let tracked mut a = u;
+            #[verus::internal(tactic)] { ::verus_builtin::tactic_cases(true, { a = t; }); }
+            (a, t)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is only for the block that a `by(tactic)` script expands to")
+}
+
+test_verify_one_file! {
+    #[test] error_tactic_mark_in_proof_block verus_code! {
+        fn f(b: bool) {
+            proof {
+                #[verus::internal(tactic)] { ::verus_builtin::tactic_cases(b, { }); }
+            }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is only for the block that a `by(tactic)` script expands to")
+}

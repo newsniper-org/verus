@@ -48,7 +48,8 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `intro()` | `forall\|x\| A ==> B` | `assert forall\|x\| A implies B by { .. }` |
 | | `forall\|x\| B` | `assert forall\|x\| B by { .. }` |
 | | `A ==> B` | `if A { assert(B) by { .. } }` |
-| `cases(b)` | 무엇이든 | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
+| `cases(b)` (`bool`) | 무엇이든 | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
+| `cases(e)` (enum 값) | 무엇이든 | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`. variant마다 갈래가 하나씩 있습니다(아래 참고) |
 | `cases(match e { P => { .. }, .. })` | 무엇이든 | 그 `match`. 모든 갈래에서 `G`를 assert합니다 |
 | `unfold(f)`, `unfold(f, k)` | 무엇이든 | `reveal(f);`, `reveal_with_fuel(f, k);` |
 | `apply(L(a))` | 무엇이든 | `L(a);` (그 `ensures`가 사실이 됩니다) |
@@ -60,11 +61,16 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `isolate()`, `isolate(rlimit = N, backend = cvc5)` | 무엇이든 | `assert(G) by { .. }`. 질의의 독립된 한 부분으로 검사됩니다(아래 `isolate` 절) |
 
 펼친 결과의 `..` 자리에는 script의 나머지가 들어갑니다.
-- **나머지 step:** `split()`이나 `cases(b)` 뒤의 step은 각 부분에 적용됩니다. `intro()` 뒤의 step은
+- **나머지 step:** `split()`이나 `cases(e)` 뒤의 step은 각 부분에 적용됩니다. `intro()` 뒤의 step은
   새 goal(`B`)을 증명하고, 이때 `x`를 쓸 수 있습니다.
 - **부분마다 따로 주는 step:** `split({ .. }, { .. })`와 `cases(b, { .. }, { .. })`는 부분마다 step
   블록을 하나씩 받습니다. `cases(match ..)`는 각 갈래의 블록을 받습니다. 이때 script의 나머지는
   그 블록들 안에 씁니다. 이런 형태 뒤에는 아무것도 올 수 없습니다.
+- **enum에 대한 `cases(e)`:** variant는 `e`의 타입에서 가져옵니다. 각 갈래에 script의 나머지가 들어가고,
+  실패하면 오류가 어느 variant의 경우인지 알려 줍니다. 갈래에서 goal을 assert하는 문장의 오류에는
+  ``(`e` is `E::C`)``가, 나머지 step이 만든 assertion의 오류에는 ``where `e` is `E::C` ``가 붙습니다. 이 `match`는 갈래들이 모든 값을 덮는지도
+  검사합니다. 갈래는 field를 묶지 않으니, field에 이름을 붙이려면 `cases(match ..)`를 쓰세요. variant가
+  하나뿐인 enum은 나눌 것이 없어 오류이고, 참조에는 `cases(*e)`라고 쓰세요.
 - **goal을 닫는 step:** `smt(..)`와 `compute()`는 goal을 증명합니다. 그 뒤에는 step도 평범한 문장도
   올 수 없습니다.
 - **script가 끝날 때:** goal을 닫지 않고 script가 끝나면, solver가 script가 세운 사실로 goal을
@@ -117,6 +123,9 @@ case의 조건, `intro`가 들여온 것입니다.
 - `requires`나 assertion 앞의 문장처럼 문맥에서 오는 사실은 나오지 않습니다.
 - 보여 주는 내용은 아직 아무것도 검사되지 않은 것입니다.
 - 나중에 증명이 실패해도, 검증이 통과해도 출력됩니다.
+- 그냥 `cases(e)`를 쓴 뒤에는 script의 나머지를 모든 경우에 대해 한 번만 펼칩니다(그때는 `e`의 타입을 아직
+  모릅니다). 그래서 `show()`는 `e`는 말하지만 어느 경우인지는 말하지 않는 note를 하나만 보여 줍니다. 경우마다
+  조건을 보려면 `cases(b, { ..; show(); }, { ..; show(); })`나 `cases(match ..)`를 쓰세요.
 
 ### 증명을 따로 검사하기: `isolate`
 

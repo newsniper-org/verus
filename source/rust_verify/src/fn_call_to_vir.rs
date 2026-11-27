@@ -1704,6 +1704,15 @@ fn verus_item_to_vir<'tcx, 'a>(
                     let exp = expr_to_vir_consume(bctx, &args[0])?;
                     mk_expr(ExprX::AssertAssume { is_assume: false, expr: exp, msg: None })
                 }
+                AssertItem::TacticCases => {
+                    internal_err_unless!(
+                        args_len == 2,
+                        expr.span,
+                        "expected `tactic_cases`",
+                        &args
+                    );
+                    mk_expr(tactic_cases_to_vir(bctx, expr, &args)?)
+                }
                 AssertItem::AssertBy => {
                     internal_err_unless!(args_len == 2, expr.span, "expected `assert_by`", &args);
                     let vars = Arc::new(vec![]);
@@ -1714,7 +1723,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                     );
                     let ensure = expr_to_vir_consume(bctx, &args[0])?;
                     let isolate = isolate_of_by_block(bctx, &args[1])?;
-                    let proof = expr_to_vir_consume(bctx, &args[1])?;
+                    // (the only place for the block of a `by(tactic)` script)
+                    let proof_bctx = BodyCtxt { in_assert_by_proof: true, ..bctx.clone() };
+                    let proof = expr_to_vir_consume(&proof_bctx, &args[1])?;
                     mk_expr(ExprX::AssertBy { vars, require, ensure, proof, isolate })
                 }
                 AssertItem::AssertByCompute => {
@@ -3341,6 +3352,129 @@ fn get_string_lit_arg<'tcx>(
             arg.span,
             format!("Verus builtin `{fn_name_for_error_msg:}` requires a string literal"),
         ),
+    }
+}
+
+/// `cases(e)` in a `by(tactic)` script, `::verus_builtin::tactic_cases(e, { proof })`: the proof,
+/// which the macro expanded once (it cannot tell the type of `e`), in every case of `e`:
+/// - a `bool`: `if e { proof } else { proof }`;
+/// - a value of an enum: a `match` with an arm for each variant, which also asserts that the arms
+///   cover every value (rustc does not check this `match`).
+///
+/// The copies get fresh ids, as other generated code does (`clone_expr_with_fresh_ids`), and the
+/// notes of the assertions that the macro made for the case (`%case%`) say which case it is. Only
+/// a proof is copied: the step changes how the goal is proved, not what is proved, which the
+/// macro asserts after the script.
+fn tactic_cases_to_vir<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    expr: &Expr<'tcx>,
+    args: &[&'tcx Expr<'tcx>],
+) -> Result<ExprX, VirErr> {
+    // (in the block of a script, which is in the proof of an `assert .. by`: the call is erased
+    // as spec code, so what it contains must be checked as spec code too, `in_assert_by_body`)
+    if !bctx.in_tactic || !bctx.in_assert_by_proof {
+        return err_span(
+            expr.span,
+            "`tactic_cases` is the `cases` step of a `by(tactic)` script, and is not used directly",
+        );
+    }
+    let scrutinee = args[0];
+    let shown = bctx
+        .ctxt
+        .tcx
+        .sess
+        .source_map()
+        .span_to_snippet(scrutinee.span)
+        .unwrap_or_else(|_| "the value".to_string());
+    let ty = bctx.types.expr_ty_adjusted(scrutinee);
+    // (checked before the proof is lowered, so that its errors do not come first)
+    let enum_def = match ty.kind() {
+        TyKind::Bool => None,
+        TyKind::Adt(adt, _) if adt.is_enum() => {
+            if adt.variants().len() < 2 {
+                return err_span(
+                    scrutinee.span,
+                    format!(
+                        "`cases`: the type of `{shown}` has only one variant, so there is nothing to split; use `cases(match ..)` to name its fields"
+                    ),
+                );
+            }
+            Some(*adt)
+        }
+        TyKind::Ref(..) => {
+            return err_span(
+                scrutinee.span,
+                format!("`cases`: `{shown}` is a reference; write `cases(*{shown})`"),
+            );
+        }
+        _ => {
+            return err_span(
+                scrutinee.span,
+                format!(
+                    "`cases(e)` takes a `bool` or a value of an enum, and `{shown}` is neither; use `cases(match ..)`"
+                ),
+            );
+        }
+    };
+    let proof = expr_to_vir_consume(bctx, &args[1])?;
+    // the proof for one case: a copy (but the first), with the case in the notes of the
+    // assertions that the script made (`from the tactic step ..`): the one of this step says
+    // which case it is, and the others say in which case they are
+    let case = |k: usize, text: &str, where_: &str| -> Result<vir::ast::Expr, VirErr> {
+        let e = if k == 0 { proof.clone() } else { bctx.clone_expr_with_fresh_ids(&proof) };
+        vir::ast_visitor::map_expr_visitor(&e, &|e: &vir::ast::Expr| match &e.x {
+            ExprX::UnaryOpr(UnaryOpr::ProofNote(label), inner)
+                if !label.is_custom_err && label.text.starts_with("from the tactic step ") =>
+            {
+                let new_text = if *label.text == "from the tactic step `cases` (%case%)" {
+                    format!("from the tactic step `cases` ({text})")
+                } else {
+                    format!("{}, where {where_}", label.text)
+                };
+                let label = vir::ast::ProofNoteLabel { text: Arc::new(new_text), ..label.clone() };
+                Ok(e.new_x(ExprX::UnaryOpr(UnaryOpr::ProofNote(label), inner.clone())))
+            }
+            _ => Ok(e.clone()),
+        })
+    };
+    match enum_def {
+        None => {
+            let cond = expr_to_vir_consume(bctx, scrutinee)?;
+            let then_case = case(0, "the condition holds", &format!("`{shown}` holds"))?;
+            let else_case =
+                case(1, "the condition does not hold", &format!("`{shown}` does not hold"))?;
+            Ok(ExprX::If(cond, then_case, Some(else_case)))
+        }
+        Some(adt) => {
+            let place = expr_to_vir_place(bctx, scrutinee)?;
+            let dt = match &*bctx.mid_ty_to_vir(scrutinee.span, &ty)? {
+                TypX::Datatype(dt, _, _) => dt.clone(),
+                _ => return err_span(scrutinee.span, "`cases`: expected a datatype"),
+            };
+            let enum_name = bctx.ctxt.tcx.item_name(adt.did()).to_string();
+            let mut arms = vec![];
+            for (k, variant) in adt.variants().iter().enumerate() {
+                let name = variant.name.to_string();
+                let pattern = bctx.spanned_typed_new(
+                    scrutinee.span,
+                    &place.typ,
+                    vir::ast::PatternX::Constructor(
+                        dt.clone(),
+                        Arc::new(name.clone()),
+                        Arc::new(vec![]),
+                    ),
+                );
+                let guard = bctx.spanned_typed_new(
+                    scrutinee.span,
+                    &Arc::new(TypX::Bool),
+                    ExprX::Const(Constant::Bool(true)),
+                );
+                let is = format!("`{shown}` is `{enum_name}::{name}`");
+                let body = case(k, &is, &is)?;
+                arms.push(bctx.spanned_new(expr.span, vir::ast::ArmX { pattern, guard, body }));
+            }
+            Ok(ExprX::Match(place, Arc::new(arms), true))
+        }
     }
 }
 

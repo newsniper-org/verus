@@ -507,6 +507,15 @@ pub fn assert_forall_by<A>(_a: A) {
     unimplemented!();
 }
 
+/// The `cases(e)` step of a `by(tactic)` script: the proof (`case`), in every case of `e`, a `bool`
+/// or a value of an enum
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_cases"]
+#[verifier::proof]
+pub fn tactic_cases<A>(_e: A, _case: ()) {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::assert_bit_vector"]
 #[verifier::proof]

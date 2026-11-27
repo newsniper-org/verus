@@ -775,13 +775,25 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 }
                 return Ok(stmts);
             }
+            StepKind::Cases(b, None) => {
+                // the type of `b` (a `bool` or an enum) is not known here: rust_verify makes the
+                // cases (`tactic_cases_to_vir`), with a copy of this proof in each
+                let facts = facts.with(format!(
+                    "one of the cases of `{}` (each is checked on its own; an error names its case)",
+                    show_expr(b)
+                ));
+                let body = expand_items(goal, rest, &facts)?;
+                let case = assert_stmt(span, "cases: %case%", goal, body)?;
+                stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                    #verus_builtin::tactic_cases(#b, { #case });
+                ))?);
+                return Ok(stmts);
+            }
             StepKind::Cases(b, scripts) => {
-                if scripts.is_some() {
-                    no_rest("`cases` with blocks")?;
-                }
+                no_rest("`cases` with blocks")?;
                 let (then_script, else_script) = match scripts {
                     Some((t, e)) => (&t[..], &e[..]),
-                    None => (rest, rest),
+                    None => unreachable!(),
                 };
                 let then_body = expand_items(goal, then_script, &facts.with(show_expr(b)))?;
                 let else_body =
