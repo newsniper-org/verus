@@ -251,3 +251,16 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert_vir_error_msg(err, ERR)
 }
+
+test_verify_one_file_with_options! {
+    // a `proof` block with the attribute is ghost code: it was verified as executable code (the
+    // assignment counted) and then erased from the compiled program, which returned 0
+    #[test] trusted_call_on_proof_block ["vstd"] => verus_code! {
+        use vstd::prelude::*;
+        fn f(y: u64) -> (r: u64) ensures r == y {
+            let mut x: u64 = 0;
+            proof { #![verifier::trusted_call] x = y; }
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "only for executable code")
+}

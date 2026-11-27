@@ -1152,7 +1152,11 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
                 "`#[verifier::trusted_call]` cannot be used with --no-cheating",
             );
         }
-        if bctx.in_ghost {
+        // a `proof { .. }` block with the attribute (`proof { #![verifier::trusted_call] .. }`)
+        // is ghost code too, though `in_ghost` is set only below, where the block is lowered as
+        // ghost code; returning here, its code would be verified as executable code and then
+        // erased from the compiled program
+        if bctx.in_ghost || get_ghost_block_opt(bctx.ctxt.tcx.hir_attrs(expr.hir_id)).is_some() {
             return err_span(expr.span, "`#[verifier::trusted_call]` is only for executable code");
         }
         let bctx = &BodyCtxt { in_trusted_call: true, ..bctx.clone() };
