@@ -74,7 +74,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 | solver가 막힌 proof obligation 찾기 | `-V triage` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `-V triage` 절 |
 | tactic script (검사되는 증명 코드로 펼쳐짐) | `assert(P) by(tactic) { split(); intro(); cases(b); unfold(f, k); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md) |
-| 증명을 따로, 자기 rlimit으로 검사 | `by(tactic)` script 안의 `isolate()`, `isolate(rlimit = N)` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절 |
+| 증명을 따로, 자기 rlimit이나 solver로 검사 | `by(tactic)` script 안의 `isolate()`, `isolate(rlimit = N, backend = cvc5)` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절 |
 
 이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop` 같은 marker trait, 그리고
 `FipAdd`, `FipOrd` 같은 연산자 marker)에 있습니다.

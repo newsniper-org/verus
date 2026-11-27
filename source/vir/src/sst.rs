@@ -370,6 +370,7 @@ pub enum LocalDeclKind {
     /// tell its assertions apart (sst_to_air.rs, `air::context::Context::set_partitions`)
     IsolateGuard {
         rlimit: Option<f32>,
+        backend: Option<crate::ast::IsolateBackend>,
     },
     LetBinder,
     QuantBinder,

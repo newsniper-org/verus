@@ -56,7 +56,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `smt(nonlinear_arith, R, ..)`, `smt(bit_vector, R, ..)` | any | `assert(G) by(nonlinear_arith) requires R, ..;` (or `bit_vector`) |
 | `compute()` | any | `assert(G) by(compute);` |
 | `show()` | any | nothing; a note with the goal and the facts the script added |
-| `isolate()`, `isolate(rlimit = N)` | any | `assert(G) by { .. }`, checked as a part of the query of its own ([below](#checking-a-proof-on-its-own-isolate)) |
+| `isolate()`, `isolate(rlimit = N, backend = cvc5)` | any | `assert(G) by { .. }`, checked as a part of the query of its own ([below](#checking-a-proof-on-its-own-isolate)) |
 
 The `..` in a step's expansion is where the rest of the script goes.
 - **Rest of the script.** After `split()` or `cases(b)`, it applies to each part. After
@@ -155,8 +155,17 @@ For why the second holds, see `smt_check_partitions` in `air/src/smt_verify.rs`.
   the rest of the function, even one before the isolated proof, is reported only once the
   isolated proofs pass.
 - **When a part exceeds its rlimit.** The error points at the isolated goal.
-- **cvc5.** The rlimit of a part cannot be set (nor can `#[verifier::rlimit]`); the global
-  `--rlimit` applies, with a warning.
+- **Another solver.** `isolate(backend = cvc5)` (or `backend = z3`) checks the isolated proof
+  with that solver.
+  - It runs in a solver process of its own, with the same query.
+  - The query counts as verified only if both solvers find their parts valid.
+  - The part's `rlimit` applies to its solver.
+  - cvc5 reads the queries only in the encoding for it. So `backend = cvc5` needs
+    `-V cvc5-smtlib` (Z3, with queries that cvc5 also reads) or `-V cvc5`; otherwise it is an
+    error.
+- **cvc5 as the run's solver.** The rlimit of a part checked by the run's cvc5 cannot be set
+  (nor can `#[verifier::rlimit]`); the global `--rlimit` applies, with a warning. Use
+  `backend = cvc5` for a part that needs its own rlimit.
 - **Not checked in parts.** Queries that only report are checked as a whole: recommends,
   `--expand-errors`, the `--profile` rerun and `-V triage`. A `by(nonlinear_arith)` or
   `by(bit_vector)` assertion is a query of its own already, with no parts.

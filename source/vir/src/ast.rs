@@ -1647,6 +1647,15 @@ pub struct AutoExtEqual {
 pub struct IsolateSpec {
     /// the rlimit for the partition (as `#[verifier::rlimit]`); `None`: the function's
     pub rlimit: Option<f32>,
+    /// the solver for the partition; `None`: the one the run uses
+    pub backend: Option<IsolateBackend>,
+}
+
+/// The solver for an isolated proof (`isolate(backend = ..)`)
+#[derive(Debug, Serialize, Deserialize, ToDebugSNode, Clone, Copy, PartialEq, Eq)]
+pub enum IsolateBackend {
+    Z3,
+    Cvc5,
 }
 
 pub type FunctionAttrs = Arc<FunctionAttrsX>;

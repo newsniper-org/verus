@@ -1045,10 +1045,18 @@ pub struct CommandsWithContextX {
     pub commands: Commands,
     pub prover_choice: ProverChoice,
     pub skip_recommends: bool,
-    /// The guards of the isolated `assert ... by` proofs (`isolate(..)` in a `by(tactic)`
-    /// script) that the queries may contain, as AIR names, with each one's rlimit
-    /// (`IsolateSpec`). The verifier passes them to `air::context::Context::set_partitions`.
-    pub isolates: Arc<Vec<(air::ast::Ident, Option<f32>)>>,
+    /// The isolated `assert ... by` proofs (`isolate(..)` in a `by(tactic)` script) in the
+    /// queries (`IsolateSpec`). The verifier passes them to
+    /// `air::context::Context::set_partitions`.
+    pub isolates: Arc<Vec<IsolatePart>>,
+}
+
+/// An isolated `assert ... by` proof in a query: the AIR name of its guard, and its options
+#[derive(Debug, Clone)]
+pub struct IsolatePart {
+    pub guard: air::ast::Ident,
+    pub rlimit: Option<f32>,
+    pub backend: Option<crate::ast::IsolateBackend>,
 }
 
 impl CommandsWithContextX {
@@ -1069,10 +1077,7 @@ impl CommandsWithContextX {
         })
     }
 
-    pub fn with_isolates(
-        self: Arc<Self>,
-        isolates: &Arc<Vec<(air::ast::Ident, Option<f32>)>>,
-    ) -> CommandsWithContext {
+    pub fn with_isolates(self: Arc<Self>, isolates: &Arc<Vec<IsolatePart>>) -> CommandsWithContext {
         let mut c = (*self).clone();
         c.isolates = isolates.clone();
         Arc::new(c)

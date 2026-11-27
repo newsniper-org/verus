@@ -737,7 +737,7 @@ pub(crate) fn smt_check_query<'ctx>(
     let mut infos: Vec<AssertionInfo> = Vec::new();
     let mut axiom_infos: Vec<AxiomInfo> = Vec::new();
     let guards: HashMap<Ident, usize> = if context.partitions_allowed {
-        context.partitions.iter().enumerate().map(|(i, (g, _))| (g.clone(), i)).collect()
+        context.partitions.iter().enumerate().map(|(i, p)| (p.guard.clone(), i)).collect()
     } else {
         HashMap::new()
     };
@@ -765,7 +765,10 @@ pub(crate) fn smt_check_query<'ctx>(
         None
     };
 
-    let result = if infos.iter().any(|info| info.partition.is_some()) {
+    // (with no parts allowed, the whole query is checked, even where only a part was asked for)
+    let result = if context.partitions_allowed
+        && (infos.iter().any(|info| info.partition.is_some()) || !context.partition_rest_checked)
+    {
         smt_check_partitions(context, diagnostics, infos, air_model, report_long_running)
     } else {
         smt_check_assertion(context, diagnostics, infos, air_model, false, report_long_running)
@@ -834,6 +837,9 @@ pub(crate) fn query_has_labels(query: &Query) -> bool {
 ///   (its innermost configured guard, or none), so no assertion goes unchecked, whichever part
 ///   a label is put in. A part whose answer is not `unsat` (invalid, rlimit exceeded, unknown)
 ///   is not valid.
+/// - A part that is not checked here (`Partition::checked`, `Context::partition_rest_checked`)
+///   is checked by the caller in another context, with the same query; the caller accepts the
+///   query only if that check is valid too (rust_verify's verifier.rs, `isolate(backend = ..)`).
 fn smt_check_partitions(
     context: &mut Context,
     diagnostics: &impl Diagnostics,
@@ -854,6 +860,15 @@ fn smt_check_partitions(
     }
     debug_assert!(infos.iter().all(|info| parts.contains(&info.partition)));
 
+    // the parts that are checked here; the others are the caller's
+    let parts: Vec<Option<usize>> = parts
+        .into_iter()
+        .filter(|part| match part {
+            Some(p) => context.partitions[*p].checked,
+            None => context.partition_rest_checked,
+        })
+        .collect();
+
     let mut used_axioms: Option<Vec<Ident>> = None;
     for (k, part) in parts.iter().enumerate() {
         let mut part_infos = infos.clone();
@@ -864,7 +879,7 @@ fn smt_check_partitions(
                 context.smt_log.log_assert(&None, &mk_not(&ident_var(&info.label)));
             }
         }
-        let part_rlimit = part.and_then(|p| context.partitions[p].1);
+        let part_rlimit = part.and_then(|p| context.partitions[p].rlimit);
         let saved_rlimit = context.rlimit;
         if let Some(rlimit) = part_rlimit {
             context.rlimit = rlimit;

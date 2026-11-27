@@ -3185,7 +3185,7 @@ pub(crate) fn expr_to_stm_opt(
             // Translate proof into a dead-end ending with an assert
             state.push_scope();
             let mut body: Vec<Stm> = Vec::new();
-            if let Some(crate::ast::IsolateSpec { rlimit }) = isolate {
+            if let Some(crate::ast::IsolateSpec { rlimit, backend }) = isolate {
                 // `isolate(..)`: assume a fresh Bool first. Nothing else mentions it, so the
                 // query states the same thing (for every value of the guard g,
                 // `(g ==> wp(proof)) && rest` holds exactly when `wp(proof) && rest` does), and
@@ -3196,7 +3196,7 @@ pub(crate) fn expr_to_stm_opt(
                 let guard = state.declare_imm_var_stm(
                     &guard_name,
                     &bool_typ(),
-                    LocalDeclKind::IsolateGuard { rlimit: *rlimit },
+                    LocalDeclKind::IsolateGuard { rlimit: *rlimit, backend: *backend },
                     false,
                 );
                 let guard_exp = SpannedTyped::new(&expr.span, &bool_typ(), ExpX::Var(guard));

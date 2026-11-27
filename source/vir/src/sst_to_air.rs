@@ -1699,7 +1699,32 @@ struct State {
     loop_infos: Vec<LoopInfo>,
     static_prelude: Vec<Stmt>,
     /// the guards of the function's isolated `assert ... by` proofs (`IsolateSpec`)
-    isolates: Arc<Vec<(Ident, Option<f32>)>>,
+    isolates: Arc<Vec<crate::def::IsolatePart>>,
+}
+
+/// The isolated proofs of `isolates` in `query`: those whose guard it assumes
+fn isolates_in(
+    query: &air::ast::Query,
+    isolates: &Arc<Vec<crate::def::IsolatePart>>,
+) -> Arc<Vec<crate::def::IsolatePart>> {
+    if isolates.is_empty() {
+        return isolates.clone();
+    }
+    fn assumed_vars(stmt: &Stmt, vars: &mut std::collections::HashSet<Ident>) {
+        match &**stmt {
+            StmtX::Assume(e) => {
+                if let air::ast::ExprX::Var(x) = &**e {
+                    vars.insert(x.clone());
+                }
+            }
+            StmtX::DeadEnd(s) | StmtX::Breakable(_, s) => assumed_vars(s, vars),
+            StmtX::Block(ss) | StmtX::Switch(ss) => ss.iter().for_each(|s| assumed_vars(s, vars)),
+            _ => {}
+        }
+    }
+    let mut vars = std::collections::HashSet::new();
+    assumed_vars(&query.assertion, &mut vars);
+    Arc::new(isolates.iter().filter(|p| vars.contains(&p.guard)).cloned().collect())
 }
 
 fn loc_is_var(e: &Exp) -> Option<&UniqueIdent> {
@@ -2883,6 +2908,7 @@ fn loop_to_stmts(
     if loop_isolation {
         let assertion = assertion.clone();
         let query = Arc::new(QueryX { local: Arc::new(local), assertion });
+        let isolates = isolates_in(&query, &state.isolates);
         let loop_cmd_context = CommandsWithContextX::new(
             ctx.fun.as_ref().expect("asserts are expected to be in a function").current_fun.clone(),
             stm.span.clone(),
@@ -2891,7 +2917,7 @@ fn loop_to_stmts(
             ProverChoice::DefaultProver,
             false,
         )
-        .with_isolates(&state.isolates);
+        .with_isolates(&isolates);
         state.commands.push(loop_cmd_context);
     }
 
@@ -3184,8 +3210,12 @@ pub(crate) fn body_stm_to_air(
             local_decls
                 .iter()
                 .filter_map(|decl| match decl.kind {
-                    crate::sst::LocalDeclKind::IsolateGuard { rlimit } => {
-                        Some((suffix_local_unique_id(&decl.ident), rlimit))
+                    crate::sst::LocalDeclKind::IsolateGuard { rlimit, backend } => {
+                        Some(crate::def::IsolatePart {
+                            guard: suffix_local_unique_id(&decl.ident),
+                            rlimit,
+                            backend,
+                        })
                     }
                     _ => None,
                 })
@@ -3284,6 +3314,7 @@ pub(crate) fn body_stm_to_air(
         }
     } else {
         let query = Arc::new(QueryX { local: Arc::new(local), assertion });
+        let isolates = isolates_in(&query, &state.isolates);
         let commands = vec![Arc::new(CommandX::CheckValid(query))];
         state.commands.push(
             CommandsWithContextX::new(
@@ -3294,7 +3325,7 @@ pub(crate) fn body_stm_to_air(
                 if is_nonlinear { ProverChoice::Nonlinear } else { ProverChoice::DefaultProver },
                 is_integer_ring || is_nonlinear,
             )
-            .with_isolates(&state.isolates),
+            .with_isolates(&isolates),
         );
     }
     // Notify observer of binder-originated local declarations (including Skolemized

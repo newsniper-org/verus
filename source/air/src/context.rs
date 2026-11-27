@@ -41,6 +41,17 @@ pub(crate) struct AxiomInfo {
     pub(crate) decl: Decl,
 }
 
+/// An isolated proof of a query (`Context::set_partitions`)
+#[derive(Clone, Debug)]
+pub struct Partition {
+    /// the Bool constant that the proof assumes first
+    pub guard: Ident,
+    /// the rlimit for checking the proof; `None`: the context's
+    pub rlimit: Option<u32>,
+    /// is the proof checked in this context (or by another call, for another solver)
+    pub checked: bool,
+}
+
 /// Why the solver answered `unknown` (`(get-info :reason-unknown)`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReasonUnknown {
@@ -190,9 +201,10 @@ pub struct Context {
     pub(crate) check_valid_used: bool,
     pub(crate) solver: SmtSolver,
     pub(crate) smt_encoding: SmtEncoding,
-    /// the guards of the isolated proofs of the next query, with each one's rlimit
-    /// (`set_partitions`)
-    pub(crate) partitions: Vec<(Ident, Option<u32>)>,
+    /// the isolated proofs of the next query (`set_partitions`)
+    pub(crate) partitions: Vec<Partition>,
+    /// is the rest of the next query (the assertions in no isolated proof) checked here
+    pub(crate) partition_rest_checked: bool,
     /// may the current query be checked in parts (`check_valid`)
     pub(crate) partitions_allowed: bool,
     /// checking one part of a query: no `Valid` notice to the observer yet
@@ -279,6 +291,7 @@ impl Context {
             profile_logfile_name: None,
             single_check_query: false,
             partitions: Vec::new(),
+            partition_rest_checked: true,
             partitions_allowed: false,
             in_partition: false,
             partition_open: None,
@@ -712,11 +725,16 @@ impl Context {
 
     /// Check the next query in parts: the assertions of each isolated proof, under the guard
     /// `g` that the proof assumes first (an `isolate(..)` step in a `by(tactic)` script), are a
-    /// part, checked with its own rlimit if one is given; all other assertions are another part
+    /// part, checked with its own rlimit if one is given; all other assertions are the rest
     /// (`smt_verify::smt_check_partitions`). The query is valid only if every part is.
+    ///
+    /// A part with `checked: false`, and the rest if `rest_checked` is false, is not checked
+    /// here: the caller must check it with another call (for another solver), and must not
+    /// count the query as verified unless that call finds it valid too.
     /// `finish_query` clears the partitions.
-    pub fn set_partitions(&mut self, partitions: Vec<(Ident, Option<u32>)>) {
+    pub fn set_partitions(&mut self, partitions: Vec<Partition>, rest_checked: bool) {
         self.partitions = partitions;
+        self.partition_rest_checked = rest_checked;
     }
 
     /// After a query was canceled: the error of the first assertion of the isolated part that
@@ -767,6 +785,7 @@ impl Context {
             self.rlimit = rlimit;
         }
         self.partitions.clear();
+        self.partition_rest_checked = true;
         self.partitions_allowed = false;
         self.partitions_unchecked = false;
         self.canceled_partition = None;

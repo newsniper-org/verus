@@ -48,6 +48,14 @@ use vir::ast_util::{fun_as_friendly_rust_name, is_visible_to};
 use vir::def::{CommandContext, CommandsWithContext, CommandsWithContextX};
 use vir::prelude::PreludeConfig;
 
+/// The solver for an isolated proof (`isolate(backend = ..)`)
+fn isolate_solver(backend: vir::ast::IsolateBackend) -> SmtSolver {
+    match backend {
+        vir::ast::IsolateBackend::Z3 => SmtSolver::Z3,
+        vir::ast::IsolateBackend::Cvc5 => SmtSolver::Cvc5,
+    }
+}
+
 const RLIMIT_PER_SECOND_Z3: f32 = 3000000f32;
 const RLIMIT_PER_SECOND_CVC5: f32 = 333333f32; // ~= 5s
 
@@ -397,6 +405,9 @@ pub struct Verifier {
 
     // proof debugging purposes
     expand_flag: bool,
+    /// While a query is checked in several contexts (`isolate(backend = ..)`): how many of them
+    /// found it valid so far. It counts as verified only if all of them did.
+    valid_parts_runs: Option<usize>,
 
     error_format: Option<ErrorOutputType>,
 }
@@ -613,6 +624,7 @@ impl Verifier {
             buckets: HashMap::new(),
 
             expand_flag: false,
+            valid_parts_runs: None,
             error_format: None,
         }
     }
@@ -673,6 +685,7 @@ impl Verifier {
             buckets: self.buckets.clone(),
 
             expand_flag: self.expand_flag,
+            valid_parts_runs: None,
             error_format: self.error_format,
         }
     }
@@ -938,7 +951,11 @@ impl Verifier {
                     if (is_check_valid && is_first_check && level == Some(MessageLevel::Error))
                         || is_singular
                     {
-                        self.count_verified += 1;
+                        match &mut self.valid_parts_runs {
+                            // one of several contexts for a query (`isolate(backend = ..)`)
+                            Some(valid) => *valid += 1,
+                            None => self.count_verified += 1,
+                        }
 
                         if let air::context::UsageInfo::UsedAxioms(axioms) = usage_info {
                             assert!(used_axioms.replace(axioms).is_none());
@@ -1459,10 +1476,14 @@ impl Verifier {
         prelude_config: vir::prelude::PreludeConfig,
         profile_file_name: Option<&std::path::PathBuf>,
         prover_choice: vir::def::ProverChoice,
+        backend: Option<(SmtSolver, Option<f32>)>,
     ) -> Result<air::context::Context, VirErr> {
+        // `backend`: a context for an isolated proof (`isolate(backend = ..)`), with its solver
+        // and its rlimit (set here, before the context starts, since cvc5 takes it only then)
+        let solver = backend.map_or(self.args.solver, |(solver, _)| solver);
         let mut air_context = air::context::Context::new_with_encoding(
             message_interface.clone(),
-            self.args.solver,
+            solver,
             self.args.smt_encoding,
         );
         air_context.set_ignore_unexpected_smt(self.args.ignore_unexpected_smt);
@@ -1535,9 +1556,20 @@ impl Verifier {
         if !bitvector {
             air_context.set_solver_option("air_recommended_options", "true");
         }
-        self.set_default_rlimit(&mut air_context);
-        for (option, value) in self.args.smt_options.iter() {
-            air_context.set_solver_option(&option, &value);
+        match backend {
+            Some((_, Some(rlimit))) => Self::set_rlimit(&mut air_context, rlimit),
+            _ => self.set_default_rlimit(&mut air_context),
+        }
+        if solver == self.args.solver {
+            // (options for the run's solver)
+            for (option, value) in self.args.smt_options.iter() {
+                air_context.set_solver_option(&option, &value);
+            }
+        } else if self.args.solver_version_check {
+            air_context.set_expected_solver_version(match solver {
+                SmtSolver::Z3 => cargo_verus_toolchains::external_deps::Z3_VERSION.to_string(),
+                SmtSolver::Cvc5 => cargo_verus_toolchains::external_deps::CVC5_VERSION.to_string(),
+            });
         }
         if !bitvector {
             if self.args.axiom_usage_info {
@@ -1570,7 +1602,7 @@ impl Verifier {
                 //
                 // TODO: tune Z3/CVC5 options for bit-vector queries
             }
-            vir::def::ProverChoice::Nonlinear => match self.args.solver {
+            vir::def::ProverChoice::Nonlinear => match air_context.get_solver() {
                 air::context::SmtSolver::Z3 => {
                     air_context.set_solver_option("smt.arith.solver", "6")
                 }
@@ -1595,6 +1627,7 @@ impl Verifier {
         spinoff_reason: &str,
         prover_choice: vir::def::ProverChoice,
         attach_observers: bool,
+        backend: Option<(SmtSolver, Option<f32>)>,
     ) -> Result<air::context::Context, VirErr> {
         let mut air_context = self.new_air_context_with_prelude(
             ctx,
@@ -1609,6 +1642,7 @@ impl Verifier {
             },
             profile_file_name,
             prover_choice,
+            backend,
         )?;
 
         // Attach the same shared observer objects to the spinoff context
@@ -1673,6 +1707,7 @@ impl Verifier {
             },
             profile_all_file_name.as_ref(),
             vir::def::ProverChoice::DefaultProver,
+            None,
         )?;
 
         // Attach the same shared observer object to air::Context via its per-trait
@@ -1911,6 +1946,7 @@ impl Verifier {
                                     spinoff_reason,
                                     cmds.prover_choice,
                                     true,
+                                    None,
                                 )?;
                                 // for bitvector, only one query, no push/pop
                                 if cmds.prover_choice == vir::def::ProverChoice::BitVector {
@@ -1948,6 +1984,9 @@ impl Verifier {
                             // `#[verifier::nonlinear]` function). Not for the queries that only
                             // report (recommends, expand-errors, the profile rerun), which check
                             // the query as a whole.
+                            // An isolated proof with another solver (`isolate(backend = ..)`) is
+                            // not checked here, but in a context for its solver, below.
+                            let mut isolates_elsewhere: Vec<usize> = Vec::new();
                             if cmds.isolates.len() > 0
                                 && matches!(
                                     cmds.prover_choice,
@@ -1960,10 +1999,17 @@ impl Verifier {
                             {
                                 let mutable = query_air_context.rlimit_is_mutable();
                                 let mut partitions = Vec::new();
-                                for (guard, rlimit) in cmds.isolates.iter() {
-                                    let rlimit = match rlimit {
+                                for (i, part) in cmds.isolates.iter().enumerate() {
+                                    let elsewhere = part
+                                        .backend
+                                        .map_or(false, |b| isolate_solver(b) != self.args.solver);
+                                    if elsewhere {
+                                        isolates_elsewhere.push(i);
+                                    }
+                                    let rlimit = match part.rlimit {
+                                        _ if elsewhere => None,
                                         Some(rlimit) if mutable => {
-                                            Some(Self::rlimit_value(&query_air_context, *rlimit))
+                                            Some(Self::rlimit_value(&query_air_context, rlimit))
                                         }
                                         Some(_) => {
                                             if !isolate_rlimit_warned {
@@ -1981,9 +2027,18 @@ impl Verifier {
                                         }
                                         None => None,
                                     };
-                                    partitions.push((guard.clone(), rlimit));
+                                    partitions.push(air::context::Partition {
+                                        guard: part.guard.clone(),
+                                        rlimit,
+                                        checked: !elsewhere,
+                                    });
                                 }
-                                query_air_context.set_partitions(partitions);
+                                query_air_context.set_partitions(partitions, true);
+                            }
+                            if isolates_elsewhere.len() > 0 {
+                                // the query counts as verified only if every context finds its
+                                // parts valid (check_result_validity counts the valid ones here)
+                                self.valid_parts_runs = Some(0);
                             }
                             let RunCommandQueriesResult {
                                 invalidity: command_invalidity,
@@ -2004,7 +2059,94 @@ impl Verifier {
                             );
                             // (`finish_query` clears them, but a function that is not verified
                             // runs no query)
-                            query_air_context.set_partitions(vec![]);
+                            query_air_context.set_partitions(vec![], true);
+                            let mut isolate_elsewhere_invalid = false;
+                            let mut isolate_elsewhere_timed_out = false;
+                            for &i in isolates_elsewhere.iter() {
+                                let part = &cmds.isolates[i];
+                                let backend = part.backend.expect("backend");
+                                let solver = isolate_solver(backend);
+                                if solver == SmtSolver::Cvc5
+                                    && !matches!(
+                                        self.args.smt_encoding,
+                                        air::context::SmtEncoding::Cvc5
+                                    )
+                                {
+                                    // cvc5 would get queries in the encoding for Z3
+                                    reporter.report(
+                                        &vir::messages::error(
+                                            &function.span,
+                                            "`isolate(backend = cvc5)` needs the encoding for cvc5: run with `-V cvc5-smtlib` (Z3, with queries that cvc5 also reads) or `-V cvc5`",
+                                        )
+                                        .to_any(),
+                                    );
+                                    self.count_errors += 1;
+                                    self.func_fails.insert(function.x.name.clone());
+                                    isolate_elsewhere_invalid = true;
+                                    continue;
+                                }
+                                let mut part_context = self.new_air_context_with_bucket_context(
+                                    message_interface.clone(),
+                                    function_opgen.ctx(),
+                                    reporter,
+                                    bucket_id,
+                                    Some((&(function.x.name).path, spinoff_context_counter)),
+                                    &bucket_context,
+                                    is_recommend,
+                                    &cmds.context.span,
+                                    None,
+                                    "isolated proof for another solver",
+                                    cmds.prover_choice,
+                                    false,
+                                    Some((solver, part.rlimit.or(function.x.attrs.rlimit))),
+                                )?;
+                                spinoff_context_counter += 1;
+                                self.apply_per_query_smt_options(
+                                    &mut part_context,
+                                    cmds.prover_choice,
+                                );
+                                // only this proof is checked there
+                                let partitions = cmds
+                                    .isolates
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(j, p)| air::context::Partition {
+                                        guard: p.guard.clone(),
+                                        rlimit: None,
+                                        checked: j == i,
+                                    })
+                                    .collect();
+                                part_context.set_partitions(partitions, false);
+                                let prefix = match backend {
+                                    vir::ast::IsolateBackend::Z3 => {
+                                        "isolated proof, checked by Z3: "
+                                    }
+                                    vir::ast::IsolateBackend::Cvc5 => {
+                                        "isolated proof, checked by cvc5: "
+                                    }
+                                };
+                                let result = self.run_commands_queries(
+                                    reporter,
+                                    Some(level),
+                                    &diagnostics_to_report,
+                                    &mut part_context,
+                                    cmds.clone(),
+                                    bucket_id,
+                                    &function.x.name,
+                                    &op.to_air_comment(),
+                                    Some(prefix),
+                                    &mut default_prover_failed_assert_ids,
+                                );
+                                isolate_elsewhere_invalid |= result.invalidity;
+                                isolate_elsewhere_timed_out |= result.timed_out;
+                            }
+                            if let Some(valid) = self.valid_parts_runs.take() {
+                                if valid == 1 + isolates_elsewhere.len() {
+                                    self.count_verified += 1;
+                                }
+                            }
+                            any_invalid |= isolate_elsewhere_invalid;
+                            any_timed_out |= isolate_elsewhere_timed_out;
                             func_curr_smt_time +=
                                 query_air_context.get_time().1 - iter_curr_smt_time;
                             if let Some(func_curr_smt_rlimit_count) =
@@ -2060,6 +2202,7 @@ impl Verifier {
                                     "triage",
                                     cmds.prover_choice,
                                     false,
+                                    None,
                                 )?;
                                 spinoff_context_counter += 1;
                                 self.apply_per_query_smt_options(

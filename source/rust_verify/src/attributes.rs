@@ -448,11 +448,22 @@ fn get_isolate_args(
     span: Span,
     args: &Option<Box<[AttrTree]>>,
 ) -> Result<vir::ast::IsolateSpec, VirErr> {
-    let mut spec = vir::ast::IsolateSpec { rlimit: None };
+    let mut spec = vir::ast::IsolateSpec { rlimit: None, backend: None };
     for arg in args.as_deref().unwrap_or(&[]).iter() {
         match arg {
             AttrTree::Fun(span, name, rlimit) if name == "rlimit" && spec.rlimit.is_none() => {
                 spec.rlimit = Some(get_rlimit_arg(*span, rlimit)?);
+            }
+            AttrTree::Fun(_, name, Some(backend))
+                if name == "backend" && spec.backend.is_none() =>
+            {
+                spec.backend = match &**backend {
+                    [AttrTree::Fun(_, b, None)] if b == "z3" => Some(vir::ast::IsolateBackend::Z3),
+                    [AttrTree::Fun(_, b, None)] if b == "cvc5" => {
+                        Some(vir::ast::IsolateBackend::Cvc5)
+                    }
+                    _ => return err_span(span, "unexpected backend for `isolate`"),
+                };
             }
             _ => return err_span(span, "unexpected option for `isolate`"),
         }

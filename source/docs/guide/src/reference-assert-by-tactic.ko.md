@@ -57,7 +57,7 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `smt(nonlinear_arith, R, ..)`, `smt(bit_vector, R, ..)` | 무엇이든 | `assert(G) by(nonlinear_arith) requires R, ..;` (또는 `bit_vector`) |
 | `compute()` | 무엇이든 | `assert(G) by(compute);` |
 | `show()` | 무엇이든 | 없음. goal과 script가 더한 사실을 note로 보여 줍니다 |
-| `isolate()`, `isolate(rlimit = N)` | 무엇이든 | `assert(G) by { .. }`. 질의의 독립된 한 부분으로 검사됩니다(아래 `isolate` 절) |
+| `isolate()`, `isolate(rlimit = N, backend = cvc5)` | 무엇이든 | `assert(G) by { .. }`. 질의의 독립된 한 부분으로 검사됩니다(아래 `isolate` 절) |
 
 펼친 결과의 `..` 자리에는 script의 나머지가 들어갑니다.
 - **나머지 step:** `split()`이나 `cases(b)` 뒤의 step은 각 부분에 적용됩니다. `intro()` 뒤의 step은
@@ -155,8 +155,16 @@ proof fn p() {
 - **한 부분이 실패할 때:** 그 뒤의 부분은 검사되지 않고, 그렇다는 note가 나옵니다. 그래서 함수의 나머지에
   있는 오류는, isolate된 증명보다 앞에 있더라도, isolate된 증명이 모두 통과해야 보고됩니다.
 - **한 부분이 rlimit을 넘을 때:** 오류가 isolate된 goal을 가리킵니다.
-- **cvc5:** 부분의 rlimit을 따로 정할 수 없습니다(`#[verifier::rlimit]`도 마찬가지입니다). 경고와 함께
-  전역 `--rlimit`이 적용됩니다.
+- **다른 solver:** `isolate(backend = cvc5)`(또는 `backend = z3`)는 isolate된 증명을 그 solver로
+  검사합니다.
+  - 별도 solver 프로세스에서 같은 질의로 검사합니다.
+  - 두 solver가 각자 맡은 부분을 모두 valid로 판정해야만 질의가 검증된 것으로 칩니다.
+  - 부분의 `rlimit`은 그 solver에 적용됩니다.
+  - cvc5는 자기용 인코딩으로 된 질의만 읽습니다. 그래서 `backend = cvc5`는 `-V cvc5-smtlib`(cvc5도 읽을
+    수 있는 질의를 쓰는 Z3)나 `-V cvc5`가 있어야 하고, 없으면 오류입니다.
+- **실행 solver가 cvc5일 때:** 실행의 cvc5가 검사하는 부분은 rlimit을 따로 정할 수 없습니다
+  (`#[verifier::rlimit]`도 마찬가지입니다). 경고와 함께 전역 `--rlimit`이 적용됩니다. 자기 rlimit이 필요한
+  부분에는 `backend = cvc5`를 쓰세요.
 - **부분으로 나누지 않는 질의:** 보고만 하는 질의는 통째로 검사됩니다. recommends, `--expand-errors`,
   `--profile`의 재실행, `-V triage`가 여기에 해당합니다. `by(nonlinear_arith)`나 `by(bit_vector)`
   assertion은 이미 그 자체로 하나의 질의이므로, 나눌 부분이 없습니다.

@@ -497,7 +497,7 @@ test_verify_one_file! {
         proof fn t(x: int) {
             assert(x == x) by(tactic) { isolate(time = 3); }
         }
-    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()` or `isolate(rlimit = N)`")
+    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()`, with the options")
 }
 
 test_verify_one_file! {
@@ -505,7 +505,7 @@ test_verify_one_file! {
         proof fn t(x: int) {
             assert(x == x) by(tactic) { isolate(rlimit = 1, rlimit = 2); }
         }
-    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()` or `isolate(rlimit = N)`")
+    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()`, with the options")
 }
 
 test_verify_one_file! {
@@ -594,4 +594,68 @@ test_verify_one_file! {
         assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
         assert!(err.errors[0].spans.iter().any(|s| s.text.iter().any(|t| t.text.contains("sum(12) == 78"))));
     }
+}
+
+// `isolate(backend = ..)`: an isolated proof checked by another solver, in a context of its own
+
+test_verify_one_file_with_options! {
+    // with the encoding for cvc5, cvc5 checks the isolated proof; the query counts only if both
+    // solvers find their parts valid
+    #[test] isolate_backend_cvc5 ["-V cvc5-smtlib"] => DEFS.to_string() + verus_code_str! {
+        proof fn ok(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); }
+            assert(f(x) > x) by(tactic) { isolate(backend = z3, rlimit = 5); apply(lemma_f(x)); }
+        }
+        proof fn bad_in(x: int) {
+            assert(f(x) > x + 1) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); } // FAILS
+        }
+        proof fn bad_out(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); }
+            assert(f(x) > x + 1); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file_with_options! {
+    // the part's rlimit, set when its context starts (cvc5 takes it only then)
+    #[test] isolate_backend_cvc5_rlimit ["-V cvc5-smtlib"] => SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) { isolate(backend = cvc5, rlimit = 10); unfold(sum, 13); }
+        }
+        #[verifier::rlimit(10)]
+        proof fn u() {
+            assert(sum(12) == 78) by(tactic) { isolate(backend = cvc5, rlimit = 0.001); unfold(sum, 13); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.starts_with("isolated proof, checked by cvc5: "));
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+    }
+}
+
+test_verify_one_file! {
+    // with the encoding for Z3, cvc5 is refused, and the proof does not count as verified
+    #[test] isolate_backend_needs_encoding DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`isolate(backend = cvc5)` needs the encoding for cvc5")
+}
+
+test_verify_one_file! {
+    // the run's own solver: an ordinary part
+    #[test] isolate_backend_same_solver DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(g(x) > x) by(tactic) { isolate(backend = z3); apply(lemma_g(x)); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_backend DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(x == x) by(tactic) { isolate(backend = yices); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()`, with the options")
 }

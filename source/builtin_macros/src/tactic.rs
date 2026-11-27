@@ -274,34 +274,42 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
         "show" if n == 0 => StepKind::Show,
         "show" => return wrong_args("`show()`"),
         "isolate" => {
-            let mut options = TokenStream::new();
-            let mut rlimit = false;
+            let mut options: Vec<TokenStream> = Vec::new();
+            let (mut rlimit, mut backend) = (false, false);
             for arg in args.iter() {
                 let expected = || {
                     Error::new(
                         arg.span(),
-                        "`isolate`: expected `isolate()` or `isolate(rlimit = N)`, with N a number or `infinity`",
+                        "`isolate`: expected `isolate()`, with the options `rlimit = N` (a number or `infinity`) and `backend = z3` or `backend = cvc5`, each at most once",
                     )
                 };
                 let Expr::Assign(assign) = arg else { return Err(expected()) };
                 let Expr::Path(key) = &*assign.left else { return Err(expected()) };
                 let value = &assign.right;
+                let value_ident = match &**value {
+                    Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+                    _ => None,
+                };
                 match key.path.get_ident().map(|i| i.to_string()).as_deref() {
                     Some("rlimit") if !rlimit => {
                         let is_number = matches!(&**value, Expr::Lit(l)
                             if matches!(l.lit, verus_syn::Lit::Int(_) | verus_syn::Lit::Float(_)));
-                        let is_infinity = matches!(&**value, Expr::Path(p)
-                            if p.path.get_ident().map_or(false, |i| i == "infinity"));
-                        if !is_number && !is_infinity {
+                        if !is_number && value_ident.as_deref() != Some("infinity") {
                             return Err(expected());
                         }
                         rlimit = true;
-                        options.extend(quote_spanned!(span => rlimit(#value)));
+                        options.push(quote_spanned!(span => rlimit(#value)));
+                    }
+                    Some("backend")
+                        if !backend && matches!(value_ident.as_deref(), Some("z3" | "cvc5")) =>
+                    {
+                        backend = true;
+                        options.push(quote_spanned!(span => backend(#value)));
                     }
                     _ => return Err(expected()),
                 }
             }
-            StepKind::Isolate(options)
+            StepKind::Isolate(quote_spanned!(span => #(#options),*))
         }
         _ => unreachable!(),
     };
