@@ -2057,8 +2057,10 @@ impl Verifier {
 
                             // `-V triage`: check each obligation of the failed query alone. This
                             // runs in a solver process of its own, without observers or profiling,
-                            // so that nothing of it reaches the queries that come later.
+                            // so that nothing of it reaches the queries that come later. Only Z3
+                            // and cvc5 (`Context::triage_query`).
                             if self.args.triage
+                                && matches!(self.args.solver, SmtSolver::Z3 | SmtSolver::Cvc5)
                                 && !*profile_rerun
                                 && level == MessageLevel::Error
                                 && !self.expand_flag

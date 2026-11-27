@@ -520,7 +520,7 @@ pub fn parse_args_with_imports(
         ),
         (
             EXTENDED_TRIAGE,
-            "When a function fails to verify or exceeds the rlimit, check each of its proof obligations alone (the others disabled) and report which ones are not proved and why. Diagnostics only: the result of verification does not change",
+            "When a function fails to verify or exceeds the rlimit, check each of its proof obligations alone (the others disabled) and report which ones are not proved and why. Diagnostics only: the result of verification does not change. Z3 and cvc5 only",
         ),
         (EXTENDED_OBSERVER, "Observer to run during verification (e.g., test)"),
         (
