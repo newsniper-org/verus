@@ -530,10 +530,14 @@ pub enum IntegerTypeBoundKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, ToDebugSNode)]
 pub struct ProofNoteLabel {
-    /// The text to show in error messages.
+    /// The text to show in error messages (empty: none, for a label that only carries
+    /// `isolate`).
     pub text: Arc<String>,
     /// Whether this label acts as a custom error message.
     pub is_custom_err: bool,
+    /// `#[verifier::tactic(isolate(..))]` on an `ensures` clause: its checks are a part of the
+    /// query of their own (`IsolateSpec`)
+    pub isolate: Option<IsolateSpec>,
 }
 
 /// Label for a Loop that a break/continue may point to.
@@ -1651,8 +1655,18 @@ pub struct IsolateSpec {
     pub backend: Option<IsolateBackend>,
 }
 
+// (the rlimit is never NaN)
+impl Eq for IsolateSpec {}
+
+impl std::hash::Hash for IsolateSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.rlimit.map(f32::to_bits).hash(state);
+        self.backend.hash(state);
+    }
+}
+
 /// The solver for an isolated proof (`isolate(backend = ..)`)
-#[derive(Debug, Serialize, Deserialize, ToDebugSNode, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, ToDebugSNode, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IsolateBackend {
     Z3,
     Cvc5,
@@ -1693,6 +1707,9 @@ pub struct FunctionAttrsX {
     pub memoize: bool,
     /// override default rlimit
     pub rlimit: Option<f32>,
+    /// `#[verifier::tactic(isolate(..))]` on the function: the checks of its `ensures` clauses
+    /// are a part of the query of their own (except for a clause with its own)
+    pub isolate_ensures: Option<IsolateSpec>,
     /// does this function take zero args (this is useful to keep track
     /// of because we add a dummy arg to zero functions)
     pub print_zero_args: bool,

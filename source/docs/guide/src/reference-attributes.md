@@ -21,6 +21,7 @@
  - `reject_recursive_types`
  - `reject_recursive_types_in_ground_variants`
  - [`rlimit`](#verifierrlimitn-and-verifierrlimitinfinity)
+ - [`tactic`](#verifiertacticisolate-and-verifiertacticisolate) (fork)
  - [`trigger`](#trigger)
  - [`truncate`](#verifiertruncate)
  - [`type_invariant`](#verifiertype_invariant)
@@ -258,6 +259,27 @@ by the solver before it gives up. The default, 10, is meant to be around 2 secon
 The rlimit may be set to `infinity` to remove the limit.
 
 The rlimit can also be configured with the `--rlimit` command line option.
+
+## `#[verifier::tactic(isolate(..))]` and `#![verifier::tactic(isolate(..))]`
+
+*Fork extension.* On an `ensures` clause (in the inner form, `#![..]`, at the start of the
+clause), the clause's checks, at every return, are a part of the function's query of their own,
+with the options of `isolate(..)` in a `by(tactic)` script: `rlimit = N`, `backend = z3` or
+`backend = cvc5`. On a function, all its `ensures` checks are one such part, except for a clause
+with its own attribute. The attribute is an error anywhere else, and on a trait method
+declaration (put it on the implementations). See
+[`isolate`](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate).
+
+```rust
+#[verifier::rlimit(1)]
+proof fn p(b: bool)
+    ensures
+        #![verifier::tactic(isolate(rlimit = 10))]
+        sum(12) == 78,
+{
+    reveal_with_fuel(sum, 13);
+}
+```
 
 ## `#[verifier::spinoff_prover]`
 

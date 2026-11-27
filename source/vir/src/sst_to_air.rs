@@ -46,8 +46,10 @@ pub struct PostConditionInfo {
     /// May be referenced by `ens_exprs` or `ens_spec_precondition_stms`.
     pub dest: Option<VarIdent>,
     /// Post-conditions (only used in non-recommends-checking mode)
-    /// Each entry carries the span, the AIR expression, and an optional `proof_note` label.
-    pub ens_exprs: Vec<(Span, Expr, Option<ProofNoteLabel>)>,
+    /// Each entry carries the span, the AIR expression, an optional `proof_note` label, and
+    /// the guard of its part of the query if its checks are isolated (`isolate(..)` on the
+    /// clause or the function)
+    pub ens_exprs: Vec<(Span, Expr, Option<ProofNoteLabel>, Option<Ident>)>,
     /// Recommends checks (only used in recommends-checking mode)
     pub ens_spec_precondition_stms: Stms,
     /// Extra info about PostCondition for error reporting
@@ -2171,7 +2173,7 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                         stmts.append(&mut new_stmts);
                     }
                 } else {
-                    for (ens_idx, (span, ens, proof_note)) in
+                    for (ens_idx, (span, ens, proof_note, guard)) in
                         state.post_condition_info.ens_exprs.clone().iter().enumerate()
                     {
                         // The base_error should point to the return-statement or
@@ -2219,8 +2221,21 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                             ens_idx,
                             &assert_id,
                         );
-                        let ens_stmt = StmtX::Assert(ens_id, error, None, ens.clone());
-                        stmts.push(Arc::new(ens_stmt));
+                        let ens_stmt = Arc::new(StmtX::Assert(ens_id, error, None, ens.clone()));
+                        match guard {
+                            // an isolated check (`isolate(..)`): the assertion in a dead end that
+                            // assumes the guard of its part first, as for an isolated proof
+                            // (ast_to_sst.rs, AssertBy)
+                            Some(guard) => {
+                                let assume = Arc::new(StmtX::Assume(Arc::new(
+                                    air::ast::ExprX::Var(guard.clone()),
+                                )));
+                                stmts.push(Arc::new(StmtX::DeadEnd(Arc::new(StmtX::Block(
+                                    Arc::new(vec![assume, ens_stmt]),
+                                )))));
+                            }
+                            None => stmts.push(ens_stmt),
+                        }
                     }
                 }
 
@@ -2248,18 +2263,23 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             match mode {
                 AssertQueryMode::NonLinear => {
                     let query = Arc::new(QueryX { local: Arc::new(local), assertion });
-                    state.commands.push(CommandsWithContextX::new(
-                        ctx.fun
-                            .as_ref()
-                            .expect("asserts are expected to be in a function")
-                            .current_fun
-                            .clone(),
-                        stm.span.clone(),
-                        "assert_nonlinear_by".to_string(),
-                        Arc::new(vec![Arc::new(CommandX::CheckValid(query))]),
-                        ProverChoice::Nonlinear,
-                        true,
-                    ));
+                    // (an isolated proof inside the `by(nonlinear_arith)` proof)
+                    let isolates = isolates_in(&query, &state.isolates);
+                    state.commands.push(
+                        CommandsWithContextX::new(
+                            ctx.fun
+                                .as_ref()
+                                .expect("asserts are expected to be in a function")
+                                .current_fun
+                                .clone(),
+                            stm.span.clone(),
+                            "assert_nonlinear_by".to_string(),
+                            Arc::new(vec![Arc::new(CommandX::CheckValid(query))]),
+                            ProverChoice::Nonlinear,
+                            true,
+                        )
+                        .with_isolates(&isolates),
+                    );
                 }
                 _ => unreachable!("bitvector mode in wrong place"),
             }
@@ -3168,12 +3188,42 @@ pub(crate) fn body_stm_to_air(
 
     set_fuel(ctx, &mut local_shared, hidden);
 
-    let mut ens_exprs: Vec<(Span, Expr, Option<ProofNoteLabel>)> = Vec::new();
-    for ens in post_condition.ens_exps.iter() {
+    // `isolate(..)` on an `ensures` clause, or on the function for all its clauses: the
+    // checks of the clause are a part of the query of their own (`IsolateSpec`)
+    let fun_isolate = match (&ctx.fun, post_condition.kind) {
+        (Some(f), PostConditionKind::Ensures) => {
+            ctx.func_map.get(&f.current_fun).and_then(|f| f.x.attrs.isolate_ensures)
+        }
+        _ => None,
+    };
+    let mut ensures_isolates: Vec<crate::def::IsolatePart> = Vec::new();
+    let mut ens_exprs: Vec<(Span, Expr, Option<ProofNoteLabel>, Option<Ident>)> = Vec::new();
+    for (i, ens) in post_condition.ens_exps.iter().enumerate() {
         let expr_ctxt = &ExprCtxt::new_mode(ExprMode::Body);
         let note = sst_exp_get_proof_note(ens);
         let e = exp_to_expr(ctx, &ens, expr_ctxt)?;
-        ens_exprs.push((ens.span.clone(), e, note));
+        let clause_isolate = match post_condition.kind {
+            PostConditionKind::Ensures => crate::sst_util::sst_exp_get_isolate(ens),
+            _ => None,
+        };
+        let guard = match (clause_isolate, fun_isolate) {
+            (Some(spec), _) => {
+                Some((Arc::new(format!("{}{}", crate::def::ISOLATE_ENSURES, i)), spec))
+            }
+            (None, Some(spec)) => Some((Arc::new(crate::def::ISOLATE_ENSURES.to_string()), spec)),
+            (None, None) => None,
+        };
+        if let Some((guard, spec)) = &guard {
+            if !ensures_isolates.iter().any(|p| &p.guard == guard) {
+                local_shared.push(Arc::new(DeclX::Const(guard.clone(), bool_typ())));
+                ensures_isolates.push(crate::def::IsolatePart {
+                    guard: guard.clone(),
+                    rlimit: spec.rlimit,
+                    backend: spec.backend,
+                });
+            }
+        }
+        ens_exprs.push((ens.span.clone(), e, note, guard.map(|(g, _)| g)));
     }
 
     let unwind_air = match unwind {
@@ -3219,6 +3269,7 @@ pub(crate) fn body_stm_to_air(
                     }
                     _ => None,
                 })
+                .chain(ensures_isolates.into_iter())
                 .collect(),
         ),
     };

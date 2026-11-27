@@ -79,7 +79,7 @@ What this changes for verified code:
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |
 | Which proof obligation the solver is stuck on | `-V triage` | `fip` (1.100) | [`-V triage`](./reference-assert-by-tactic.md#finding-the-obligation-the-solver-is-stuck-on--v-triage) |
 | Tactic scripts, expanded into checked proof code | `assert(P) by(tactic) { split(); intro(); cases(b); unfold(f, k); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.md) |
-| A proof checked on its own, with its own rlimit or solver | `isolate()`, `isolate(rlimit = N, backend = cvc5)` in a `by(tactic)` script | `fip` (1.100) | [`isolate`](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate) |
+| A proof checked on its own, with its own rlimit or solver | `isolate()`, `isolate(rlimit = N, backend = cvc5)` in a `by(tactic)` script; `#![verifier::tactic(isolate(..))]` on an `ensures` clause, `#[verifier::tactic(isolate(..))]` on a function | `fip` (1.100) | [`isolate`](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate) |
 
 The new vstd items for these features are in `vstd::alloc_check` (marker traits such as
 `AllocFreeDrop` and `NoDeallocDrop`, and the operator markers such as `FipAdd` and `FipOrd`).

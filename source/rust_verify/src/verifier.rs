@@ -976,28 +976,33 @@ impl Verifier {
                     if self.expand_flag {
                         invalidity = true;
                     }
-                    // an isolated part of the query (`isolate(..)`) that exceeded its rlimit: report
-                    // it at its first assertion
+                    // an isolated part of the query (`isolate(..)`) that exceeded its rlimit:
+                    // report it at its goal (an isolated `ensures` clause also at its return)
                     let isolated: Option<Message> =
                         air_context.take_canceled_partition().map(|e| e.downcast().unwrap());
-                    let (mut msg, span) = match isolated.as_ref().and_then(|e| e.spans.first()) {
-                        Some(span) => (
-                            format!(
-                                "{}: resource limit (rlimit) exceeded in the proof isolated here",
-                                context.desc
-                            ),
-                            span.clone(),
+                    let mut msg = match &isolated {
+                        Some(_) => format!(
+                            "{}: resource limit (rlimit) exceeded in the proof isolated here",
+                            context.desc
                         ),
-                        None => (
-                            format!("{}: resource limit (rlimit) exceeded", context.desc),
-                            context.span.clone(),
-                        ),
+                        None => format!("{}: resource limit (rlimit) exceeded", context.desc),
                     };
                     if !self.args.profile && !self.args.profile_all && !self.args.capture_profiles {
                         msg.push_str("; consider rerunning with `--profile` for more details");
                     }
                     if let Some(level) = level {
-                        reporter.report(&message(level, msg, &span).to_any());
+                        let report = match isolated {
+                            Some(error) if error.spans.len() > 0 => Arc::new(MessageX {
+                                level,
+                                note: msg,
+                                spans: error.spans.clone(),
+                                labels: vec![],
+                                help: vec![],
+                                fancy_note: None,
+                            }),
+                            _ => message(level, msg, &context.span),
+                        };
+                        reporter.report(&report.to_any());
                     }
                     // need to report that we need to rerun from this function (into spinoff)
                     // so that we can run the profiler on an isolated file on the second pass
@@ -1879,8 +1884,9 @@ impl Verifier {
                             air::context::SmtSolver::Cvc5 => None,
                         };
                         // `isolate(rlimit = ..)` with a solver whose rlimit is fixed: warn once
-                        let mut isolate_rlimit_warned =
-                            !self.user_filter.as_ref().unwrap().includes_function(&function.x.name);
+                        // (a function that the user filter leaves out runs no query)
+                        let function_included =
+                            self.user_filter.as_ref().unwrap().includes_function(&function.x.name);
                         for cmds in commands_with_context_list.iter() {
                             if is_recommend && cmds.skip_recommends {
                                 continue;
@@ -1984,10 +1990,12 @@ impl Verifier {
                             // `#[verifier::nonlinear]` function). Not for the queries that only
                             // report (recommends, expand-errors, the profile rerun), which check
                             // the query as a whole.
-                            // An isolated proof with another solver (`isolate(backend = ..)`) is
-                            // not checked here, but in a context for its solver, below.
+                            // An isolated proof with another solver (`isolate(backend = ..)`), or
+                            // with an rlimit that this context cannot set (cvc5, once started), is
+                            // not checked here, but in a context of its own, below.
                             let mut isolates_elsewhere: Vec<usize> = Vec::new();
                             if cmds.isolates.len() > 0
+                                && function_included
                                 && matches!(
                                     cmds.prover_choice,
                                     vir::def::ProverChoice::DefaultProver
@@ -2002,30 +2010,16 @@ impl Verifier {
                                 for (i, part) in cmds.isolates.iter().enumerate() {
                                     let elsewhere = part
                                         .backend
-                                        .map_or(false, |b| isolate_solver(b) != self.args.solver);
+                                        .map_or(false, |b| isolate_solver(b) != self.args.solver)
+                                        || (part.rlimit.is_some() && !mutable);
                                     if elsewhere {
                                         isolates_elsewhere.push(i);
                                     }
                                     let rlimit = match part.rlimit {
-                                        _ if elsewhere => None,
-                                        Some(rlimit) if mutable => {
+                                        Some(rlimit) if !elsewhere => {
                                             Some(Self::rlimit_value(&query_air_context, rlimit))
                                         }
-                                        Some(_) => {
-                                            if !isolate_rlimit_warned {
-                                                isolate_rlimit_warned = true;
-                                                reporter.report(
-                                                    &warning(
-                                                        &function.span,
-                                                        "`isolate(rlimit = ..)` is not supported with your current solver; \
-                                                         the isolated proof is checked with the global `--rlimit`",
-                                                    )
-                                                    .to_any(),
-                                                );
-                                            }
-                                            None
-                                        }
-                                        None => None,
+                                        _ => None,
                                     };
                                     partitions.push(air::context::Partition {
                                         guard: part.guard.clone(),
@@ -2064,8 +2058,7 @@ impl Verifier {
                             let mut isolate_elsewhere_timed_out = false;
                             for &i in isolates_elsewhere.iter() {
                                 let part = &cmds.isolates[i];
-                                let backend = part.backend.expect("backend");
-                                let solver = isolate_solver(backend);
+                                let solver = part.backend.map_or(self.args.solver, isolate_solver);
                                 if solver == SmtSolver::Cvc5
                                     && !matches!(
                                         self.args.smt_encoding,
@@ -2117,13 +2110,9 @@ impl Verifier {
                                     })
                                     .collect();
                                 part_context.set_partitions(partitions, false);
-                                let prefix = match backend {
-                                    vir::ast::IsolateBackend::Z3 => {
-                                        "isolated proof, checked by Z3: "
-                                    }
-                                    vir::ast::IsolateBackend::Cvc5 => {
-                                        "isolated proof, checked by cvc5: "
-                                    }
+                                let prefix = match solver {
+                                    SmtSolver::Z3 => "isolated proof, checked by Z3: ",
+                                    SmtSolver::Cvc5 => "isolated proof, checked by cvc5: ",
                                 };
                                 let result = self.run_commands_queries(
                                     reporter,

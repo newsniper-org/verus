@@ -214,11 +214,35 @@ fn split_off_proof_note_attrs(attrs: Vec<Attribute>) -> (Vec<Attribute>, Vec<Att
         attrs.into_iter().partition(|attr| {
             path_matches_idents(&attr.path(), &["verifier", "proof_note"])
                 || path_matches_idents(&attr.path(), &["verifier", "custom_err"])
+                || path_matches_idents(&attr.path(), &["verifier", "tactic"])
         });
     for attr in &mut proof_note_attrs {
         attr.style = verus_syn::AttrStyle::Outer;
+        rewrite_tactic_attr(attr);
     }
     (proof_note_attrs, other_attrs)
+}
+
+/// `#[verifier::tactic(isolate(rlimit = N, ..))]`: rust_verify reads the options only in the form
+/// `rlimit(N)` (`tactic::rewrite_tactic_attr_args`)
+fn rewrite_tactic_attr(attr: &mut Attribute) {
+    if !path_matches_idents(&attr.path(), &["verifier", "tactic"]) {
+        return;
+    }
+    if let verus_syn::Meta::List(list) = &mut attr.meta {
+        match crate::tactic::rewrite_tactic_attr_args(list.tokens.clone()) {
+            Ok(tokens) => list.tokens = tokens,
+            Err(_err) => {
+                #[cfg(verus_keep_ghost)]
+                proc_macro::Diagnostic::spanned(
+                    _err.span().unwrap(),
+                    proc_macro::Level::Error,
+                    _err.to_string(),
+                )
+                .emit();
+            }
+        }
+    }
 }
 
 fn wrap_expr_with_attrs(expr: Expr, attrs: Vec<Attribute>) -> Expr {
@@ -4922,6 +4946,7 @@ impl VisitMut for Visitor {
     }
 
     fn visit_attribute_mut(&mut self, attr: &mut Attribute) {
+        rewrite_tactic_attr(attr);
         fn path_verifier(
             span: Span,
         ) -> Punctuated<verus_syn::PathSegment, verus_syn::token::PathSep> {

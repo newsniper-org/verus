@@ -123,6 +123,8 @@ const TRAIT_DEFAULT_PREFIX: &str = "default%";
 const TRAIT_DEFAULT_SEPARATOR: &str = "%%%";
 const DECREASE_AT_ENTRY: &str = "decrease%init";
 const ISOLATE_GUARD: &str = "isolate%guard%";
+/// The guard of the isolated checks of an `ensures` clause (with its index), or of all clauses
+pub const ISOLATE_ENSURES: &str = "isolate%ensures%";
 const TRAIT_SELF_TYPE_PARAM: &str = "Self%";
 const DUMMY_PARAM: &str = "no%param";
 

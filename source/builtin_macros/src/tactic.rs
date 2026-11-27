@@ -273,47 +273,75 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
         "compute" => return wrong_args("`compute()`"),
         "show" if n == 0 => StepKind::Show,
         "show" => return wrong_args("`show()`"),
-        "isolate" => {
-            let mut options: Vec<TokenStream> = Vec::new();
-            let (mut rlimit, mut backend) = (false, false);
-            for arg in args.iter() {
-                let expected = || {
-                    Error::new(
-                        arg.span(),
-                        "`isolate`: expected `isolate()`, with the options `rlimit = N` (a number or `infinity`) and `backend = z3` or `backend = cvc5`, each at most once",
-                    )
-                };
-                let Expr::Assign(assign) = arg else { return Err(expected()) };
-                let Expr::Path(key) = &*assign.left else { return Err(expected()) };
-                let value = &assign.right;
-                let value_ident = match &**value {
-                    Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
-                    _ => None,
-                };
-                match key.path.get_ident().map(|i| i.to_string()).as_deref() {
-                    Some("rlimit") if !rlimit => {
-                        let is_number = matches!(&**value, Expr::Lit(l)
-                            if matches!(l.lit, verus_syn::Lit::Int(_) | verus_syn::Lit::Float(_)));
-                        if !is_number && value_ident.as_deref() != Some("infinity") {
-                            return Err(expected());
-                        }
-                        rlimit = true;
-                        options.push(quote_spanned!(span => rlimit(#value)));
-                    }
-                    Some("backend")
-                        if !backend && matches!(value_ident.as_deref(), Some("z3" | "cvc5")) =>
-                    {
-                        backend = true;
-                        options.push(quote_spanned!(span => backend(#value)));
-                    }
-                    _ => return Err(expected()),
-                }
-            }
-            StepKind::Isolate(quote_spanned!(span => #(#options),*))
-        }
+        "isolate" => StepKind::Isolate(isolate_options(span, &args)?),
         _ => unreachable!(),
     };
     Ok(Step { span, kind })
+}
+
+/// The options of `isolate(..)`, `rlimit = N` and `backend = z3|cvc5` (or, in an attribute that
+/// was rewritten already, `rlimit(N)` and `backend(..)`), as the arguments of
+/// `#[verus::internal(isolate(..))]` or `#[verifier::tactic(isolate(..))]`: `rlimit(N), ..`
+fn isolate_options(span: Span, args: &[Expr]) -> Result<TokenStream> {
+    let mut options: Vec<TokenStream> = Vec::new();
+    let (mut rlimit, mut backend) = (false, false);
+    for arg in args.iter() {
+        let expected = || {
+            Error::new(
+                arg.span(),
+                "`isolate`: expected `isolate()`, with the options `rlimit = N` (a number or `infinity`) and `backend = z3` or `backend = cvc5`, each at most once",
+            )
+        };
+        let (key, value): (&Expr, &Expr) = match arg {
+            Expr::Assign(assign) => (&assign.left, &assign.right),
+            Expr::Call(call) if call.args.len() == 1 => (&call.func, &call.args[0]),
+            _ => return Err(expected()),
+        };
+        let Expr::Path(key) = key else { return Err(expected()) };
+        let value_ident = match value {
+            Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+            _ => None,
+        };
+        match key.path.get_ident().map(|i| i.to_string()).as_deref() {
+            Some("rlimit") if !rlimit => {
+                let is_number = matches!(value, Expr::Lit(l)
+                    if matches!(l.lit, verus_syn::Lit::Int(_) | verus_syn::Lit::Float(_)));
+                if !is_number && value_ident.as_deref() != Some("infinity") {
+                    return Err(expected());
+                }
+                rlimit = true;
+                options.push(quote_spanned!(span => rlimit(#value)));
+            }
+            Some("backend")
+                if !backend && matches!(value_ident.as_deref(), Some("z3" | "cvc5")) =>
+            {
+                backend = true;
+                options.push(quote_spanned!(span => backend(#value)));
+            }
+            _ => return Err(expected()),
+        }
+    }
+    Ok(quote_spanned!(span => #(#options),*))
+}
+
+/// `#[verifier::tactic(isolate(rlimit = N, backend = b))]` on an `ensures` clause or a function:
+/// the arguments in the form that rust_verify reads, `isolate(rlimit(N), backend(b))`
+pub(crate) fn rewrite_tactic_attr_args(tokens: TokenStream) -> Result<TokenStream> {
+    let span = tokens.clone().into_iter().next().map_or(Span::call_site(), |t| t.span());
+    let expected = || {
+        Error::new(
+            span,
+            "expected `#[verifier::tactic(isolate(..))]` (on an `ensures` clause or a function)",
+        )
+    };
+    let call: Expr = verus_syn::parse2(tokens).map_err(|_| expected())?;
+    let Expr::Call(call) = call else { return Err(expected()) };
+    if step_name(&call.func).map_or(true, |name| name != "isolate") {
+        return Err(expected());
+    }
+    let args: Vec<Expr> = call.args.into_iter().collect();
+    let options = isolate_options(span, &args)?;
+    Ok(quote_spanned!(span => isolate(#options)))
 }
 
 /// The goal without parentheses, or a block `{ e }` around it (as `&&&` lists need).

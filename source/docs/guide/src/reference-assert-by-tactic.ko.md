@@ -160,14 +160,23 @@ proof fn p() {
   - 별도 solver 프로세스에서 같은 질의로 검사합니다.
   - 두 solver가 각자 맡은 부분을 모두 valid로 판정해야만 질의가 검증된 것으로 칩니다.
   - 부분의 `rlimit`은 그 solver에 적용됩니다.
+  - 실행 solver가 질의의 나머지를 검사한 뒤에, 그 결과와 상관없이 검사됩니다. **순서**와 **한 부분이
+    실패할 때** 항목은 실행 solver가 검사하는 부분들 사이에서만 성립합니다. 양쪽의 오류가 모두 보고됩니다.
   - cvc5는 자기용 인코딩으로 된 질의만 읽습니다. 그래서 `backend = cvc5`는 `-V cvc5-smtlib`(cvc5도 읽을
     수 있는 질의를 쓰는 Z3)나 `-V cvc5`가 있어야 하고, 없으면 오류입니다.
-- **실행 solver가 cvc5일 때:** 실행의 cvc5가 검사하는 부분은 rlimit을 따로 정할 수 없습니다
-  (`#[verifier::rlimit]`도 마찬가지입니다). 경고와 함께 전역 `--rlimit`이 적용됩니다. 자기 rlimit이 필요한
-  부분에는 `backend = cvc5`를 쓰세요.
+- **실행 solver가 cvc5일 때:** 실행의 cvc5는 한번 시작하면 rlimit을 바꿀 수 없습니다(`#[verifier::rlimit]`도
+  적용되지 않습니다). 그래서 `rlimit`이 있는 부분은 `backend = cvc5`처럼 별도 cvc5 프로세스에서
+  검사됩니다.
+- **`ensures` 절:** `ensures` 절 맨 앞에 `#![verifier::tactic(isolate(..))]`를 쓰면, 그 절의 검사가
+  (모든 return에서) 같은 옵션을 가진 독립된 한 부분이 됩니다. 함수에 `#[verifier::tactic(isolate(..))]`를
+  붙이면 그 함수의 모든 `ensures` 절이 함께 한 부분이 됩니다. 단, 자기 속성이 있는 절은 따로 검사됩니다.
+  trait 메서드 선언에는 붙일 수 없으므로, 구현 쪽에 붙이세요.
+  자세한 것은 [속성 설명](./reference-attributes.md#verifiertacticisolate-and-verifiertacticisolate)(영어)을
+  보세요.
 - **부분으로 나누지 않는 질의:** 보고만 하는 질의는 통째로 검사됩니다. recommends, `--expand-errors`,
-  `--profile`의 재실행, `-V triage`가 여기에 해당합니다. `by(nonlinear_arith)`나 `by(bit_vector)`
-  assertion은 이미 그 자체로 하나의 질의이므로, 나눌 부분이 없습니다.
+  `--profile`의 재실행, `-V triage`가 여기에 해당합니다. `by(bit_vector)` assertion과
+  `#[verifier::bit_vector]`·`#[verifier::integer_ring]` 함수는 나눌 수 없는 단일 질의이므로, 그 안의
+  `isolate`는 효과가 없습니다.
 
 ## solver가 막힌 obligation 찾기: `-V triage`
 

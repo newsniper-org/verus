@@ -932,8 +932,12 @@ fn smt_check_partitions(
         None => crate::context::UsageInfo::None,
     };
     if let Some(obs) = &context.query_result_observer {
-        let assert_ids: Vec<Option<crate::ast::AssertId>> =
-            infos.iter().map(|info| info.assert_id.clone()).collect();
+        // (only the assertions checked here)
+        let assert_ids: Vec<Option<crate::ast::AssertId>> = infos
+            .iter()
+            .filter(|info| parts.contains(&info.partition))
+            .map(|info| info.assert_id.clone())
+            .collect();
         obs.borrow_mut().on_check_valid_result(
             &mut crate::query_result_observer::CheckValidResult::Valid {
                 assert_ids: &assert_ids,

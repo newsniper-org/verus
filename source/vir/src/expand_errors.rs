@@ -674,6 +674,10 @@ fn expand_exp_rec(
         ExpX::WithTriggers(_, e) | ExpX::UnaryOpr(UnaryOpr::Box(_) | UnaryOpr::Unbox(_), e) => {
             expand_exp_rec(ctx, ectx, state, e, did_split_yet, negate)
         }
+        // a label that only carries `#[verifier::tactic(isolate(..))]` (no text)
+        ExpX::UnaryOpr(UnaryOpr::ProofNote(label), e) if label.text.is_empty() => {
+            expand_exp_rec(ctx, ectx, state, e, did_split_yet, negate)
+        }
         _ => leaf(state, CanExpandFurther::No(None)),
     }
 }

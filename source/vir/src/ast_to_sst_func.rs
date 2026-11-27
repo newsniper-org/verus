@@ -1354,6 +1354,7 @@ pub fn func_def_to_sst(
         let ParamX { name: rname, typ: rtyp, .. } = &function.x.inner_ret.x;
         let note = |text: &str, e: Exp| {
             let label = crate::ast::ProofNoteLabel {
+                isolate: None,
                 text: Arc::new(text.to_string()),
                 is_custom_err: true,
             };

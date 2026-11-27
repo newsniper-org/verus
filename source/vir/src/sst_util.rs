@@ -804,11 +804,25 @@ impl ExpX {
     }
 }
 
+/// The `proof_note` of an expression; not a label that carries only `isolate`
+/// (`sst_exp_get_isolate`), which has no text
 pub(crate) fn sst_exp_get_proof_note(exp: &Exp) -> Option<ProofNoteLabel> {
     match &exp.x {
         ExpX::UnaryOpr(UnaryOpr::Box(_), e) => sst_exp_get_proof_note(e),
         ExpX::UnaryOpr(UnaryOpr::Unbox(_), e) => sst_exp_get_proof_note(e),
-        ExpX::UnaryOpr(UnaryOpr::ProofNote(label), _) => Some(label.clone()),
+        ExpX::UnaryOpr(UnaryOpr::ProofNote(label), _) if !label.text.is_empty() => {
+            Some(label.clone())
+        }
+        _ => None,
+    }
+}
+
+/// `#[verifier::tactic(isolate(..))]` on an expression (an `ensures` clause)
+pub(crate) fn sst_exp_get_isolate(exp: &Exp) -> Option<crate::ast::IsolateSpec> {
+    match &exp.x {
+        ExpX::UnaryOpr(UnaryOpr::Box(_), e) => sst_exp_get_isolate(e),
+        ExpX::UnaryOpr(UnaryOpr::Unbox(_), e) => sst_exp_get_isolate(e),
+        ExpX::UnaryOpr(UnaryOpr::ProofNote(label), _) => label.isolate,
         _ => None,
     }
 }

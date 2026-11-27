@@ -613,7 +613,64 @@ test_verify_one_file_with_options! {
             assert(f(x) > x) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); }
             assert(f(x) > x + 1); // FAILS
         }
-    } => Err(err) => assert_fails(err, 2)
+        // and the attribute form
+        proof fn ens_ok(x: int)
+            ensures
+                #![verifier::tactic(isolate(backend = cvc5))]
+                f(x) > x,
+        {
+            lemma_f(x);
+        }
+        proof fn ens_bad(x: int)
+            ensures
+                #![verifier::tactic(isolate(backend = cvc5))]
+                f(x) > x + 1, // FAILS
+        {
+            lemma_f(x);
+        }
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file_with_options! {
+    // the count of verified functions: one whose part for cvc5 fails is not verified
+    #[test] isolate_backend_count ["-V cvc5-smtlib", "--output-json"] => verus_code! {
+        spec fn f(x: int) -> int { x + 1 }
+        proof fn lemma_f(x: int) ensures f(x) > x {}
+        proof fn ok(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); }
+        }
+        proof fn bad(x: int) {
+            assert(f(x) > x + 1) by(tactic) { isolate(backend = cvc5); apply(lemma_f(x)); } // FAILS
+        }
+    } => Err(err) => {
+        let json = err.json_output.as_ref().unwrap();
+        let results = &json["verification-results"];
+        // lemma_f and ok
+        assert_eq!(results["verified"], 2);
+        assert_eq!(results["errors"], 1);
+        assert_one_fails(err);
+    }
+}
+
+test_verify_one_file_with_options! {
+    // a cvc5 run cannot set the rlimit of its own context once it has started: a part with an
+    // rlimit is checked in a cvc5 context of its own; `backend = z3` goes to Z3
+    #[test] isolate_cvc5_run ["cvc5"] => SUM.to_string() + verus_code_str! {
+        spec fn f(x: int) -> int { x + 1 }
+        proof fn lemma_f(x: int) ensures f(x) > x {}
+        proof fn ok(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(backend = z3); apply(lemma_f(x)); }
+            assert(f(x) > x) by(tactic) { isolate(rlimit = 5); apply(lemma_f(x)); }
+        }
+        proof fn tiny() {
+            assert(sum(12) == 78) by(tactic) { isolate(rlimit = 0.0001); unfold(sum, 13); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.starts_with("isolated proof, checked by cvc5: "));
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+        assert!(err.warnings.is_empty());
+    }
 }
 
 test_verify_one_file_with_options! {
@@ -658,4 +715,143 @@ test_verify_one_file! {
             assert(x == x) by(tactic) { isolate(backend = yices); }
         }
     } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()`, with the options")
+}
+
+// `#[verifier::tactic(isolate(..))]` on an `ensures` clause (its checks, at every return, are a
+// part of their own) or on a function (all its `ensures` checks)
+
+test_verify_one_file! {
+    #[test] isolate_ensures_clause SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        proof fn clause(b: bool)
+            ensures
+                #![verifier::tactic(isolate(rlimit = 10))]
+                sum(12) == 78,
+        {
+            if b { reveal_with_fuel(sum, 13); return; }
+            reveal_with_fuel(sum, 13);
+        }
+        #[verifier::rlimit(0.02)]
+        #[verifier::tactic(isolate(rlimit = 10))]
+        proof fn whole_fn()
+            ensures sum(12) == 78,
+        {
+            reveal_with_fuel(sum, 13);
+        }
+        #[verifier::rlimit(0.02)]
+        proof fn not_isolated() // FAILS
+            ensures sum(12) == 78,
+        {
+            reveal_with_fuel(sum, 13);
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("resource limit (rlimit) exceeded"));
+        assert!(!err.errors[0].message.contains("isolated"));
+    }
+}
+
+test_verify_one_file! {
+    // an isolated clause that does not hold fails, and so does one that is not isolated
+    #[test] isolate_ensures_fails DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int)
+            ensures
+                #![verifier::tactic(isolate())]
+                f(x) > x + 1, // FAILS
+                f(x) > x,
+        {
+            lemma_f(x);
+        }
+        proof fn u(x: int)
+            ensures
+                #![verifier::tactic(isolate())]
+                f(x) > x,
+                f(x) > x + 1, // FAILS
+        {
+            lemma_f(x);
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file! {
+    #[test] isolate_ensures_rlimit_exceeded SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(10)]
+        proof fn t()
+            ensures
+                #![verifier::tactic(isolate(rlimit = 0.02))]
+                sum(12) == 78,
+        {
+            reveal_with_fuel(sum, 13);
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+        assert!(err.errors[0].spans.iter().any(|s| s.text.iter().any(|t| t.text.contains("sum(12) == 78"))));
+    }
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_attr_misplaced DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(#[verifier::tactic(isolate())] (x == x));
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is only allowed on an `ensures` clause or a function")
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_attr_option DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int)
+            ensures
+                #![verifier::tactic(isolate(time = 3))]
+                x == x,
+        {
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("`isolate`: expected `isolate()`, with the options")))
+}
+
+test_verify_one_file! {
+    // a clause with its own attribute is a part of its own; the function's covers the others
+    #[test] isolate_ensures_fn_and_clause SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        #[verifier::tactic(isolate(rlimit = 10))]
+        proof fn t()
+            ensures
+                sum(12) == 78,
+                #![verifier::tactic(isolate(rlimit = 0.001))]
+                sum(12) == 78,
+        {
+            reveal_with_fuel(sum, 13);
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+    }
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_attr_returns DEFS.to_string() + verus_code_str! {
+        fn r(x: u8) -> (y: u8)
+            returns
+                #![verifier::tactic(isolate())]
+                x,
+        {
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is only allowed on an `ensures` clause or a function")
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_attr_trait_decl DEFS.to_string() + verus_code_str! {
+        trait T {
+            #[verifier::tactic(isolate(rlimit = 5))]
+            proof fn p() ensures true;
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not allowed on a trait method declaration")
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_attr_struct DEFS.to_string() + verus_code_str! {
+        #[verifier::tactic(isolate())]
+        struct S { x: u8 }
+    } => Err(err) => assert_vir_error_msg(err, "is only allowed on an `ensures` clause or a function")
 }

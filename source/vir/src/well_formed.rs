@@ -1109,6 +1109,49 @@ pub fn check_function(
     (res, emit.deferred_errors, emit.diags)
 }
 
+/// `#[verifier::tactic(isolate(..))]` on an expression is allowed only on an `ensures` clause
+fn check_isolate_attrs(function: &Function) -> Result<(), VirErr> {
+    let check = |e: &Expr| {
+        crate::ast_visitor::expr_visitor_check(e, &mut |_, e: &Expr| match &e.x {
+            ExprX::UnaryOpr(UnaryOpr::ProofNote(label), _) if label.isolate.is_some() => {
+                Err(error(
+                    &e.span,
+                    "`#[verifier::tactic(isolate(..))]` is only allowed on an `ensures` clause or a function",
+                ))
+            }
+            _ => Ok(()),
+        })
+    };
+    let mut isolated = function.x.attrs.isolate_ensures.is_some();
+    for ens in function.x.ensure.0.iter() {
+        match &ens.x {
+            ExprX::UnaryOpr(UnaryOpr::ProofNote(label), inner) if label.isolate.is_some() => {
+                isolated = true;
+                check(inner)?
+            }
+            _ => check(ens)?,
+        }
+    }
+    if isolated && matches!(function.x.kind, FunctionKind::TraitMethodDecl { .. }) {
+        // the checks are an implementation's, and its own attribute says how to isolate them
+        return Err(error(
+            &function.span,
+            "`#[verifier::tactic(isolate(..))]` is not allowed on a trait method declaration (put it on the implementations)",
+        ));
+    }
+    let exprs = function.x.require.iter().chain(function.x.ensure.1.iter());
+    let exprs = exprs.chain(function.x.decrease.iter()).chain(function.x.body.iter());
+    let exprs = exprs.chain(function.x.returns.iter()).chain(function.x.decrease_when.iter());
+    let exprs = exprs.chain(function.x.fndef_axioms.iter().flat_map(|es| es.iter()));
+    let exprs = exprs.chain(function.x.atomic_update.iter()).chain(function.x.allocates.iter());
+    let exprs = exprs.chain(function.x.allocates_cond.iter());
+    let exprs = exprs.chain(function.x.deallocations.iter()).chain(function.x.deallocates.iter());
+    for e in exprs {
+        check(e)?;
+    }
+    Ok(())
+}
+
 fn check_function_inner(
     krate: &Krate,
     funs: Arc<HashMap<Fun, FunctionStub>>,
@@ -1121,6 +1164,8 @@ fn check_function_inner(
     _no_verify: bool,
 ) -> Result<(), VirErr> {
     let ctxt = Ctxt { funs, lookup, krate, no_cheating };
+
+    check_isolate_attrs(function)?;
 
     // TODO remove once `uninterp` is enforced for uninterpreted functions
     let Some(warn_config) = warning_ctx.fun_warn_configs.get(&function.x.name) else {

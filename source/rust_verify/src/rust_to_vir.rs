@@ -78,6 +78,12 @@ fn check_item<'tcx>(
         no_erasure_needed.push(def_id);
         return Ok(());
     }
+    if vattrs.tactic_isolate.is_some() && !matches!(&item.kind, ItemKind::Fn { .. }) {
+        return err_span_vec(
+            item.span,
+            "`#[verifier::tactic(isolate(..))]` is only allowed on an `ensures` clause or a function",
+        );
+    }
     if vattrs.external_fn_specification && !matches!(&item.kind, ItemKind::Fn { .. }) {
         return err_span_vec(item.span, "`external_fn_specification` attribute not supported here");
     }

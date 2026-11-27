@@ -405,6 +405,8 @@ pub(crate) enum Attr {
     // the block of an `assert ... by` proof that `isolate(..)` in a `by(tactic)` script makes a
     // partition of its own (`#[verus::internal(isolate(..))]`)
     Isolate(vir::ast::IsolateSpec),
+    // `#[verifier::tactic(isolate(..))]` on an `ensures` clause or a function
+    TacticIsolate(Span, vir::ast::IsolateSpec),
     // -V alloc-check: fully in-place (FP²): never deallocates (on a normal return); `strict`
     // also requires constant stack space
     Fip(bool),
@@ -528,6 +530,17 @@ pub(crate) fn parse_attrs(
                         is_custom_err: true,
                     })
                 }
+                AttrTree::Fun(span, name, Some(args)) if name == "tactic" => match &**args {
+                    [AttrTree::Fun(span, name, args)] if name == "isolate" => {
+                        v.push(Attr::TacticIsolate(*span, get_isolate_args(*span, args)?))
+                    }
+                    _ => {
+                        return err_span(
+                            *span,
+                            "expected `#[verifier::tactic(isolate(..))]` (on an `ensures` clause or a function)",
+                        );
+                    }
+                },
                 AttrTree::Fun(_, name, None) if name == "trigger" => v.push(Attr::Trigger(None)),
                 AttrTree::Fun(span, name, Some(args)) if name == "trigger" => {
                     let mut groups: Vec<u64> = Vec::new();
@@ -1280,19 +1293,36 @@ pub(crate) fn has_auto_loop_ensures_attr(attrs: &[Attribute]) -> bool {
     false
 }
 
+/// The `proof_note` (or `custom_err`) of an expression, and `#[verifier::tactic(isolate(..))]`
+/// (allowed only on an `ensures` clause, vir's well_formed.rs): the text (empty if there is
+/// only the latter), whether it is a custom error, and the isolate options
 pub(crate) fn get_proof_note_annotation(
     attrs: &[Attribute],
-) -> Result<Option<(String, bool)>, VirErr> {
+) -> Result<Option<(String, bool, Option<vir::ast::IsolateSpec>)>, VirErr> {
     let mut label = None;
+    let mut isolate = None;
     for attr in parse_attrs(attrs, None)? {
-        if let Attr::ProofNote { span, text, is_custom_err } = attr {
-            if label.is_some() {
-                return err_span(span, "at most one `proof_note` attribute is allowed");
+        match attr {
+            Attr::ProofNote { span, text, is_custom_err } => {
+                if label.is_some() {
+                    return err_span(span, "at most one `proof_note` attribute is allowed");
+                }
+                label = Some((text, is_custom_err));
             }
-            label = Some((text, is_custom_err));
+            Attr::TacticIsolate(span, spec) => {
+                if isolate.is_some() {
+                    return err_span(span, "at most one `#[verifier::tactic(..)]` is allowed");
+                }
+                isolate = Some(spec);
+            }
+            _ => {}
         }
     }
-    Ok(label)
+    Ok(match (label, isolate) {
+        (None, None) => None,
+        (Some((text, is_custom_err)), isolate) => Some((text, is_custom_err, isolate)),
+        (None, isolate) => Some((String::new(), false, isolate)),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1391,6 +1421,8 @@ pub(crate) struct VerifierAttrs {
     pub(crate) tactic: bool,
     /// the block of an isolated `assert ... by` proof
     pub(crate) isolate: Option<vir::ast::IsolateSpec>,
+    /// `#[verifier::tactic(isolate(..))]` (on a function: its `ensures` checks)
+    pub(crate) tactic_isolate: Option<vir::ast::IsolateSpec>,
     /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
     pub(crate) fip: Option<bool>,
     pub(crate) externals_available_without_declaration: Option<bool>,
@@ -1598,6 +1630,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
         trusted_call: false,
         tactic: false,
         isolate: None,
+        tactic_isolate: None,
         fip: None,
         externals_available_without_declaration: None,
         unerased_proxy: false,
@@ -1689,6 +1722,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
             Attr::TrustedCall => vs.trusted_call = true,
             Attr::Tactic => vs.tactic = true,
             Attr::Isolate(spec) => vs.isolate = Some(spec),
+            Attr::TacticIsolate(_, spec) => vs.tactic_isolate = Some(spec),
             Attr::Fip(strict) => {
                 // (rust_verify's MIR checks and the verifier must agree on the kind)
                 if vs.fip.is_some() {

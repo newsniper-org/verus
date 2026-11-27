@@ -609,10 +609,10 @@ pub(crate) fn expr_to_vir<'tcx>(
         vir_expr = vir_expr.new_x(ExprX::Unary(UnaryOp::Trigger(group), vir_expr.clone()));
         vir_expr_or_place = ExprOrPlace::Expr(vir_expr);
     }
-    if let Some((label, is_custom_err)) = get_proof_note_annotation(attrs)? {
+    if let Some((label, is_custom_err, isolate)) = get_proof_note_annotation(attrs)? {
         let mut vir_expr = vir_expr_or_place.to_spec_expr(bctx);
         vir_expr = vir_expr.new_x(ExprX::UnaryOpr(
-            UnaryOpr::ProofNote(ProofNoteLabel { text: Arc::new(label), is_custom_err }),
+            UnaryOpr::ProofNote(ProofNoteLabel { text: Arc::new(label), is_custom_err, isolate }),
             vir_expr.clone(),
         ));
         vir_expr_or_place = ExprOrPlace::Expr(vir_expr);

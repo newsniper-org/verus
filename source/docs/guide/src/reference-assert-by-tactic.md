@@ -160,15 +160,24 @@ For why the second holds, see `smt_check_partitions` in `air/src/smt_verify.rs`.
   - It runs in a solver process of its own, with the same query.
   - The query counts as verified only if both solvers find their parts valid.
   - The part's `rlimit` applies to its solver.
+  - It is checked after the run's solver has checked the rest of the query, whatever that
+    found; **Order** and **When a part fails** hold among the parts that the run's solver
+    checks. Errors of both are reported.
   - cvc5 reads the queries only in the encoding for it. So `backend = cvc5` needs
     `-V cvc5-smtlib` (Z3, with queries that cvc5 also reads) or `-V cvc5`; otherwise it is an
     error.
-- **cvc5 as the run's solver.** The rlimit of a part checked by the run's cvc5 cannot be set
-  (nor can `#[verifier::rlimit]`); the global `--rlimit` applies, with a warning. Use
-  `backend = cvc5` for a part that needs its own rlimit.
+- **cvc5 as the run's solver.** The run's cvc5 cannot change its rlimit once it has started (nor
+  can `#[verifier::rlimit]` apply). So a part with an `rlimit` is checked by a cvc5 process of its
+  own, as for `backend = cvc5`.
+- **`ensures` clauses.** `#![verifier::tactic(isolate(..))]` at the start of an `ensures` clause
+  makes the clause's checks, at every return, a part of their own, with the same options. On a
+  function, `#[verifier::tactic(isolate(..))]` does this for all its `ensures` clauses together
+  (not on a trait method declaration: put it on the implementations).
+  See [the attribute](./reference-attributes.md#verifiertacticisolate-and-verifiertacticisolate).
 - **Not checked in parts.** Queries that only report are checked as a whole: recommends,
-  `--expand-errors`, the `--profile` rerun and `-V triage`. A `by(nonlinear_arith)` or
-  `by(bit_vector)` assertion is a query of its own already, with no parts.
+  `--expand-errors`, the `--profile` rerun and `-V triage`. A `by(bit_vector)` assertion, and a
+  `#[verifier::bit_vector]` or `#[verifier::integer_ring]` function, is a single query with no
+  parts (an `isolate` there has no effect).
 
 ## Finding the obligation the solver is stuck on: `-V triage`
 

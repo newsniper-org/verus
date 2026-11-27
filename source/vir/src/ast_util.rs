@@ -1023,7 +1023,10 @@ pub fn wrap_in_trigger(expr: &Expr) -> Expr {
 pub(crate) fn ast_expr_get_proof_note(expr: &Expr) -> Option<ProofNoteLabel> {
     match &expr.x {
         // NOTE: `UnaryOpr::Box` and `Unbox` not relevant; only introduced later in `ast_to_sst`.
-        ExprX::UnaryOpr(UnaryOpr::ProofNote(label), _) => Some(label.clone()),
+        // (not a label that carries only `isolate`, which has no text)
+        ExprX::UnaryOpr(UnaryOpr::ProofNote(label), _) if !label.text.is_empty() => {
+            Some(label.clone())
+        }
         _ => None,
     }
 }
