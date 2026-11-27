@@ -1161,3 +1161,30 @@ test_verify_one_file_with_options! {
         }
     } => Err(err) => assert!(err.errors[0].message.contains("expected `induct(n)`"))
 }
+
+test_verify_one_file! {
+    // inside a script (in the proof of an `assert .. by`), the mode checker allows no
+    // assignment: the copies that `cases` makes cannot move a tracked value twice
+    #[test] cases_no_tracked_assignment verus_code! {
+        proof fn dup<T>(tracked t: T, tracked u: T) -> (tracked r: (T, T)) {
+            let tracked mut a = u;
+            assert(true) by(tactic) { cases(true); a = t; }
+            (a, t)
+        }
+    } => Err(err) => assert_vir_error_msg(err, "assignment is not allowed in `assert ... by` statement")
+}
+
+test_verify_one_file! {
+    // `cases(e)` on a variable that `intro()` bound (inside the closure of an `assert forall`)
+    #[test] cases_after_intro ENUM.to_string() + verus_code_str! {
+        proof fn t() {
+            assert(forall|e: E| f(e) > 0) by(tactic) { intro(); cases(e); }
+        }
+        proof fn u() {
+            assert(forall|e: E| f(e) > 1) by(tactic) { intro(); cases(e); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].rendered.contains("`e` is `E::A`"));
+    }
+}
