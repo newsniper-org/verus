@@ -18,7 +18,8 @@ Each step expands into ordinary proof code before the rest of `verus!` sees it: 
 calls. That code is then checked like any other proof, and the block still ends with the
 assertion of the goal. **A step changes how the goal is proved, never what is proved**: a
 wrong step makes the proof fail, it cannot make a false assertion pass. The expansion is not
-part of what you have to trust.
+part of what you have to trust. (`isolate(..)` adds one small trusted check; see
+[below](#checking-a-proof-on-its-own-isolate).)
 
 ### Syntax
 
@@ -55,6 +56,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `smt(nonlinear_arith, R, ..)`, `smt(bit_vector, R, ..)` | any | `assert(G) by(nonlinear_arith) requires R, ..;` (or `bit_vector`) |
 | `compute()` | any | `assert(G) by(compute);` |
 | `show()` | any | nothing; a note with the goal and the facts the script added |
+| `isolate()`, `isolate(rlimit = N)` | any | `assert(G) by { .. }`, checked as a part of the query of its own ([below](#checking-a-proof-on-its-own-isolate)) |
 
 The `..` in a step's expansion is where the rest of the script goes.
 - **Rest of the script.** After `split()` or `cases(b)`, it applies to each part. After
@@ -117,6 +119,47 @@ time, so:
   not listed;
 - nothing it prints has been checked yet;
 - it prints even when the proof later fails, and also when verification passes.
+
+### Checking a proof on its own: `isolate`
+
+`isolate()` makes the rest of the script (the proof of the current goal, and the assertion of
+the goal at its end) a part of the function's query of its own. With `isolate(rlimit = N)`, that
+part gets its own rlimit, in the units of `#[verifier::rlimit(N)]` (`infinity` for none).
+Everything else in the function is checked with the function's rlimit.
+
+```rust
+#[verifier::rlimit(1)]
+proof fn p() {
+    assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+    // .. the rest of the proof, checked with rlimit 1
+}
+```
+
+The query is checked once for each part, with the assertions of the other parts disabled, and it
+counts as verified only if every part is. The assertions in each part are those of the same
+query, with the same facts before them. Disabling the assertions of the other parts only leaves
+out what those parts check, not what they assume. This check is the one thing `by(tactic)` adds
+to what has to be trusted:
+- every assertion is in exactly one part;
+- a query is valid exactly when each part is.
+
+For why the second holds, see `smt_check_partitions` in `air/src/smt_verify.rs`.
+
+- **Several parts.** `isolate` may be used more than once, in parts of a `split`, and in an
+  isolated proof (each assertion goes to the innermost one).
+- **Inside a loop body.** There, the part belongs to the loop body's query. This also works in
+  the body of a `#[verifier::nonlinear]` function.
+- **Order.** The isolated proofs are checked first, and the rest of the function last, wherever
+  it is in the source.
+- **When a part fails.** The parts after it are not checked, and a note says so. So an error in
+  the rest of the function, even one before the isolated proof, is reported only once the
+  isolated proofs pass.
+- **When a part exceeds its rlimit.** The error points at the isolated goal.
+- **cvc5.** The rlimit of a part cannot be set (nor can `#[verifier::rlimit]`); the global
+  `--rlimit` applies, with a warning.
+- **Not checked in parts.** Queries that only report are checked as a whole: recommends,
+  `--expand-errors`, the `--profile` rerun and `-V triage`. A `by(nonlinear_arith)` or
+  `by(bit_vector)` assertion is a query of its own already, with no parts.
 
 ## Finding the obligation the solver is stuck on: `-V triage`
 

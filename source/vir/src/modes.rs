@@ -2683,7 +2683,7 @@ fn check_expr(
             check_expr_has_mode(ctxt, record, &mut typing, Mode::Spec, e, Mode::Spec, outer_proph)?;
             Ok((outer_mode, Proph::No))
         }
-        ExprX::AssertBy { vars, require, ensure, proof } => {
+        ExprX::AssertBy { vars, require, ensure, proof, isolate: _ } => {
             if ctxt.check_ghost_blocks && typing.block_ghostness == Ghost::Exec {
                 return Err(error(&expr.span, "cannot use `assert ... by` in exec mode")
                     .help("use a `proof` block"));

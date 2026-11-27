@@ -79,6 +79,7 @@ What this changes for verified code:
 | Calls whose safety cannot be specified | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) |
 | Which proof obligation the solver is stuck on | `-V triage` | `fip` (1.100) | [`-V triage`](./reference-assert-by-tactic.md#finding-the-obligation-the-solver-is-stuck-on--v-triage) |
 | Tactic scripts, expanded into checked proof code | `assert(P) by(tactic) { split(); intro(); cases(b); unfold(f, k); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.md) |
+| A proof checked on its own, with its own rlimit | `isolate()`, `isolate(rlimit = N)` in a `by(tactic)` script | `fip` (1.100) | [`isolate`](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate) |
 
 The new vstd items for these features are in `vstd::alloc_check` (marker traits such as
 `AllocFreeDrop` and `NoDeallocDrop`, and the operator markers such as `FipAdd` and `FipOrd`).
@@ -128,8 +129,11 @@ The new checks run only when their option is given (`-V alloc-check`, `-V alloc-
 
 ## What is not changed
 
-* **The SMT side.** `air` (the encoding into SMT queries) is unchanged, and so is the solver: Z3,
-  at the version that upstream pins.
+* **The SMT side.** The solver is unchanged: Z3, at the version that upstream pins. `air` (the
+  encoding into SMT queries) encodes queries as upstream does. It adds two things:
+  - `-V triage` runs its diagnostics in a solver process of its own;
+  - `isolate(..)` checks a query in parts. This check is the one addition to what has to be
+    trusted ([assert ... by(tactic)](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate)).
 * **Command-line options.** No upstream option is removed or changes its meaning. The fork only
   adds options.
 

@@ -39,8 +39,10 @@ use std::convert::TryFrom;
 use verus_syn::spanned::Spanned;
 use verus_syn::{Assert, BinOp, Block, Error, Expr, ExprCall, ExprMatch, Pat, Stmt, UnOp};
 
-const STEP_NAMES: &[&str] =
-    &["have", "split", "intro", "cases", "unfold", "apply", "inst", "smt", "compute", "show"];
+const STEP_NAMES: &[&str] = &[
+    "have", "split", "intro", "cases", "unfold", "apply", "inst", "smt", "compute", "show",
+    "isolate",
+];
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -66,6 +68,8 @@ enum StepKind {
     Smt(Option<verus_syn::Ident>, Vec<Expr>),
     Compute,
     Show,
+    /// the options of `#[verus::internal(isolate(..))]`, such as `rlimit(30)`
+    Isolate(TokenStream),
 }
 
 impl StepKind {
@@ -269,6 +273,36 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
         "compute" => return wrong_args("`compute()`"),
         "show" if n == 0 => StepKind::Show,
         "show" => return wrong_args("`show()`"),
+        "isolate" => {
+            let mut options = TokenStream::new();
+            let mut rlimit = false;
+            for arg in args.iter() {
+                let expected = || {
+                    Error::new(
+                        arg.span(),
+                        "`isolate`: expected `isolate()` or `isolate(rlimit = N)`, with N a number or `infinity`",
+                    )
+                };
+                let Expr::Assign(assign) = arg else { return Err(expected()) };
+                let Expr::Path(key) = &*assign.left else { return Err(expected()) };
+                let value = &assign.right;
+                match key.path.get_ident().map(|i| i.to_string()).as_deref() {
+                    Some("rlimit") if !rlimit => {
+                        let is_number = matches!(&**value, Expr::Lit(l)
+                            if matches!(l.lit, verus_syn::Lit::Int(_) | verus_syn::Lit::Float(_)));
+                        let is_infinity = matches!(&**value, Expr::Path(p)
+                            if p.path.get_ident().map_or(false, |i| i == "infinity"));
+                        if !is_number && !is_infinity {
+                            return Err(expected());
+                        }
+                        rlimit = true;
+                        options.extend(quote_spanned!(span => rlimit(#value)));
+                    }
+                    _ => return Err(expected()),
+                }
+            }
+            StepKind::Isolate(options)
+        }
         _ => unreachable!(),
     };
     Ok(Step { span, kind })
@@ -573,6 +607,28 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
             }
             StepKind::Show => {
                 show_note(span, goal, &facts);
+            }
+            StepKind::Isolate(options) => {
+                // `assert(goal) by { #[verus::internal(isolate(..))] { rest } }`: rust_verify
+                // makes the proof (and the assertion of the goal at its end) a part of the query
+                // of its own (`air::context::Context::set_partitions`)
+                let block = Block {
+                    brace_token: verus_syn::token::Brace(span),
+                    stmts: expand_items(goal, rest, &facts)?,
+                };
+                let marked = Stmt::Expr(
+                    Expr::Block(verus_syn::ExprBlock {
+                        attrs: vec![crate::syntax::mk_verus_attr(
+                            span,
+                            quote_spanned!(span => isolate(#options)),
+                        )],
+                        label: None,
+                        block,
+                    }),
+                    None,
+                );
+                stmts.push(assert_stmt(span, "isolate", goal, vec![marked])?);
+                return Ok(stmts);
             }
             StepKind::Smt(None, _) => {
                 stmts.push(assert_stmt(span, "smt", goal, vec![])?);

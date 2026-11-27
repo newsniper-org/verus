@@ -959,12 +959,28 @@ impl Verifier {
                     if self.expand_flag {
                         invalidity = true;
                     }
-                    let mut msg = format!("{}: resource limit (rlimit) exceeded", context.desc);
+                    // an isolated part of the query (`isolate(..)`) that exceeded its rlimit: report
+                    // it at its first assertion
+                    let isolated: Option<Message> =
+                        air_context.take_canceled_partition().map(|e| e.downcast().unwrap());
+                    let (mut msg, span) = match isolated.as_ref().and_then(|e| e.spans.first()) {
+                        Some(span) => (
+                            format!(
+                                "{}: resource limit (rlimit) exceeded in the proof isolated here",
+                                context.desc
+                            ),
+                            span.clone(),
+                        ),
+                        None => (
+                            format!("{}: resource limit (rlimit) exceeded", context.desc),
+                            context.span.clone(),
+                        ),
+                    };
                     if !self.args.profile && !self.args.profile_all && !self.args.capture_profiles {
                         msg.push_str("; consider rerunning with `--profile` for more details");
                     }
                     if let Some(level) = level {
-                        reporter.report(&message(level, msg, &context.span).to_any());
+                        reporter.report(&message(level, msg, &span).to_any());
                     }
                     // need to report that we need to rerun from this function (into spinoff)
                     // so that we can run the profiler on an isolated file on the second pass
@@ -1065,6 +1081,13 @@ impl Verifier {
             }
         }
 
+        if level == Some(MessageLevel::Error) && air_context.partitions_unchecked() {
+            let msg = format!(
+                "{}: the query is checked in parts (`isolate`), and the parts after the one that failed were not checked",
+                context.desc
+            );
+            reporter.report(&note(&context.span, msg).to_any());
+        }
         if level == Some(MessageLevel::Error) && checks_remaining == 0 {
             let msg = format!(
                 "{}: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
@@ -1098,7 +1121,13 @@ impl Verifier {
         cmds: &CommandsWithContext,
         timed_out: bool,
     ) {
-        let CommandsWithContextX { context, commands, prover_choice, skip_recommends: _ } = &**cmds;
+        let CommandsWithContextX {
+            context,
+            commands,
+            prover_choice,
+            skip_recommends: _,
+            isolates: _,
+        } = &**cmds;
         for command in commands.iter() {
             match &**command {
                 CommandX::CheckValid(query) => self.report_triage_query(
@@ -1350,8 +1379,13 @@ impl Verifier {
             not_skipped: false,
             used_axioms: None,
         };
-        let CommandsWithContextX { context, commands, prover_choice, skip_recommends: _ } =
-            &*commands_with_context;
+        let CommandsWithContextX {
+            context,
+            commands,
+            prover_choice,
+            skip_recommends: _,
+            isolates: _,
+        } = &*commands_with_context;
         let context = context.with_desc_prefix(desc_prefix);
         if commands.len() > 0 {
             air_context.blank_line();
@@ -1393,15 +1427,21 @@ impl Verifier {
     }
 
     fn set_rlimit(air_context: &mut air::context::Context, rlimit: f32) {
+        let value = Self::rlimit_value(air_context, rlimit);
+        air_context.set_rlimit(value);
+    }
+
+    /// An rlimit in the units of `#[verifier::rlimit]`, in the solver's units
+    fn rlimit_value(air_context: &air::context::Context, rlimit: f32) -> u32 {
         let per_second = match air_context.get_solver() {
             air::context::SmtSolver::Z3 => RLIMIT_PER_SECOND_Z3,
             air::context::SmtSolver::Cvc5 => RLIMIT_PER_SECOND_CVC5,
         };
-        air_context.set_rlimit(if rlimit == f32::INFINITY {
+        if rlimit == f32::INFINITY {
             0 // both solvers interpret a zero rlimit as infinity
         } else {
             (rlimit * per_second).min(u32::MAX as f32) as u32
-        });
+        }
     }
 
     fn set_default_rlimit(&self, air_context: &mut air::context::Context) {
@@ -1803,6 +1843,9 @@ impl Verifier {
                             air::context::SmtSolver::Z3 => Some(0),
                             air::context::SmtSolver::Cvc5 => None,
                         };
+                        // `isolate(rlimit = ..)` with a solver whose rlimit is fixed: warn once
+                        let mut isolate_rlimit_warned =
+                            !self.user_filter.as_ref().unwrap().includes_function(&function.x.name);
                         for cmds in commands_with_context_list.iter() {
                             if is_recommend && cmds.skip_recommends {
                                 continue;
@@ -1900,6 +1943,48 @@ impl Verifier {
                                     );
                                 }
                             }
+                            // `isolate(..)` in a `by(tactic)` script: check the query in parts (the
+                            // function body and loop body queries, which may be Nonlinear in a
+                            // `#[verifier::nonlinear]` function). Not for the queries that only
+                            // report (recommends, expand-errors, the profile rerun), which check
+                            // the query as a whole.
+                            if cmds.isolates.len() > 0
+                                && matches!(
+                                    cmds.prover_choice,
+                                    vir::def::ProverChoice::DefaultProver
+                                        | vir::def::ProverChoice::Nonlinear
+                                )
+                                && level == MessageLevel::Error
+                                && !*profile_rerun
+                                && !self.expand_flag
+                            {
+                                let mutable = query_air_context.rlimit_is_mutable();
+                                let mut partitions = Vec::new();
+                                for (guard, rlimit) in cmds.isolates.iter() {
+                                    let rlimit = match rlimit {
+                                        Some(rlimit) if mutable => {
+                                            Some(Self::rlimit_value(&query_air_context, *rlimit))
+                                        }
+                                        Some(_) => {
+                                            if !isolate_rlimit_warned {
+                                                isolate_rlimit_warned = true;
+                                                reporter.report(
+                                                    &warning(
+                                                        &function.span,
+                                                        "`isolate(rlimit = ..)` is not supported with your current solver; \
+                                                         the isolated proof is checked with the global `--rlimit`",
+                                                    )
+                                                    .to_any(),
+                                                );
+                                            }
+                                            None
+                                        }
+                                        None => None,
+                                    };
+                                    partitions.push((guard.clone(), rlimit));
+                                }
+                                query_air_context.set_partitions(partitions);
+                            }
                             let RunCommandQueriesResult {
                                 invalidity: command_invalidity,
                                 timed_out: command_timed_out,
@@ -1917,6 +2002,9 @@ impl Verifier {
                                 None,
                                 &mut default_prover_failed_assert_ids,
                             );
+                            // (`finish_query` clears them, but a function that is not verified
+                            // runs no query)
+                            query_air_context.set_partitions(vec![]);
                             func_curr_smt_time +=
                                 query_air_context.get_time().1 - iter_curr_smt_time;
                             if let Some(func_curr_smt_rlimit_count) =

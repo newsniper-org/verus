@@ -1042,6 +1042,7 @@ impl LocalDeclKind {
             | LocalDeclKind::StmCallArg { native: _ }
             | LocalDeclKind::Assert
             | LocalDeclKind::AssertByVar { native: _ }
+            | LocalDeclKind::IsolateGuard { .. }
             | LocalDeclKind::LetBinder
             | LocalDeclKind::QuantBinder
             | LocalDeclKind::ChooseBinder

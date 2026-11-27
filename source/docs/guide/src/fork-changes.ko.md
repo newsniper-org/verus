@@ -74,6 +74,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 | solver가 막힌 proof obligation 찾기 | `-V triage` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `-V triage` 절 |
 | tactic script (검사되는 증명 코드로 펼쳐짐) | `assert(P) by(tactic) { split(); intro(); cases(b); unfold(f, k); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md) |
+| 증명을 따로, 자기 rlimit으로 검사 | `by(tactic)` script 안의 `isolate()`, `isolate(rlimit = N)` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절 |
 
 이 기능들을 위한 새 vstd 항목은 `vstd::alloc_check`(`AllocFreeDrop`, `NoDeallocDrop` 같은 marker trait, 그리고
 `FipAdd`, `FipOrd` 같은 연산자 marker)에 있습니다.
@@ -116,8 +117,10 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 
 ## 바뀌지 않은 것
 
-* **SMT 쪽.** SMT 질의로의 인코딩을 맡는 `air`는 바뀌지 않았습니다. solver도 같습니다. 업스트림이 고정한
-  버전의 Z3입니다.
+* **SMT 쪽.** solver는 같습니다. 업스트림이 고정한 버전의 Z3입니다. SMT 질의로의 인코딩을 맡는 `air`는
+  업스트림과 같은 방식으로 질의를 만듭니다. 다만 두 가지가 더해졌습니다.
+  - `-V triage`는 진단 검사를 별도 solver 프로세스에서 돌립니다.
+  - `isolate(..)`는 질의를 부분으로 나눠 검사합니다. 이 검사가 신뢰해야 할 대상에 새로 들어간 유일한 것입니다([assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절).
 * **명령줄 옵션.** 업스트림 옵션 가운데 없어지거나 뜻이 바뀐 것은 없습니다. fork는 옵션을 더하기만 합니다.
 
 이 저장소의 테스트 밖에 있는 코드에서 업스트림과 fork를 비교해 본 적은 아직 없습니다.

@@ -1698,6 +1698,8 @@ struct State {
     post_condition_info: PostConditionInfo,
     loop_infos: Vec<LoopInfo>,
     static_prelude: Vec<Stmt>,
+    /// the guards of the function's isolated `assert ... by` proofs (`IsolateSpec`)
+    isolates: Arc<Vec<(Ident, Option<f32>)>>,
 }
 
 fn loc_is_var(e: &Exp) -> Option<&UniqueIdent> {
@@ -2888,7 +2890,8 @@ fn loop_to_stmts(
             Arc::new(vec![Arc::new(CommandX::CheckValid(query))]),
             ProverChoice::DefaultProver,
             false,
-        );
+        )
+        .with_isolates(&state.isolates);
         state.commands.push(loop_cmd_context);
     }
 
@@ -3177,6 +3180,17 @@ pub(crate) fn body_stm_to_air(
         },
         loop_infos: Vec::new(),
         static_prelude: mk_static_prelude(ctx, statics),
+        isolates: Arc::new(
+            local_decls
+                .iter()
+                .filter_map(|decl| match decl.kind {
+                    crate::sst::LocalDeclKind::IsolateGuard { rlimit } => {
+                        Some((suffix_local_unique_id(&decl.ident), rlimit))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        ),
     };
 
     let stm = crate::sst_vars::compute_assign_info(
@@ -3271,14 +3285,17 @@ pub(crate) fn body_stm_to_air(
     } else {
         let query = Arc::new(QueryX { local: Arc::new(local), assertion });
         let commands = vec![Arc::new(CommandX::CheckValid(query))];
-        state.commands.push(CommandsWithContextX::new(
-            ctx.fun.as_ref().expect("function expected here").current_fun.clone(),
-            func_span.clone(),
-            "function body check".to_string(),
-            Arc::new(commands),
-            if is_nonlinear { ProverChoice::Nonlinear } else { ProverChoice::DefaultProver },
-            is_integer_ring || is_nonlinear,
-        ));
+        state.commands.push(
+            CommandsWithContextX::new(
+                ctx.fun.as_ref().expect("function expected here").current_fun.clone(),
+                func_span.clone(),
+                "function body check".to_string(),
+                Arc::new(commands),
+                if is_nonlinear { ProverChoice::Nonlinear } else { ProverChoice::DefaultProver },
+                is_integer_ring || is_nonlinear,
+            )
+            .with_isolates(&state.isolates),
+        );
     }
     // Notify observer of binder-originated local declarations (including Skolemized
     // copies): quantifier binders and choose binders alike.

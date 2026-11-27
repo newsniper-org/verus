@@ -26,6 +26,11 @@ pub(crate) struct AssertionInfo {
     pub(crate) filter: AxiomInfoFilter,
     pub(crate) decl: Decl,
     pub(crate) disabled: bool,
+    /// the isolated proof the assertion is in (an index into `Context::partitions`), if any
+    pub(crate) partition: Option<usize>,
+    /// disabled because it is in another part of the query than the one being checked
+    /// (`smt_verify::smt_check_partitions`); unlike `disabled`, not a reported error
+    pub(crate) excluded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +190,20 @@ pub struct Context {
     pub(crate) check_valid_used: bool,
     pub(crate) solver: SmtSolver,
     pub(crate) smt_encoding: SmtEncoding,
+    /// the guards of the isolated proofs of the next query, with each one's rlimit
+    /// (`set_partitions`)
+    pub(crate) partitions: Vec<(Ident, Option<u32>)>,
+    /// may the current query be checked in parts (`check_valid`)
+    pub(crate) partitions_allowed: bool,
+    /// checking one part of a query: no `Valid` notice to the observer yet
+    pub(crate) in_partition: bool,
+    /// a part of the current query that was not valid is still open, with the rlimit to
+    /// restore when it is closed (`finish_query`)
+    pub(crate) partition_open: Option<u32>,
+    /// the error of the first assertion of an isolated part that exceeded its rlimit
+    pub(crate) canceled_partition: Option<ArcDynMessage>,
+    /// a part of the current query was not valid, and the parts after it were not checked
+    pub(crate) partitions_unchecked: bool,
 }
 
 impl Context {
@@ -259,6 +278,12 @@ impl Context {
             expected_solver_version: None,
             profile_logfile_name: None,
             single_check_query: false,
+            partitions: Vec::new(),
+            partitions_allowed: false,
+            in_partition: false,
+            partition_open: None,
+            canceled_partition: None,
+            partitions_unchecked: false,
             usage_info_enabled: false,
             check_valid_used: false,
             solver,
@@ -581,6 +606,12 @@ impl Context {
         if let Some(o) = &self.air_observer {
             o.borrow_mut().on_query_start(query);
         }
+        // parts (`set_partitions`) need push/pop, and labels that only `block_to_assert` made
+        self.canceled_partition = None;
+        self.partitions_unchecked = false;
+        self.partitions_allowed = !self.partitions.is_empty()
+            && !self.single_check_query
+            && !crate::smt_verify::query_has_labels(query);
 
         self.air_initial_log.log_query(query);
         let query = match crate::typecheck::check_query(self, query) {
@@ -679,6 +710,27 @@ impl Context {
         self.rlimit
     }
 
+    /// Check the next query in parts: the assertions of each isolated proof, under the guard
+    /// `g` that the proof assumes first (an `isolate(..)` step in a `by(tactic)` script), are a
+    /// part, checked with its own rlimit if one is given; all other assertions are another part
+    /// (`smt_verify::smt_check_partitions`). The query is valid only if every part is.
+    /// `finish_query` clears the partitions.
+    pub fn set_partitions(&mut self, partitions: Vec<(Ident, Option<u32>)>) {
+        self.partitions = partitions;
+    }
+
+    /// After a query was canceled: the error of the first assertion of the isolated part that
+    /// exceeded its rlimit, if it was an isolated part
+    pub fn take_canceled_partition(&mut self) -> Option<ArcDynMessage> {
+        self.canceled_partition.take()
+    }
+
+    /// After a query that was checked in parts was not valid: were there parts after the one
+    /// that failed, which were not checked?
+    pub fn partitions_unchecked(&self) -> bool {
+        self.partitions_unchecked
+    }
+
     pub fn check_valid_used(&self) -> bool {
         self.check_valid_used
     }
@@ -710,6 +762,14 @@ impl Context {
     }
 
     pub fn finish_query(&mut self) {
+        if let Some(rlimit) = self.partition_open.take() {
+            self.smt_log.log_pop();
+            self.rlimit = rlimit;
+        }
+        self.partitions.clear();
+        self.partitions_allowed = false;
+        self.partitions_unchecked = false;
+        self.canceled_partition = None;
         if self.single_check_query {
             self.state = ContextState::NoMoreQueriesAllowed;
         } else {

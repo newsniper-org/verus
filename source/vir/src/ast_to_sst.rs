@@ -135,6 +135,9 @@ pub(crate) struct State<'a> {
     /// `-V alloc-check`: the operator markers (`T: FipAdd`, ...) on the function's types, which
     /// cover generic calls of the operator traits' methods
     pub(crate) op_markers: Vec<(Typs, &'static str, crate::alloc_check::OpLevel)>,
+    /// the number of isolated `assert ... by` proofs so far (`IsolateSpec`), for the names of
+    /// their guards
+    pub(crate) isolate_guards: u64,
 
     /// Function arguments to be used in the construction of the update
     /// predicate for the atomic update by the atomic function call.
@@ -287,6 +290,7 @@ impl<'a> State<'a> {
             alloc_reclaim: None,
             fip: false,
             op_markers: Vec::new(),
+            isolate_guards: 0,
             au_pred_args: Vec::new(),
             au_var_exp_to_resolve: None,
             au_var_exp: None,
@@ -3169,7 +3173,7 @@ pub(crate) fn expr_to_stm_opt(
             )?;
             Ok((stms, Maybe::Some(Value::Exp(tmp))))
         }
-        ExprX::AssertBy { vars, require, ensure, proof } => {
+        ExprX::AssertBy { vars, require, ensure, proof, isolate } => {
             // deadend {
             //   assume(require)
             //   proof
@@ -3181,6 +3185,23 @@ pub(crate) fn expr_to_stm_opt(
             // Translate proof into a dead-end ending with an assert
             state.push_scope();
             let mut body: Vec<Stm> = Vec::new();
+            if let Some(crate::ast::IsolateSpec { rlimit }) = isolate {
+                // `isolate(..)`: assume a fresh Bool first. Nothing else mentions it, so the
+                // query states the same thing (for every value of the guard g,
+                // `(g ==> wp(proof)) && rest` holds exactly when `wp(proof) && rest` does), and
+                // AIR can find the assertions of the proof under the guard
+                // (`air::context::Context::set_partitions`)
+                let guard_name = crate::def::isolate_guard_ident(state.isolate_guards);
+                state.isolate_guards += 1;
+                let guard = state.declare_imm_var_stm(
+                    &guard_name,
+                    &bool_typ(),
+                    LocalDeclKind::IsolateGuard { rlimit: *rlimit },
+                    false,
+                );
+                let guard_exp = SpannedTyped::new(&expr.span, &bool_typ(), ExpX::Var(guard));
+                body.push(Spanned::new(expr.span.clone(), StmX::Assume(guard_exp)));
+            }
             let mut locals: Vec<VarIdent> = Vec::new();
             for var in vars.iter() {
                 let x = state.declare_imm_var_stm(

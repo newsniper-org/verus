@@ -42,6 +42,27 @@ use vir::ast_util::{
 };
 use vir::def::field_ident_from_rust;
 
+/// `assert(P) by { #[verus::internal(isolate(..))] { .. } }`, which `isolate(..)` in a `by(tactic)`
+/// script expands to: the options of the isolated proof
+fn isolate_of_by_block<'tcx>(
+    bctx: &BodyCtxt<'tcx>,
+    by_block: &Expr<'tcx>,
+) -> Result<Option<vir::ast::IsolateSpec>, VirErr> {
+    let ExprKind::Block(block, _) = &by_block.kind else { return Ok(None) };
+    let inner = match (block.stmts, block.expr) {
+        ([], Some(inner)) => inner,
+        ([stmt], None) => match &stmt.kind {
+            rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => *e,
+            _ => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    if !matches!(inner.kind, ExprKind::Block(..)) {
+        return Ok(None);
+    }
+    Ok(bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(inner.hir_id))?.isolate)
+}
+
 /// The error for `assume`, `admit` or inline AIR in the block that a `by(tactic)` script expands
 /// to (`#[verus::internal(tactic)]`).
 const TACTIC_NO_ASSUME: &str = "`assume`, `admit` and `inline_air_stmt` are not allowed in a `by(tactic)` script: a tactic may change how a goal is proved, not what is proved";
@@ -1692,8 +1713,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                         ExprX::Const(Constant::Bool(true)),
                     );
                     let ensure = expr_to_vir_consume(bctx, &args[0])?;
+                    let isolate = isolate_of_by_block(bctx, &args[1])?;
                     let proof = expr_to_vir_consume(bctx, &args[1])?;
-                    mk_expr(ExprX::AssertBy { vars, require, ensure, proof })
+                    mk_expr(ExprX::AssertBy { vars, require, ensure, proof, isolate })
                 }
                 AssertItem::AssertByCompute => {
                     internal_err_unless!(
@@ -3015,7 +3037,7 @@ fn extract_assert_forall_by<'tcx>(
                 )
             };
             let ensure = header.ensure.0[0].clone();
-            let forallx = ExprX::AssertBy { vars, require, ensure, proof: vir_expr };
+            let forallx = ExprX::AssertBy { vars, require, ensure, proof: vir_expr, isolate: None };
             Ok(bctx.spanned_typed_new(span, &typ, forallx))
         }
         _ => err_span(expr.span, "argument to `forall`/`exists` must be a closure"),

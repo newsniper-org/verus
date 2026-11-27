@@ -1215,6 +1215,7 @@ fn visit_func_check_sst(
             | (LocalDeclKind::StmCallArg { native: true }, _, _)
             | (LocalDeclKind::Assert, _, _)
             | (LocalDeclKind::AssertByVar { native: true }, _, _)
+            | (LocalDeclKind::IsolateGuard { .. }, _, _)
             | (LocalDeclKind::LetBinder, _, _)
             | (LocalDeclKind::OpenInvariantInnerTemp, _, _)
             | (LocalDeclKind::ExecClosureId, _, _)

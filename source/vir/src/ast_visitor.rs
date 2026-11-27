@@ -541,7 +541,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                     })
                 })
             }
-            ExprX::AssertBy { vars: bs, require, ensure, proof } => {
+            ExprX::AssertBy { vars: bs, require, ensure, proof, isolate } => {
                 let binders = self.visit_binders_typ(bs)?;
                 self.push_scope();
                 for b in R::get_vec_or(&binders, bs).iter() {
@@ -557,6 +557,7 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                         require: R::get(require),
                         ensure: R::get(ensure),
                         proof: R::get(proof),
+                        isolate: *isolate,
                     })
                 })
             }

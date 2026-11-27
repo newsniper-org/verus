@@ -19,7 +19,7 @@ assert(forall|i: int| 0 <= i < n ==> #[trigger] f(i) > i) by(tactic) {
 
 **step은 goal을 "어떻게" 증명할지만 바꾸고, "무엇을" 증명할지는 바꾸지 않습니다.** 잘못된 step은
 증명을 실패하게 할 뿐, 거짓인 assertion을 통과시키지 못합니다. 따라서 펼치는 과정은 신뢰해야 할 대상이
-아닙니다.
+아닙니다. 다만 `isolate(..)`는 작은 검사 하나를 신뢰 대상에 더합니다(아래 `isolate` 절).
 
 ### 구문
 
@@ -57,6 +57,7 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `smt(nonlinear_arith, R, ..)`, `smt(bit_vector, R, ..)` | 무엇이든 | `assert(G) by(nonlinear_arith) requires R, ..;` (또는 `bit_vector`) |
 | `compute()` | 무엇이든 | `assert(G) by(compute);` |
 | `show()` | 무엇이든 | 없음. goal과 script가 더한 사실을 note로 보여 줍니다 |
+| `isolate()`, `isolate(rlimit = N)` | 무엇이든 | `assert(G) by { .. }`. 질의의 독립된 한 부분으로 검사됩니다(아래 `isolate` 절) |
 
 펼친 결과의 `..` 자리에는 script의 나머지가 들어갑니다.
 - **나머지 step:** `split()`이나 `cases(b)` 뒤의 step은 각 부분에 적용됩니다. `intro()` 뒤의 step은
@@ -116,6 +117,49 @@ case의 조건, `intro`가 들여온 것입니다.
 - `requires`나 assertion 앞의 문장처럼 문맥에서 오는 사실은 나오지 않습니다.
 - 보여 주는 내용은 아직 아무것도 검사되지 않은 것입니다.
 - 나중에 증명이 실패해도, 검증이 통과해도 출력됩니다.
+
+### 증명을 따로 검사하기: `isolate`
+
+`isolate()`는 script의 나머지를 함수 질의의 독립된 한 부분으로 만듭니다. 나머지란 현재 goal의 증명과,
+그 끝에서 goal을 assert하는 것입니다.
+
+`isolate(rlimit = N)`을 쓰면 그 부분은 자기 rlimit을 받습니다. 단위는 `#[verifier::rlimit(N)]`과
+같고, 제한을 두지 않으려면 `infinity`를 씁니다. 함수의 나머지는 함수의 rlimit으로 검사됩니다.
+
+```rust
+#[verifier::rlimit(1)]
+proof fn p() {
+    assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+    // .. 나머지 증명은 rlimit 1로 검사됩니다
+}
+```
+
+질의는 부분마다 한 번씩 검사되고, 이때 다른 부분의 assertion은 끕니다. 모든 부분이 통과해야만 검증된
+것으로 칩니다.
+
+각 부분의 assertion은 같은 질의의 assertion이고, 그 앞의 사실도 같습니다. 다른 부분의 assertion을
+끄면 그 부분이 검사하는 것만 빠지고, 그 부분이 가정하는 것은 빠지지 않습니다.
+
+이 검사는 `by(tactic)`이 신뢰 대상에 더하는 유일한 것이며, 다음 두 가지에 기댑니다.
+- 모든 assertion은 정확히 한 부분에 속합니다.
+- 질의가 valid인 것은 각 부분이 valid인 것과 같습니다.
+
+두 번째가 왜 성립하는지는 `air/src/smt_verify.rs`의 `smt_check_partitions`에 적혀 있습니다.
+
+- **여러 부분:** `isolate`는 여러 번 쓸 수 있습니다. `split`의 각 부분 안에서도, isolate된 증명 안에서도
+  쓸 수 있습니다. 각 assertion은 가장 안쪽 isolate에 속합니다.
+- **루프 본문 안:** 그 부분은 루프 본문의 질의에 속합니다. `#[verifier::nonlinear]` 함수의 본문에서도
+  됩니다.
+- **순서:** isolate된 증명을 먼저 검사하고, 함수의 나머지는 소스에서의 위치와 상관없이 맨 마지막에
+  검사합니다.
+- **한 부분이 실패할 때:** 그 뒤의 부분은 검사되지 않고, 그렇다는 note가 나옵니다. 그래서 함수의 나머지에
+  있는 오류는, isolate된 증명보다 앞에 있더라도, isolate된 증명이 모두 통과해야 보고됩니다.
+- **한 부분이 rlimit을 넘을 때:** 오류가 isolate된 goal을 가리킵니다.
+- **cvc5:** 부분의 rlimit을 따로 정할 수 없습니다(`#[verifier::rlimit]`도 마찬가지입니다). 경고와 함께
+  전역 `--rlimit`이 적용됩니다.
+- **부분으로 나누지 않는 질의:** 보고만 하는 질의는 통째로 검사됩니다. recommends, `--expand-errors`,
+  `--profile`의 재실행, `-V triage`가 여기에 해당합니다. `by(nonlinear_arith)`나 `by(bit_vector)`
+  assertion은 이미 그 자체로 하나의 질의이므로, 나눌 부분이 없습니다.
 
 ## solver가 막힌 obligation 찾기: `-V triage`
 

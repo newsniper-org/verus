@@ -1303,8 +1303,16 @@ pub enum ExprX {
     /// Assert or assume user-defined type invariant for `expr` and return `expr`
     /// These are added in user_defined_type_invariants.rs
     AssertAssumeUserDefinedTypeInvariant { is_assume: bool, expr: Expr, fun: Fun },
-    /// Assert-forall or assert-by statement
-    AssertBy { vars: VarBinders<Typ>, require: Expr, ensure: Expr, proof: Expr },
+    /// Assert-forall or assert-by statement. With `isolate`, the proof (and the assertion of
+    /// `ensure` at its end) is checked as a partition of its own (`isolate()` in a `by(tactic)`
+    /// script)
+    AssertBy {
+        vars: VarBinders<Typ>,
+        require: Expr,
+        ensure: Expr,
+        proof: Expr,
+        isolate: Option<IsolateSpec>,
+    },
     /// `assert_by` with a dedicated prover option (nonlinear_arith, bit_vector)
     AssertQuery { requires: Exprs, ensures: Exprs, proof: Expr, mode: AssertQueryMode },
     /// Assertion discharged via computation
@@ -1630,6 +1638,15 @@ pub struct AutoExtEqual {
     pub assert_by: bool,
     pub ensures: bool,
     pub invariant: bool,
+}
+
+/// `isolate(..)` in a `by(tactic)` script: the assertions of an `assert ... by` proof are checked
+/// in a partition of their own, with these options (sst_to_air.rs, `air::context::Context::
+/// set_partitions`)
+#[derive(Debug, Serialize, Deserialize, ToDebugSNode, Clone, Copy, PartialEq)]
+pub struct IsolateSpec {
+    /// the rlimit for the partition (as `#[verifier::rlimit]`); `None`: the function's
+    pub rlimit: Option<f32>,
 }
 
 pub type FunctionAttrs = Arc<FunctionAttrsX>;

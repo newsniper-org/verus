@@ -349,21 +349,36 @@ pub enum StmX {
 // poly.rs uses the specific kind of each local to decide on a poly/native type for the local
 #[derive(Debug, Clone, Copy, ToDebugSNode)]
 pub enum LocalDeclKind {
-    Param { mutable: bool },
+    Param {
+        mutable: bool,
+    },
     Return,
-    StmtLet { mutable: bool },
+    StmtLet {
+        mutable: bool,
+    },
     // temp var inherits kind of the initializer used to assign to it:
     TempViaAssign,
     Decreases,
-    StmCallArg { native: bool },
+    StmCallArg {
+        native: bool,
+    },
     Assert,
-    AssertByVar { native: bool },
+    AssertByVar {
+        native: bool,
+    },
+    /// a free Bool assumed at the start of an isolated `assert ... by` proof, so that AIR can
+    /// tell its assertions apart (sst_to_air.rs, `air::context::Context::set_partitions`)
+    IsolateGuard {
+        rlimit: Option<f32>,
+    },
     LetBinder,
     QuantBinder,
     ChooseBinder,
     ClosureBinder,
     ExecClosureId,
-    ExecClosureParam { mutable: bool },
+    ExecClosureParam {
+        mutable: bool,
+    },
     ExecClosureRet,
     Nondeterministic,
     OpenInvariantInnerTemp,

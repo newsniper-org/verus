@@ -1144,6 +1144,16 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
         move |x: ExprX| Ok(ExprOrPlace::Expr(bctx.spanned_typed_new(expr.span, &expr_typ()?, x)));
 
     let block_attrs = bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(expr.hir_id))?;
+    if block_attrs.isolate.is_some()
+        && (!bctx.in_ghost || get_ghost_block_opt(bctx.ctxt.tcx.hir_attrs(expr.hir_id)).is_some())
+    {
+        // the mark is read by the `assert ... by` around the block (fn_call_to_vir.rs), and
+        // only in ghost code, where `isolate(..)` puts it
+        return err_span(
+            expr.span,
+            "`#[verus::internal(isolate(..))]` is only for the block that `isolate(..)` in a `by(tactic)` script expands to",
+        );
+    }
     let tactic_bctx;
     let bctx = if block_attrs.tactic {
         // the steps of a `by(tactic)` script, expanded into proof code: they may change how a

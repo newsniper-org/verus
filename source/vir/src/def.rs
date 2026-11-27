@@ -122,6 +122,7 @@ const MONOTYPE_DECORATE: &str = "$%";
 const TRAIT_DEFAULT_PREFIX: &str = "default%";
 const TRAIT_DEFAULT_SEPARATOR: &str = "%%%";
 const DECREASE_AT_ENTRY: &str = "decrease%init";
+const ISOLATE_GUARD: &str = "isolate%guard%";
 const TRAIT_SELF_TYPE_PARAM: &str = "Self%";
 const DUMMY_PARAM: &str = "no%param";
 
@@ -431,6 +432,11 @@ impl NameCtxt {
         let FunX { path } = &(**fun);
         self.path_to_string(path)
     }
+}
+
+/// The guard of the `n`th isolated `assert ... by` proof of a function (`IsolateSpec`)
+pub fn isolate_guard_ident(n: u64) -> VarIdent {
+    air_unique_var(&format!("{}{}", ISOLATE_GUARD, n))
 }
 
 pub fn decrease_at_entry(loop_id: Option<u64>, n: usize) -> VarIdent {
@@ -1039,6 +1045,10 @@ pub struct CommandsWithContextX {
     pub commands: Commands,
     pub prover_choice: ProverChoice,
     pub skip_recommends: bool,
+    /// The guards of the isolated `assert ... by` proofs (`isolate(..)` in a `by(tactic)`
+    /// script) that the queries may contain, as AIR names, with each one's rlimit
+    /// (`IsolateSpec`). The verifier passes them to `air::context::Context::set_partitions`.
+    pub isolates: Arc<Vec<(air::ast::Ident, Option<f32>)>>,
 }
 
 impl CommandsWithContextX {
@@ -1055,7 +1065,17 @@ impl CommandsWithContextX {
             commands,
             prover_choice,
             skip_recommends,
+            isolates: Arc::new(vec![]),
         })
+    }
+
+    pub fn with_isolates(
+        self: Arc<Self>,
+        isolates: &Arc<Vec<(air::ast::Ident, Option<f32>)>>,
+    ) -> CommandsWithContext {
+        let mut c = (*self).clone();
+        c.isolates = isolates.clone();
+        Arc::new(c)
     }
 }
 

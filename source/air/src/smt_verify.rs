@@ -1,6 +1,6 @@
 use crate::ast::{
-    Axiom, BinaryOp, BindX, Decl, DeclX, Expr, ExprX, Ident, MultiOp, Quant, Query, StmtX, TypX,
-    UnaryOp,
+    Axiom, BinaryOp, BindX, Decl, DeclX, Expr, ExprX, Ident, MultiOp, Quant, Query, Stmt, StmtX,
+    TypX, UnaryOp,
 };
 use crate::ast_util::{ident_var, mk_and, mk_not};
 use crate::context::{
@@ -13,10 +13,16 @@ pub use crate::model::{Model, ModelDef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Label each assertion in `expr`, recording it in `infos`. `guards` are the guards of the
+/// isolated proofs (`Context::set_partitions`): an assertion on the right of `g ==> ..`, for a
+/// guard `g`, is in the partition of the innermost such guard (`AssertionInfo::partition`),
+/// and any other assertion in no isolated partition (`None`).
 fn label_asserts<'ctx>(
     context: &mut Context,
     infos: &mut Vec<AssertionInfo>,
     axiom_infos: &mut Vec<AxiomInfo>,
+    guards: &HashMap<Ident, usize>,
+    partition: Option<usize>,
     expr: &Expr,
 ) -> Expr {
     match &**expr {
@@ -24,23 +30,27 @@ fn label_asserts<'ctx>(
         | ExprX::Binary(op @ BinaryOp::Eq, lhs, rhs) => {
             // asserts are on rhs of =>
             // (slight hack to also allow rhs of == for quantified function definitions)
+            let partition = match (op, &**lhs) {
+                (BinaryOp::Implies, ExprX::Var(x)) => guards.get(x).copied().or(partition),
+                _ => partition,
+            };
             Arc::new(ExprX::Binary(
                 op.clone(),
                 lhs.clone(),
-                label_asserts(context, infos, axiom_infos, rhs),
+                label_asserts(context, infos, axiom_infos, guards, partition, rhs),
             ))
         }
         ExprX::Multi(op @ MultiOp::And, exprs) | ExprX::Multi(op @ MultiOp::Or, exprs) => {
             let mut exprs_vec: Vec<Expr> = Vec::new();
             for expr in exprs.iter() {
-                exprs_vec.push(label_asserts(context, infos, axiom_infos, expr));
+                exprs_vec.push(label_asserts(context, infos, axiom_infos, guards, partition, expr));
             }
             Arc::new(ExprX::Multi(*op, Arc::new(exprs_vec)))
         }
         ExprX::Bind(bind, body) => match &**bind {
             BindX::Quant(Quant::Forall, _, _, _) => Arc::new(ExprX::Bind(
                 bind.clone(),
-                label_asserts(context, infos, axiom_infos, body),
+                label_asserts(context, infos, axiom_infos, guards, partition, body),
             )),
             _ => expr.clone(),
         },
@@ -54,13 +64,15 @@ fn label_asserts<'ctx>(
                 filter: filter.clone(),
                 decl,
                 disabled: false,
+                partition,
+                excluded: false,
             };
             infos.push(assertion_info);
             let lhs = Arc::new(ExprX::Var(label));
             Arc::new(ExprX::Binary(
                 BinaryOp::Implies,
                 lhs,
-                label_asserts(context, infos, axiom_infos, expr),
+                label_asserts(context, infos, axiom_infos, guards, partition, expr),
             ))
         }
         ExprX::LabeledAxiom(labels, filter, expr) => {
@@ -79,7 +91,7 @@ fn label_asserts<'ctx>(
             Arc::new(ExprX::Binary(
                 BinaryOp::Implies,
                 lhs,
-                label_asserts(context, infos, axiom_infos, expr),
+                label_asserts(context, infos, axiom_infos, guards, partition, expr),
             ))
         }
         _ => expr.clone(),
@@ -105,7 +117,8 @@ pub(crate) fn smt_add_decl<'ctx>(context: &mut Context, decl: &Decl) {
             let expr = elim_zero_args_expr(expr);
             let mut infos: Vec<AssertionInfo> = Vec::new();
             let mut axiom_infos: Vec<AxiomInfo> = Vec::new();
-            let labeled_expr = label_asserts(context, &mut infos, &mut axiom_infos, &expr);
+            let labeled_expr =
+                label_asserts(context, &mut infos, &mut axiom_infos, &HashMap::new(), None, &expr);
             if let Some(obs) = &context.air_observer {
                 obs.borrow_mut().on_axiom_decl(&labeled_expr);
             }
@@ -216,6 +229,11 @@ pub(crate) fn smt_check_assertion<'ctx>(
         let mut found_disabled = false;
         let mut found_enabled = false;
         for info in infos.iter_mut() {
+            if info.excluded {
+                // in another partition: already disabled in this partition's scope, and not a
+                // reported error
+                continue;
+            }
             if found_disabled && !info.disabled {
                 info.disabled = true;
                 disabled.push(mk_not(&ident_var(&info.label)));
@@ -392,7 +410,7 @@ pub(crate) fn smt_check_assertion<'ctx>(
                 crate::context::UsageInfo::None
             };
 
-            if let Some(obs) = &context.query_result_observer {
+            if let (Some(obs), false) = (&context.query_result_observer, context.in_partition) {
                 let assert_ids: Vec<Option<crate::ast::AssertId>> =
                     infos.iter().map(|info| info.assert_id.clone()).collect();
                 obs.borrow_mut().on_check_valid_result(
@@ -578,6 +596,7 @@ fn smt_get_model(
         .enumerate()
         .filter(|(_, info)| {
             !info.disabled
+                && !info.excluded
                 && model_defs.get(&info.label).map(|def| *def.body == "true").unwrap_or(false)
         })
         .map(|(i, _)| i)
@@ -717,7 +736,13 @@ pub(crate) fn smt_check_query<'ctx>(
     // add labels to assertions for error reporting
     let mut infos: Vec<AssertionInfo> = Vec::new();
     let mut axiom_infos: Vec<AxiomInfo> = Vec::new();
-    let labeled_assertion = label_asserts(context, &mut infos, &mut axiom_infos, &assertion);
+    let guards: HashMap<Ident, usize> = if context.partitions_allowed {
+        context.partitions.iter().enumerate().map(|(i, (g, _))| (g.clone(), i)).collect()
+    } else {
+        HashMap::new()
+    };
+    let labeled_assertion =
+        label_asserts(context, &mut infos, &mut axiom_infos, &guards, None, &assertion);
     for info in &infos {
         context.smt_log.comment(&context.message_interface.get_note(&info.error));
         if let Err(err) = crate::typecheck::add_decl(context, &info.decl, false) {
@@ -740,8 +765,11 @@ pub(crate) fn smt_check_query<'ctx>(
         None
     };
 
-    let result =
-        smt_check_assertion(context, diagnostics, infos, air_model, false, report_long_running);
+    let result = if infos.iter().any(|info| info.partition.is_some()) {
+        smt_check_partitions(context, diagnostics, infos, air_model, report_long_running)
+    } else {
+        smt_check_assertion(context, diagnostics, infos, air_model, false, report_long_running)
+    };
 
     if matches!(context.solver, SmtSolver::Z3) {
         let (ctx_rlimit_init, ctx_rlimit_run) = context.rlimit_count.unwrap();
@@ -755,6 +783,150 @@ pub(crate) fn smt_check_query<'ctx>(
     }
 
     result
+}
+
+/// Does `query`, before it is lowered, contain labeled assertions or axioms? Checking a query
+/// in parts relies on every label coming from `block_to_assert` (`smt_check_partitions`).
+pub(crate) fn query_has_labels(query: &Query) -> bool {
+    fn expr_has_labels(e: &Expr) -> bool {
+        let mut found = false;
+        crate::visitor::map_expr_visitor(e, &mut |e: &Expr| {
+            if matches!(&**e, ExprX::LabeledAssertion(..) | ExprX::LabeledAxiom(..)) {
+                found = true;
+            }
+            e.clone()
+        });
+        found
+    }
+    fn stmt_has_labels(s: &Stmt) -> bool {
+        match &**s {
+            StmtX::Assume(e) | StmtX::Assert(_, _, _, e) | StmtX::Assign(_, e) => {
+                expr_has_labels(e)
+            }
+            StmtX::Havoc(_) | StmtX::Snapshot(_) | StmtX::Break(_) => false,
+            StmtX::DeadEnd(s) | StmtX::Breakable(_, s) => stmt_has_labels(s),
+            StmtX::Block(ss) | StmtX::Switch(ss) => ss.iter().any(stmt_has_labels),
+        }
+    }
+    stmt_has_labels(&query.assertion)
+        || query.local.iter().any(|d| match &**d {
+            DeclX::Axiom(axiom) => expr_has_labels(&axiom.expr),
+            _ => false,
+        })
+}
+
+/// Check a query in parts (`Context::set_partitions`): the assertions of each isolated proof
+/// (`AssertionInfo::partition`) are one part, and all other assertions another. Each part is
+/// checked with the assertions of the other parts disabled, in a scope of its own, and the
+/// query is valid only if every part is.
+///
+/// **This function is trusted.** Why checking the parts is enough:
+/// - The query `F` was built by `block_to_assert` from statements in which no assertion was
+///   labeled yet (`Context::check_valid` allows parts only then). Each assertion `Q` appears in
+///   `F` as `label => Q`, and disabling it means asserting `not label`, which turns it into
+///   `true`; with all labels of a set S enabled, `F` is the weakest precondition of the program
+///   with the assertions outside S replaced by `assert true` (the encoding of Switch and
+///   Breakable is correct for every program, which Verus relies on anyway).
+/// - An assertion only checks; what later code may use is assumed separately. So the weakest
+///   precondition is conjunctive in the assertions: with the labels split into parts S1..Sn,
+///   wp(all) is equivalent to wp(S1) and .. and wp(Sn).
+/// - Hence `F` is valid if and only if each part is valid. Every label is in exactly one part
+///   (its innermost configured guard, or none), so no assertion goes unchecked, whichever part
+///   a label is put in. A part whose answer is not `unsat` (invalid, rlimit exceeded, unknown)
+///   is not valid.
+fn smt_check_partitions(
+    context: &mut Context,
+    diagnostics: &impl Diagnostics,
+    infos: Vec<AssertionInfo>,
+    air_model: Model,
+    mut report_long_running: Option<&mut ReportLongRunning>,
+) -> ValidityResult {
+    // the parts, in order: each isolated proof with assertions, then all other assertions
+    let mut parts: Vec<Option<usize>> = Vec::new();
+    for info in infos.iter() {
+        if info.partition.is_some() && !parts.contains(&info.partition) {
+            parts.push(info.partition);
+        }
+    }
+    parts.sort();
+    if infos.iter().any(|info| info.partition.is_none()) {
+        parts.push(None);
+    }
+    debug_assert!(infos.iter().all(|info| parts.contains(&info.partition)));
+
+    let mut used_axioms: Option<Vec<Ident>> = None;
+    for (k, part) in parts.iter().enumerate() {
+        let mut part_infos = infos.clone();
+        context.smt_log.log_push();
+        for info in part_infos.iter_mut() {
+            if info.partition != *part {
+                info.excluded = true;
+                context.smt_log.log_assert(&None, &mk_not(&ident_var(&info.label)));
+            }
+        }
+        let part_rlimit = part.and_then(|p| context.partitions[p].1);
+        let saved_rlimit = context.rlimit;
+        if let Some(rlimit) = part_rlimit {
+            context.rlimit = rlimit;
+        }
+        context.in_partition = true;
+        let result = smt_check_assertion(
+            context,
+            diagnostics,
+            part_infos.clone(),
+            air_model.clone(),
+            false,
+            report_long_running.as_mut().map(|r| &mut **r),
+        );
+        context.in_partition = false;
+        match result {
+            ValidityResult::Valid(usage) => {
+                context.rlimit = saved_rlimit;
+                context.smt_log.log_pop();
+                if let crate::context::UsageInfo::UsedAxioms(axioms) = usage {
+                    let all = used_axioms.get_or_insert_with(Vec::new);
+                    for axiom in axioms {
+                        if !all.contains(&axiom) {
+                            all.push(axiom);
+                        }
+                    }
+                }
+            }
+            result => {
+                // Leave this part's scope open (and its rlimit), so that `check_valid_again`
+                // can look for more errors in it; `finish_query` closes it.
+                context.partition_open = Some(saved_rlimit);
+                context.partitions_unchecked = k + 1 < parts.len();
+                if matches!(result, ValidityResult::Canceled) {
+                    // the isolated goal: asserted last in the isolated proof, so its label is
+                    // the part's last (labels are in the order of the program, unless a loop's
+                    // `break` puts the code after it first)
+                    context.canceled_partition = part.and_then(|_| {
+                        part_infos.iter().rev().find(|i| !i.excluded).map(|i| i.error.clone())
+                    });
+                }
+                return result;
+            }
+        }
+    }
+
+    // every part is valid
+    context.state = ContextState::FoundResult;
+    let usage_info = match used_axioms {
+        Some(axioms) => crate::context::UsageInfo::UsedAxioms(axioms),
+        None => crate::context::UsageInfo::None,
+    };
+    if let Some(obs) = &context.query_result_observer {
+        let assert_ids: Vec<Option<crate::ast::AssertId>> =
+            infos.iter().map(|info| info.assert_id.clone()).collect();
+        obs.borrow_mut().on_check_valid_result(
+            &mut crate::query_result_observer::CheckValidResult::Valid {
+                assert_ids: &assert_ids,
+                usage_info: &usage_info,
+            },
+        );
+    }
+    ValidityResult::Valid(usage_info)
 }
 
 /// `Context::triage_query`: `query` has been lowered (one assertion). In a scope that is popped
@@ -791,7 +963,8 @@ fn smt_triage_query_in_scope(
     let assertion = elim_zero_args_expr(assertion);
     let mut infos: Vec<AssertionInfo> = Vec::new();
     let mut axiom_infos: Vec<AxiomInfo> = Vec::new();
-    let labeled_assertion = label_asserts(context, &mut infos, &mut axiom_infos, &assertion);
+    let labeled_assertion =
+        label_asserts(context, &mut infos, &mut axiom_infos, &HashMap::new(), None, &assertion);
     for info in &infos {
         context.smt_log.comment(&context.message_interface.get_note(&info.error));
         if let Err(err) = crate::typecheck::add_decl(context, &info.decl, false) {

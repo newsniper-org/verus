@@ -402,6 +402,9 @@ pub(crate) enum Attr {
     TrustedCall,
     // the block that a `by(tactic)` script expands to (`#[verus::internal(tactic)]`)
     Tactic,
+    // the block of an `assert ... by` proof that `isolate(..)` in a `by(tactic)` script makes a
+    // partition of its own (`#[verus::internal(isolate(..))]`)
+    Isolate(vir::ast::IsolateSpec),
     // -V alloc-check: fully in-place (FP²): never deallocates (on a normal return); `strict`
     // also requires constant stack space
     Fip(bool),
@@ -438,6 +441,23 @@ fn get_proof_note_label(span: Span, attrs: &Option<Box<[AttrTree]>>) -> Result<&
         return err_span(span, "expected exactly one argument, a string literal");
     };
     Ok(label)
+}
+
+/// `isolate()`, `isolate(rlimit(42))`: the options of `#[verus::internal(isolate(..))]`
+fn get_isolate_args(
+    span: Span,
+    args: &Option<Box<[AttrTree]>>,
+) -> Result<vir::ast::IsolateSpec, VirErr> {
+    let mut spec = vir::ast::IsolateSpec { rlimit: None };
+    for arg in args.as_deref().unwrap_or(&[]).iter() {
+        match arg {
+            AttrTree::Fun(span, name, rlimit) if name == "rlimit" && spec.rlimit.is_none() => {
+                spec.rlimit = Some(get_rlimit_arg(*span, rlimit)?);
+            }
+            _ => return err_span(span, "unexpected option for `isolate`"),
+        }
+    }
+    Ok(spec)
 }
 
 /// Get the `42` part out of an attribute like `#[rlimit(42)]`
@@ -859,6 +879,9 @@ pub(crate) fn parse_attrs(
                         v.push(Attr::GhostBlock(GhostBlockAttr::Proof))
                     }
                     AttrTree::Fun(_, arg, None) if arg == "tactic" => v.push(Attr::Tactic),
+                    AttrTree::Fun(span, arg, args) if arg == "isolate" => {
+                        v.push(Attr::Isolate(get_isolate_args(*span, args)?))
+                    }
                     AttrTree::Fun(_, arg, None) if arg == "external_body" => {
                         v.push(Attr::ExternalBody)
                     }
@@ -1355,6 +1378,8 @@ pub(crate) struct VerifierAttrs {
     pub(crate) trusted_call: bool,
     /// the block that a `by(tactic)` script expands to
     pub(crate) tactic: bool,
+    /// the block of an isolated `assert ... by` proof
+    pub(crate) isolate: Option<vir::ast::IsolateSpec>,
     /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
     pub(crate) fip: Option<bool>,
     pub(crate) externals_available_without_declaration: Option<bool>,
@@ -1561,6 +1586,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
         trusted_only: false,
         trusted_call: false,
         tactic: false,
+        isolate: None,
         fip: None,
         externals_available_without_declaration: None,
         unerased_proxy: false,
@@ -1651,6 +1677,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
             Attr::TrustedOnly => vs.trusted_only = true,
             Attr::TrustedCall => vs.trusted_call = true,
             Attr::Tactic => vs.tactic = true,
+            Attr::Isolate(spec) => vs.isolate = Some(spec),
             Attr::Fip(strict) => {
                 // (rust_verify's MIR checks and the verifier must agree on the kind)
                 if vs.fip.is_some() {

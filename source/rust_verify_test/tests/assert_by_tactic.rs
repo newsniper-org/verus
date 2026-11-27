@@ -344,3 +344,254 @@ test_verify_one_file! {
         }
     } => Err(err) => assert_vir_error_msg(err, "is only for the block that a `by(tactic)` script expands to")
 }
+
+// `isolate(..)`: the proof of the goal (the rest of the script) is a part of the function's
+// query of its own, checked with the other parts' assertions disabled, and with its own rlimit
+
+const SUM: &str = verus_code_str! {
+    spec fn sum(n: nat) -> nat decreases n { if n == 0 { 0 } else { n + sum((n - 1) as nat) } }
+};
+
+test_verify_one_file! {
+    // a proof that exceeds the function's rlimit passes in a part with a larger one; the rest of
+    // the function keeps the function's rlimit
+    #[test] isolate_rlimit SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        proof fn isolated() {
+            assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+        }
+        #[verifier::rlimit(0.02)]
+        proof fn not_isolated() { // FAILS
+            assert(sum(12) == 78) by { reveal_with_fuel(sum, 13); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("resource limit (rlimit) exceeded"));
+        assert!(!err.errors[0].message.contains("isolated"));
+    }
+}
+
+test_verify_one_file! {
+    // the part exceeds its own rlimit: the error is at the isolated proof
+    #[test] isolate_rlimit_exceeded SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(10)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) { isolate(rlimit = 0.02); unfold(sum, 13); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+        assert!(err.errors[0].spans.iter().any(|s| s.text.iter().any(|t| t.text.contains("sum(12) == 78"))));
+    }
+}
+
+test_verify_one_file! {
+    // a false assertion inside the isolated proof fails
+    #[test] isolate_inside_fails DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(f(x) > x) by(tactic) {
+                isolate();
+                assert(f(x) > x + 1); // FAILS
+                apply(lemma_f(x));
+            }
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file! {
+    // a false isolated goal fails
+    #[test] isolate_goal_fails DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(f(x) > x + 1) by(tactic) { isolate(); apply(lemma_f(x)); } // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file! {
+    // false assertions before and after the isolated proof fail too (the other part)
+    #[test] isolate_outside_fails DEFS.to_string() + verus_code_str! {
+        proof fn before(x: int) {
+            assert(f(x) > x + 1); // FAILS
+            assert(f(x) > x) by(tactic) { isolate(); apply(lemma_f(x)); }
+        }
+        proof fn after(x: int) {
+            assert(f(x) > x) by(tactic) { isolate(); apply(lemma_f(x)); }
+            assert(f(x) > x + 1); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file! {
+    // the isolated goal holds afterwards, and the facts before it hold inside
+    #[test] isolate_facts DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int, y: int) requires y == x + 1 {
+            lemma_g(x);
+            assert(g(x) > x && y > x) by(tactic) { isolate(); split(); }
+            assert(g(x) > x);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // parts in parts, and a part for each part of a split
+    #[test] isolate_nested_and_split DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int, y: int) {
+            assert(g(x) > x && g(y) > y) by(tactic) {
+                split({ isolate(); apply(lemma_g(x)); }, { isolate(rlimit = 5); apply(lemma_g(y)); });
+            }
+            assert(g(x) > x) by(tactic) {
+                isolate();
+                assert(g(y) > y) by(tactic) { isolate(); apply(lemma_g(y)); }
+                apply(lemma_g(x));
+            }
+        }
+        proof fn u(x: int, y: int) {
+            assert(g(x) > x && g(y) > y) by(tactic) { split({ isolate(); apply(lemma_g(x)); }, { isolate(); }); } // FAILS
+        }
+    } => Err(err) => {
+        assert!(err.notes.iter().any(|n| n.message.contains("the parts after the one that failed were not checked")));
+        assert_one_fails(err);
+    }
+}
+
+test_verify_one_file! {
+    // inside a loop body, which is a query of its own
+    #[test] isolate_in_loop DEFS.to_string() + verus_code_str! {
+        fn l(n: u32) {
+            let mut i: u32 = 0;
+            while i < n
+                invariant i <= n,
+                decreases n - i,
+            {
+                proof {
+                    assert(g(i as int) > i) by(tactic) { isolate(); apply(lemma_g(i as int)); }
+                }
+                i = i + 1;
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] isolate_no_cheating ["--no-cheating"] => DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(g(x) > x) by(tactic) { isolate(rlimit = 5); apply(lemma_g(x)); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // -V triage on a query checked in parts
+    #[test] isolate_with_triage ["-V triage"] => DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(g(x) > x + 1) by(tactic) { isolate(); apply(lemma_g(x)); } // FAILS
+        }
+    } => Err(err) => {
+        assert!(err.notes.iter().any(|n| n.message.starts_with("triage of the function body check")));
+        assert_one_fails(err);
+    }
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_option DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(x == x) by(tactic) { isolate(time = 3); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()` or `isolate(rlimit = N)`")
+}
+
+test_verify_one_file! {
+    #[test] error_isolate_twice DEFS.to_string() + verus_code_str! {
+        proof fn t(x: int) {
+            assert(x == x) by(tactic) { isolate(rlimit = 1, rlimit = 2); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`isolate`: expected `isolate()` or `isolate(rlimit = N)`")
+}
+
+test_verify_one_file! {
+    // the mark is only for the block that `isolate(..)` expands to
+    #[test] isolate_mark_outside_script DEFS.to_string() + verus_code_str! {
+        fn f2(y: u64) -> (r: u64) ensures r == y {
+            let mut x: u64 = 0;
+            #[verus::internal(isolate())] { x = y; }
+            x
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is only for the block that `isolate(..)` in a `by(tactic)` script expands to")
+}
+
+test_verify_one_file! {
+    // the rest of the function keeps the function's rlimit
+    #[test] isolate_rlimit_rest SUM.to_string() + verus_code_str! {
+        spec fn sum2(n: nat) -> nat decreases n { if n == 0 { 0 } else { n + sum2((n - 1) as nat) } }
+        #[verifier::rlimit(0.02)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+            assert(sum2(12) == 78) by { reveal_with_fuel(sum2, 13); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("resource limit (rlimit) exceeded"));
+        assert!(!err.errors[0].message.contains("isolated"));
+    }
+}
+
+test_verify_one_file! {
+    // each assertion is in the part of its innermost isolate, with that part's rlimit
+    #[test] isolate_rlimit_nested SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) {
+                isolate(rlimit = 0.02);
+                assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // a loop body's query is checked in parts too
+    #[test] isolate_rlimit_in_loop SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(0.02)]
+        fn l(n: u32) {
+            let mut i: u32 = 0;
+            while i < n
+                invariant i <= n,
+                decreases n - i,
+            {
+                proof {
+                    assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+                }
+                i = i + 1;
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // and the body of a `#[verifier::nonlinear]` function
+    #[test] isolate_rlimit_nonlinear_fn SUM.to_string() + verus_code_str! {
+        #[verifier::nonlinear]
+        #[verifier::rlimit(0.02)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) { isolate(rlimit = 10); unfold(sum, 13); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // an isolated part that exceeds its rlimit is reported at its goal, not at an assertion before
+    #[test] isolate_rlimit_exceeded_at_goal SUM.to_string() + verus_code_str! {
+        #[verifier::rlimit(10)]
+        proof fn t() {
+            assert(sum(12) == 78) by(tactic) {
+                isolate(rlimit = 0.02);
+                have(sum(0) == 0);
+                unfold(sum, 13);
+            }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("rlimit) exceeded in the proof isolated here"));
+        assert!(err.errors[0].spans.iter().any(|s| s.text.iter().any(|t| t.text.contains("sum(12) == 78"))));
+    }
+}
