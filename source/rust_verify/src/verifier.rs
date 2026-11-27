@@ -1085,6 +1085,199 @@ impl Verifier {
         }
     }
 
+    /// `-V triage`: after the queries of `cmds` failed or exceeded the rlimit, check each of
+    /// their assertions (proof obligations) alone, every other one disabled, and report the ones
+    /// that are not proved alone, and why. `air_context` is a context of its own for this, with
+    /// the bucket's context. This is for diagnostics only and never changes the result of
+    /// verification: the queries have already been reported.
+    fn report_triage(
+        &self,
+        reporter: &impl Diagnostics,
+        diagnostics_to_report: &std::cell::RefCell<Option<PanicOnDropVec<(Message, MessageLevel)>>>,
+        air_context: &mut air::context::Context,
+        cmds: &CommandsWithContext,
+        timed_out: bool,
+    ) {
+        let CommandsWithContextX { context, commands, prover_choice, skip_recommends: _ } = &**cmds;
+        for command in commands.iter() {
+            match &**command {
+                CommandX::CheckValid(query) => self.report_triage_query(
+                    reporter,
+                    diagnostics_to_report,
+                    air_context,
+                    query,
+                    context,
+                    *prover_choice,
+                    timed_out,
+                ),
+                _ => Self::check_internal_result(air_context.command(
+                    &vir::messages::VirMessageInterface {},
+                    reporter,
+                    command,
+                    Default::default(),
+                )),
+            }
+        }
+    }
+
+    fn report_triage_query(
+        &self,
+        reporter: &impl Diagnostics,
+        diagnostics_to_report: &std::cell::RefCell<Option<PanicOnDropVec<(Message, MessageLevel)>>>,
+        air_context: &mut air::context::Context,
+        query: &air::ast::Query,
+        context: &CommandContext,
+        prover_choice: vir::def::ProverChoice,
+        timed_out: bool,
+    ) {
+        use air::context::{ReasonUnknown, TriageOutcome};
+        let message_interface = vir::messages::VirMessageInterface {};
+        let rows = match air_context.triage_query(&message_interface, reporter, query) {
+            Ok(rows) => rows,
+            Err(ValidityResult::TypeError(err)) => {
+                util::PANIC_ON_DROP_VEC.store(false, std::sync::atomic::Ordering::SeqCst);
+                panic!("internal error: generated ill-typed AIR code: {}", err);
+            }
+            Err(ValidityResult::UnexpectedOutput(err)) => {
+                util::PANIC_ON_DROP_VEC.store(false, std::sync::atomic::Ordering::SeqCst);
+                panic!("unexpected output from solver: {} {}", context.span.as_string, err);
+            }
+            Err(_) => panic!("internal error: unexpected result from triage"),
+        };
+        if rows.is_empty() {
+            return;
+        }
+        let emit = |msg: Message| match &mut *diagnostics_to_report.borrow_mut() {
+            Some(collected) => collected.as_mut().push((msg, MessageLevel::Note)),
+            None => reporter.report(&msg.to_any()),
+        };
+        let rlimit = air_context.get_rlimit() as u64;
+        let usage = |count: Option<u64>| match count {
+            Some(count) if rlimit > 0 && count * 100 >= rlimit => {
+                format!("; it used {}% of the rlimit", count * 100 / rlimit)
+            }
+            _ => String::new(),
+        };
+        let is_exceeded = |outcome: &TriageOutcome| {
+            matches!(
+                outcome,
+                TriageOutcome::Unknown(ReasonUnknown::Canceled | ReasonUnknown::Unknown)
+            )
+        };
+        let n = rows.len();
+        let proved = rows.iter().filter(|r| r.outcome == TriageOutcome::Proved).count();
+        let exceeded = rows.iter().filter(|r| is_exceeded(&r.outcome)).count();
+        let not_proved = n - proved - exceeded;
+
+        let desc = match context.desc.as_str() {
+            "assert_nonlinear_by" => "`by(nonlinear_arith)` assertion",
+            desc => desc,
+        };
+        let mut summary = if n == 1 {
+            format!("triage of the {}: 1 proof obligation", desc)
+        } else {
+            format!(
+                "triage of the {}: {} proof obligations, each checked alone with the others disabled",
+                desc, n
+            )
+        };
+        summary.push_str(&format!(
+            ": {} proved, {} not proved, {} exceeded the rlimit",
+            proved, not_proved, exceeded
+        ));
+        if proved == n {
+            if n == 1 {
+                summary.push_str(if timed_out {
+                    "; the obligation is proved when checked again, though the query exceeded the rlimit: the proof is close to the limit, and a larger `#[verifier::rlimit(..)]` may help"
+                } else {
+                    "; the obligation is proved when checked again, though the query was not (the solver's search differs between runs)"
+                });
+            } else if timed_out {
+                summary.push_str(
+                    "; each obligation is proved alone, but all of them together exceed the rlimit: a larger `#[verifier::rlimit(..)]`, or moving parts of the proof into lemmas, may help",
+                );
+            } else {
+                summary.push_str(
+                    "; each obligation is proved alone, though the query as a whole was not (the solver searches differently)",
+                );
+            }
+        }
+        emit(note(&context.span, summary));
+
+        // When the query as a whole exceeded the rlimit, also point to the obligations that are
+        // proved alone but use the most of the rlimit.
+        let mut expensive: Vec<usize> = Vec::new();
+        if timed_out {
+            let mut by_cost: Vec<(u64, usize)> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.outcome == TriageOutcome::Proved)
+                .filter_map(|(i, r)| r.rlimit_count.map(|c| (c, i)))
+                .filter(|(c, _)| rlimit > 0 && c * 10 >= rlimit)
+                .collect();
+            by_cost.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            expensive = by_cost.into_iter().take(3).map(|(_, i)| i).collect();
+        }
+
+        for (i, row) in rows.iter().enumerate() {
+            let error: Message = row.error.clone().downcast().unwrap();
+            let mut msg: MessageX = (*error).clone();
+            msg.level = MessageLevel::Note;
+            msg.fancy_note = None;
+            msg.help = Vec::new();
+            let what = match &row.outcome {
+                TriageOutcome::Proved => {
+                    if !expensive.contains(&i) {
+                        continue;
+                    }
+                    // the labels say how the obligation failed; this one did not fail alone
+                    for label in msg.labels.iter_mut() {
+                        if !label.is_proof_note {
+                            label.note = "this proof obligation".to_string();
+                        }
+                    }
+                    format!("proved alone{}", usage(row.rlimit_count))
+                }
+                TriageOutcome::Sat => format!(
+                    "not proved alone: the solver found a counterexample{}",
+                    usage(row.rlimit_count)
+                ),
+                outcome if is_exceeded(outcome) => {
+                    msg.help.push(
+                        "a larger `#[verifier::rlimit(..)]` may help; `--profile` shows which quantifiers are instantiated most".to_string(),
+                    );
+                    "exceeded the rlimit alone".to_string()
+                }
+                TriageOutcome::Unknown(ReasonUnknown::Incomplete(reason))
+                    if reason.contains("arithmetic") =>
+                {
+                    msg.help.push(if prover_choice == vir::def::ProverChoice::Nonlinear {
+                        "the nonlinear arithmetic solver could not decide this: give it the facts it needs (`requires` of `by(nonlinear_arith)`), split it into smaller steps, or use a lemma such as those in `vstd::arithmetic`".to_string()
+                    } else {
+                        "the solver does not reason about nonlinear arithmetic by default: use `assert(..) by(nonlinear_arith)`, or a lemma such as those in `vstd::arithmetic`".to_string()
+                    });
+                    format!(
+                        "not proved alone: the solver gave up on nonlinear arithmetic{}",
+                        usage(row.rlimit_count)
+                    )
+                }
+                TriageOutcome::Unknown(ReasonUnknown::Incomplete(reason)) => format!(
+                    "not proved alone: the solver answered `unknown` ({}), as it does for most obligations that it does not prove, whether or not they hold{}",
+                    reason.trim_start_matches('(').trim_end_matches(')'),
+                    usage(row.rlimit_count)
+                ),
+                TriageOutcome::Unknown(_) => unreachable!(),
+            };
+            let kind = if row.outcome == TriageOutcome::Proved {
+                String::new()
+            } else {
+                format!("{}: ", error.note)
+            };
+            msg.note = format!("triage ({}/{}): {}{}", i + 1, n, kind, what);
+            emit(Arc::new(msg));
+        }
+    }
+
     fn run_command_batch(
         &mut self,
         bucket_id: &BucketId,
@@ -1361,6 +1554,7 @@ impl Verifier {
         profile_file_name: Option<&std::path::PathBuf>,
         spinoff_reason: &str,
         prover_choice: vir::def::ProverChoice,
+        attach_observers: bool,
     ) -> Result<air::context::Context, VirErr> {
         let mut air_context = self.new_air_context_with_prelude(
             ctx,
@@ -1378,7 +1572,9 @@ impl Verifier {
         )?;
 
         // Attach the same shared observer objects to the spinoff context
-        air_context.set_observers(ctx.air_observer.clone(), ctx.query_result_observer.clone());
+        if attach_observers {
+            air_context.set_observers(ctx.air_observer.clone(), ctx.query_result_observer.clone());
+        }
 
         // Write the span of spun-off query
         air_context.comment(&span.as_string);
@@ -1671,6 +1867,7 @@ impl Verifier {
                                     profile_file_name.as_ref(),
                                     spinoff_reason,
                                     cmds.prover_choice,
+                                    true,
                                 )?;
                                 // for bitvector, only one query, no push/pop
                                 if cmds.prover_choice == vir::def::ProverChoice::BitVector {
@@ -1750,6 +1947,50 @@ impl Verifier {
 
                             any_invalid |= command_invalidity;
                             any_timed_out |= command_timed_out;
+
+                            // `-V triage`: check each obligation of the failed query alone. This
+                            // runs in a solver process of its own, without observers or profiling,
+                            // so that nothing of it reaches the queries that come later.
+                            if self.args.triage
+                                && !*profile_rerun
+                                && level == MessageLevel::Error
+                                && !self.expand_flag
+                                && (command_invalidity || command_timed_out)
+                                && cmds.prover_choice != vir::def::ProverChoice::BitVector
+                                && cmds.prover_choice != vir::def::ProverChoice::Singular
+                            {
+                                let mut triage_context = self.new_air_context_with_bucket_context(
+                                    message_interface.clone(),
+                                    function_opgen.ctx(),
+                                    reporter,
+                                    bucket_id,
+                                    Some((&(function.x.name).path, spinoff_context_counter)),
+                                    &bucket_context,
+                                    is_recommend,
+                                    &cmds.context.span,
+                                    None,
+                                    "triage",
+                                    cmds.prover_choice,
+                                    false,
+                                )?;
+                                spinoff_context_counter += 1;
+                                self.apply_per_query_smt_options(
+                                    &mut triage_context,
+                                    cmds.prover_choice,
+                                );
+                                if let Some(rlimit) = function.x.attrs.rlimit {
+                                    if triage_context.rlimit_is_mutable() {
+                                        Self::set_rlimit(&mut triage_context, rlimit);
+                                    }
+                                }
+                                self.report_triage(
+                                    reporter,
+                                    &diagnostics_to_report,
+                                    &mut triage_context,
+                                    &cmds,
+                                    command_timed_out,
+                                );
+                            }
 
                             if let Some(used_axioms) = command_used_axioms {
                                 if used_axioms.len() > 0 {

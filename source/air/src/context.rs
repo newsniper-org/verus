@@ -36,6 +36,41 @@ pub(crate) struct AxiomInfo {
     pub(crate) decl: Decl,
 }
 
+/// Why the solver answered `unknown` (`(get-info :reason-unknown)`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReasonUnknown {
+    /// The solver used up its resource limit (rlimit) or time.
+    Canceled,
+    /// The solver gave up; the string is the reason it gave, such as `(incomplete quantifiers)`
+    /// or, for nonlinear arithmetic, `(incomplete (theory arithmetic))`.
+    Incomplete(String),
+    /// The solver gave no reason (seen when the rlimit is exceeded).
+    Unknown,
+}
+
+/// The result of checking one assertion of a query alone (`Context::triage_query`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TriageOutcome {
+    /// `unsat`: the assertion holds.
+    Proved,
+    /// `sat`: the solver found a model that violates the assertion.
+    Sat,
+    /// `unknown`, for this reason.
+    Unknown(ReasonUnknown),
+}
+
+/// One assertion of a query, checked alone by `Context::triage_query`.
+#[derive(Clone, Debug)]
+pub struct TriageRow {
+    pub assert_id: Option<AssertId>,
+    /// The error that a failure of this assertion reports.
+    pub error: ArcDynMessage,
+    pub outcome: TriageOutcome,
+    /// The resources that the check used (the change in Z3's `rlimit-count`); `None` for other
+    /// solvers.
+    pub rlimit_count: Option<u64>,
+}
+
 #[derive(Debug)]
 pub enum UsageInfo {
     None,
@@ -578,6 +613,70 @@ impl Context {
         self.check_valid_used = true;
 
         validity
+    }
+
+    /// Check each assertion of `query` alone, every other assertion of the query disabled, in a
+    /// solver scope that is popped afterwards, and return a row for each assertion in order.
+    /// This is for diagnostics only: it tells which assertions are not proved on their own, and
+    /// why, but whether the query is valid is the result of `check_valid`, and a row never
+    /// stands in for it. Returns no rows in a context that allows only one query (no push/pop).
+    /// Like `check_valid`, it may not be called while a query is in progress (`finish_query`).
+    ///
+    /// The observers do not see it, and the counters for fresh names are put back afterwards.
+    /// The solver process still runs the checks, which can change how it searches in later
+    /// queries; to keep later queries exactly as they would be, use a context of its own.
+    pub fn triage_query(
+        &mut self,
+        message_interface: &dyn crate::messages::MessageInterface,
+        diagnostics: &impl Diagnostics,
+        query: &Query,
+    ) -> Result<Vec<TriageRow>, ValidityResult> {
+        if self.single_check_query {
+            return Ok(Vec::new());
+        }
+        self.ensure_started();
+        let air_observer = self.air_observer.take();
+        let query_result_observer = self.query_result_observer.take();
+        let counts = (
+            self.axiom_infos_count,
+            self.array_count,
+            self.lambda_count,
+            self.choose_count,
+            self.apply_count,
+        );
+        let rows = self.triage_query_unobserved(message_interface, diagnostics, query);
+        (
+            self.axiom_infos_count,
+            self.array_count,
+            self.lambda_count,
+            self.choose_count,
+            self.apply_count,
+        ) = counts;
+        self.air_observer = air_observer;
+        self.query_result_observer = query_result_observer;
+        rows
+    }
+
+    fn triage_query_unobserved(
+        &mut self,
+        message_interface: &dyn crate::messages::MessageInterface,
+        diagnostics: &impl Diagnostics,
+        query: &Query,
+    ) -> Result<Vec<TriageRow>, ValidityResult> {
+        let query = match crate::typecheck::check_query(self, query) {
+            Ok(query) => query,
+            Err(err) => return Err(ValidityResult::TypeError(err)),
+        };
+        let (query, _snapshots, _local_vars) = crate::var_to_const::lower_query(&query, None);
+        let query = crate::block_to_assert::lower_query(message_interface, &query);
+        self.blank_line();
+        self.comment("triage: each assertion of the query checked alone");
+        crate::smt_verify::smt_triage_query(self, diagnostics, &query)
+    }
+
+    /// The rlimit for each query (0: no limit).
+    pub fn get_rlimit(&self) -> u32 {
+        self.rlimit
     }
 
     pub fn check_valid_used(&self) -> bool {

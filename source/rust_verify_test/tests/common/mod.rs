@@ -430,6 +430,9 @@ pub fn run_verus(
         } else if *option == "-V cvc5-smtlib" {
             verus_args.push("-V".to_string());
             verus_args.push("cvc5-smtlib".to_string());
+        } else if *option == "-V triage" {
+            verus_args.push("-V".to_string());
+            verus_args.push("triage".to_string());
         } else if *option == "--log-smt" {
             verus_args.push("--log".to_string());
             verus_args.push("smt".to_string());

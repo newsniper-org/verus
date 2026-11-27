@@ -124,6 +124,7 @@ pub struct ArgsX {
     pub fip_lint: bool,
     pub fip_lint_fix: bool,
     pub no_bv_simplify: bool,
+    pub triage: bool,
     pub observer: Option<String>,
 }
 
@@ -178,6 +179,7 @@ impl ArgsX {
             fip_lint: Default::default(),
             fip_lint_fix: Default::default(),
             no_bv_simplify: Default::default(),
+            triage: Default::default(),
             observer: None,
         }
     }
@@ -428,6 +430,7 @@ pub fn parse_args_with_imports(
     const EXTENDED_ALLOC_CHECK_STRICT: &str = "alloc-check-strict";
     const EXTENDED_FIP_LINT: &str = "fip-lint";
     const EXTENDED_NO_BV_SIMPLIFY: &str = "no-bv-simplify";
+    const EXTENDED_TRIAGE: &str = "triage";
     const EXTENDED_OBSERVER: &str = "observer";
     const EXTENDED_KEYS: &[(&str, &str)] = &[
         (EXTENDED_IGNORE_UNEXPECTED_SMT, "Ignore unexpected SMT output"),
@@ -467,6 +470,10 @@ pub fn parse_args_with_imports(
         (
             EXTENDED_NO_BV_SIMPLIFY,
             "internal option to disable simplification of bit-vector assertions before sending to the SMT solver",
+        ),
+        (
+            EXTENDED_TRIAGE,
+            "When a function fails to verify or exceeds the rlimit, check each of its proof obligations alone (the others disabled) and report which ones are not proved and why. Diagnostics only: the result of verification does not change",
         ),
         (EXTENDED_OBSERVER, "Observer to run during verification (e.g., test)"),
     ];
@@ -889,6 +896,7 @@ pub fn parse_args_with_imports(
             )),
         },
         no_bv_simplify: extended.contains_key(EXTENDED_NO_BV_SIMPLIFY),
+        triage: extended.contains_key(EXTENDED_TRIAGE),
         observer: match extended.get(EXTENDED_OBSERVER) {
             None => None,
             Some(Some(name)) => Some(name.clone()),

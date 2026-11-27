@@ -3,7 +3,10 @@ use crate::ast::{
     UnaryOp,
 };
 use crate::ast_util::{ident_var, mk_and, mk_not};
-use crate::context::{AssertionInfo, AxiomInfo, Context, ContextState, SmtSolver, ValidityResult};
+use crate::context::{
+    AssertionInfo, AxiomInfo, Context, ContextState, ReasonUnknown, SmtSolver, TriageOutcome,
+    TriageRow, ValidityResult,
+};
 use crate::def::{GLOBAL_PREFIX_LABEL, PREFIX_LABEL};
 use crate::messages::{ArcDynMessage, Diagnostics};
 pub use crate::model::{Model, ModelDef};
@@ -153,6 +156,52 @@ pub(crate) fn parse_version_response(line: &str) -> Option<&str> {
     value.trim_matches(&[' ', '"'][..]).split_whitespace().next()
 }
 
+/// Ask the solver why it answered `unknown`.
+fn smt_get_reason_unknown(
+    context: &mut Context,
+    diagnostics: &impl Diagnostics,
+) -> Result<ReasonUnknown, ValidityResult> {
+    context.smt_log.log_get_info("reason-unknown");
+    let smt_data = context.smt_log.take_pipe_data();
+    let smt_output = context.get_smt_process().send_commands(smt_data);
+
+    // `(:reason-unknown "(incomplete quantifiers)")` -> `(incomplete quantifiers)`
+    fn reason_text(line: &str) -> String {
+        let text = line.strip_prefix("(:reason-unknown").unwrap_or(line);
+        let text = text.strip_suffix(')').unwrap_or(text);
+        text.trim().trim_matches('"').to_string()
+    }
+
+    let mut reason = None;
+    for line in smt_output {
+        if context.solver.reason_unknown_canceled_strs().iter().any(|s| line == *s) {
+            assert!(reason == None);
+            reason = Some(ReasonUnknown::Canceled);
+        } else if line == "(:reason-unknown \"unknown\")" {
+            // it appears this sometimes happens when rlimit is exceeded
+            assert!(reason == None);
+            reason = Some(ReasonUnknown::Unknown);
+        } else if line.starts_with(context.solver.reason_unknown_incomplete_str()) {
+            assert!(reason == None);
+            reason = Some(ReasonUnknown::Incomplete(reason_text(&line)));
+        } else if line
+            == "(:reason-unknown \"smt tactic failed to show goal to be sat/unsat (incomplete quantifiers)\")"
+        {
+            // longer message shows up when there's no push/pop around the query
+            assert!(reason == None);
+            reason = Some(ReasonUnknown::Incomplete("(incomplete quantifiers)".to_string()));
+        } else if context.ignore_unexpected_smt {
+            diagnostics.report(&context.message_interface.bare(
+                crate::messages::MessageLevel::Warning,
+                format!("warning: unexpected SMT output: {}", line).as_str(),
+            ));
+        } else {
+            return Err(ValidityResult::UnexpectedOutput(line));
+        }
+    }
+    Ok(reason.expect("expected :reason-unknown"))
+}
+
 pub(crate) fn smt_check_assertion<'ctx>(
     context: &mut Context,
     diagnostics: &impl Diagnostics,
@@ -292,47 +341,12 @@ pub(crate) fn smt_check_assertion<'ctx>(
         SmtOutput::Unsat => ResultDetermination::Undetermined(true),
         SmtOutput::Sat => ResultDetermination::Undetermined(false),
         SmtOutput::Unknown => {
-            context.smt_log.log_get_info("reason-unknown");
-            let smt_data = context.smt_log.take_pipe_data();
-            let smt_output = context.get_smt_process().send_commands(smt_data);
-
-            #[derive(PartialEq, Eq)]
-            enum SmtReasonUnknown {
-                Canceled,
-                Incomplete,
-                Unknown,
-            }
-
-            let mut reason = None;
-            for line in smt_output {
-                if context.solver.reason_unknown_canceled_strs().iter().any(|s| line == *s) {
-                    assert!(reason == None);
-                    reason = Some(SmtReasonUnknown::Canceled);
-                } else if line == "(:reason-unknown \"unknown\")" {
-                    // it appears this sometimes happens when rlimit is exceeded
-                    assert!(reason == None);
-                    reason = Some(SmtReasonUnknown::Unknown);
-                } else if line.starts_with(context.solver.reason_unknown_incomplete_str()) {
-                    assert!(reason == None);
-                    reason = Some(SmtReasonUnknown::Incomplete);
-                } else if line
-                    == "(:reason-unknown \"smt tactic failed to show goal to be sat/unsat (incomplete quantifiers)\")"
-                {
-                    // longer message shows up when there's no push/pop around the query
-                    assert!(reason == None);
-                    reason = Some(SmtReasonUnknown::Incomplete);
-                } else if context.ignore_unexpected_smt {
-                    diagnostics.report(&context.message_interface.bare(
-                        crate::messages::MessageLevel::Warning,
-                        format!("warning: unexpected SMT output: {}", line).as_str(),
-                    ));
-                } else {
-                    return ValidityResult::UnexpectedOutput(line);
-                }
-            }
-
-            match reason.expect("expected :reason-unknown") {
-                SmtReasonUnknown::Canceled | SmtReasonUnknown::Unknown => {
+            let reason = match smt_get_reason_unknown(context, diagnostics) {
+                Ok(reason) => reason,
+                Err(e) => return e,
+            };
+            match reason {
+                ReasonUnknown::Canceled | ReasonUnknown::Unknown => {
                     context.state = ContextState::Canceled;
                     // Notify observer of timeout/cancellation
                     if let Some(obs) = &context.query_result_observer {
@@ -344,7 +358,7 @@ pub(crate) fn smt_check_assertion<'ctx>(
                     }
                     ResultDetermination::Determined(ValidityResult::Canceled)
                 }
-                SmtReasonUnknown::Incomplete => ResultDetermination::Undetermined(false),
+                ReasonUnknown::Incomplete(_) => ResultDetermination::Undetermined(false),
             }
         }
     };
@@ -741,4 +755,105 @@ pub(crate) fn smt_check_query<'ctx>(
     }
 
     result
+}
+
+/// `Context::triage_query`: `query` has been lowered (one assertion). In a scope that is popped
+/// afterwards, label the assertions as `smt_check_query` does, then check each label in its own
+/// scope with every other label disabled, as `confirm_label` does.
+pub(crate) fn smt_triage_query(
+    context: &mut Context,
+    diagnostics: &impl Diagnostics,
+    query: &Query,
+) -> Result<Vec<TriageRow>, ValidityResult> {
+    context.smt_log.log_push();
+    context.push_name_scope();
+    let rows = smt_triage_query_in_scope(context, diagnostics, query);
+    context.pop_name_scope();
+    context.smt_log.log_pop();
+    rows
+}
+
+fn smt_triage_query_in_scope(
+    context: &mut Context,
+    diagnostics: &impl Diagnostics,
+    query: &Query,
+) -> Result<Vec<TriageRow>, ValidityResult> {
+    for decl in query.local.iter() {
+        if let Err(err) = crate::typecheck::add_decl(context, decl, false) {
+            return Err(ValidityResult::TypeError(err));
+        }
+        smt_add_decl(context, decl);
+    }
+    let assertion = match &*query.assertion {
+        StmtX::Assert(_, _, _, expr) => expr,
+        _ => panic!("internal error: query not lowered"),
+    };
+    let assertion = elim_zero_args_expr(assertion);
+    let mut infos: Vec<AssertionInfo> = Vec::new();
+    let mut axiom_infos: Vec<AxiomInfo> = Vec::new();
+    let labeled_assertion = label_asserts(context, &mut infos, &mut axiom_infos, &assertion);
+    for info in &infos {
+        context.smt_log.comment(&context.message_interface.get_note(&info.error));
+        if let Err(err) = crate::typecheck::add_decl(context, &info.decl, false) {
+            return Err(ValidityResult::TypeError(err));
+        }
+        smt_add_decl(context, &info.decl);
+    }
+    let not_expr = Arc::new(ExprX::Unary(UnaryOp::Not, labeled_assertion));
+    context.smt_log.log_assert(&None, &not_expr);
+
+    let is_z3 = matches!(context.solver, SmtSolver::Z3);
+    let mut rows: Vec<TriageRow> = Vec::new();
+    for (i, info) in infos.iter().enumerate() {
+        context.smt_log.log_push();
+        for (j, other) in infos.iter().enumerate() {
+            if j != i {
+                context.smt_log.log_assert(&None, &mk_not(&ident_var(&other.label)));
+            }
+        }
+        let rlimit_count_before = if is_z3 { Some(smt_get_rlimit_count(context)?) } else { None };
+        if is_z3 {
+            context.smt_log.log_set_option("rlimit", &context.rlimit.to_string());
+        }
+        context.smt_log.log_word("check-sat");
+        let smt_data = context.smt_log.take_pipe_data();
+        let smt_output = context.get_smt_process().send_commands(smt_data);
+        let mut answer: Option<&str> = None;
+        for line in smt_output.iter() {
+            if line == "unsat" || line == "sat" {
+                assert!(answer.is_none());
+                answer = Some(line);
+            } else if line == "unknown" || line == "cvc5 interrupted by timeout." {
+                assert!(answer.is_none());
+                answer = Some("unknown");
+            } else if context.ignore_unexpected_smt {
+                diagnostics.report(&context.message_interface.bare(
+                    crate::messages::MessageLevel::Warning,
+                    format!("warning: unexpected SMT output: {}", line).as_str(),
+                ));
+            } else {
+                return Err(ValidityResult::UnexpectedOutput(line.clone()));
+            }
+        }
+        let outcome = match answer.expect("expected sat/unsat/unknown from SMT solver") {
+            "unsat" => TriageOutcome::Proved,
+            "sat" => TriageOutcome::Sat,
+            _ => TriageOutcome::Unknown(smt_get_reason_unknown(context, diagnostics)?),
+        };
+        if is_z3 {
+            context.smt_log.log_set_option("rlimit", "0");
+        }
+        let rlimit_count = match rlimit_count_before {
+            Some(before) => Some(smt_get_rlimit_count(context)?.saturating_sub(before)),
+            None => None,
+        };
+        context.smt_log.log_pop();
+        rows.push(TriageRow {
+            assert_id: info.assert_id.clone(),
+            error: info.error.clone(),
+            outcome,
+            rlimit_count,
+        });
+    }
+    Ok(rows)
 }
