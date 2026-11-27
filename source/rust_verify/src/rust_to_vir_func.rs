@@ -421,6 +421,7 @@ fn mk_bctx<'tcx>(
         external_body,
         in_ghost: mode != Mode::Exec,
         in_trusted_call: false,
+        in_tactic: false,
         atomically: None,
         migrate_postcondition_vars,
         in_fn_sig: false,

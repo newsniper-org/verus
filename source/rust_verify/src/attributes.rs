@@ -400,6 +400,8 @@ pub(crate) enum Attr {
     TrustedOnly,
     // a block whose calls of `#[verifier::trusted_only]` functions are trusted
     TrustedCall,
+    // the block that a `by(tactic)` script expands to (`#[verus::internal(tactic)]`)
+    Tactic,
     // -V alloc-check: fully in-place (FP²): never deallocates (on a normal return); `strict`
     // also requires constant stack space
     Fip(bool),
@@ -856,6 +858,7 @@ pub(crate) fn parse_attrs(
                     AttrTree::Fun(_, arg, None) if arg == "proof_block" => {
                         v.push(Attr::GhostBlock(GhostBlockAttr::Proof))
                     }
+                    AttrTree::Fun(_, arg, None) if arg == "tactic" => v.push(Attr::Tactic),
                     AttrTree::Fun(_, arg, None) if arg == "external_body" => {
                         v.push(Attr::ExternalBody)
                     }
@@ -1350,6 +1353,8 @@ pub(crate) struct VerifierAttrs {
     pub(crate) alloc_check_skip_drops: bool,
     pub(crate) trusted_only: bool,
     pub(crate) trusted_call: bool,
+    /// the block that a `by(tactic)` script expands to
+    pub(crate) tactic: bool,
     /// `#[verifier::fip]` (`Some(false)`) or `#[verifier::fip(strict)]` (`Some(true)`)
     pub(crate) fip: Option<bool>,
     pub(crate) externals_available_without_declaration: Option<bool>,
@@ -1555,6 +1560,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
         alloc_check_skip_drops: false,
         trusted_only: false,
         trusted_call: false,
+        tactic: false,
         fip: None,
         externals_available_without_declaration: None,
         unerased_proxy: false,
@@ -1644,6 +1650,7 @@ pub(crate) fn get_verifier_attrs_maybe_check(
             Attr::AllocCheckSkipDrops => vs.alloc_check_skip_drops = true,
             Attr::TrustedOnly => vs.trusted_only = true,
             Attr::TrustedCall => vs.trusted_call = true,
+            Attr::Tactic => vs.tactic = true,
             Attr::Fip(strict) => {
                 // (rust_verify's MIR checks and the verifier must agree on the kind)
                 if vs.fip.is_some() {

@@ -42,6 +42,10 @@ use vir::ast_util::{
 };
 use vir::def::field_ident_from_rust;
 
+/// The error for `assume`, `admit` or inline AIR in the block that a `by(tactic)` script expands
+/// to (`#[verus::internal(tactic)]`).
+const TACTIC_NO_ASSUME: &str = "`assume`, `admit` and `inline_air_stmt` are not allowed in a `by(tactic)` script: a tactic may change how a goal is proved, not what is proved";
+
 pub(crate) fn fn_call_to_vir<'tcx>(
     bctx: &BodyCtxt<'tcx>,
     expr: &Expr<'tcx>,
@@ -364,14 +368,13 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
         Some(did) if !bctx.in_ghost => into_forward(bctx, expr.span, f, did, node_substs)?,
         _ => None,
     };
-    let call_target_attrs =
-        vir::ast::CallTargetAttrs {
-            autospec: autospec_usage,
-            assume_external_allowed,
-            const_var,
-            trusted_call: bctx.in_trusted_call,
-            into_forward,
-        };
+    let call_target_attrs = vir::ast::CallTargetAttrs {
+        autospec: autospec_usage,
+        assume_external_allowed,
+        const_var,
+        trusted_call: bctx.in_trusted_call,
+        into_forward,
+    };
     let target = CallTarget::Fun(target_kind, name, typ_args, impl_paths, call_target_attrs);
     Ok(bctx.spanned_typed_new(
         expr.span,
@@ -1097,6 +1100,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                     mk_expr(ExprX::Header(Arc::new(header)))
                 }
                 SpecItem::Admit => {
+                    if bctx.in_tactic {
+                        return err_span(expr.span, TACTIC_NO_ASSUME);
+                    }
                     record_spec_fn_pure_args_only(bctx, expr);
                     internal_err_unless!(args_len == 0, expr.span, "expected admit", args);
                     let f = bctx.spanned_typed_new(
@@ -1107,6 +1113,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                     mk_expr(ExprX::AssertAssume { is_assume: true, expr: f, msg: None })
                 }
                 SpecItem::Assume => {
+                    if bctx.in_tactic {
+                        return err_span(expr.span, TACTIC_NO_ASSUME);
+                    }
                     record_spec_fn_pure_args_only(bctx, expr);
                     let arg = mk_one_vir_arg(bctx, expr.span, &args)?;
                     mk_expr(ExprX::AssertAssume { is_assume: true, expr: arg, msg: None })
@@ -1286,6 +1295,9 @@ fn verus_item_to_vir<'tcx, 'a>(
                 }
             }
             DirectiveItem::InlineAirStmt => {
+                if bctx.in_tactic {
+                    return err_span(expr.span, TACTIC_NO_ASSUME);
+                }
                 if bctx.ctxt.cmd_line_args.allow_inline_air {
                     record_spec_fn_pure_args_only(bctx, expr);
                     internal_err_unless!(args_len == 1, expr.span, "expected air statement", &args);

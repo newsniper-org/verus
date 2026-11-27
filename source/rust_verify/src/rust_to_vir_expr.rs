@@ -1143,7 +1143,29 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
     let mk_expr =
         move |x: ExprX| Ok(ExprOrPlace::Expr(bctx.spanned_typed_new(expr.span, &expr_typ()?, x)));
 
-    if bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(expr.hir_id))?.trusted_call {
+    let block_attrs = bctx.ctxt.get_verifier_attrs(bctx.ctxt.tcx.hir_attrs(expr.hir_id))?;
+    let tactic_bctx;
+    let bctx = if block_attrs.tactic {
+        // the steps of a `by(tactic)` script, expanded into proof code: they may change how a
+        // goal is proved, never what is proved, so they may not assume anything. The mark only
+        // adds this restriction; the block is lowered as usual below. The macro puts it on a
+        // plain block inside the proof of `assert(P) by { .. }`, so a block in executable code,
+        // or a ghost block, did not come from a script.
+        if !bctx.in_ghost
+            || get_ghost_block_opt(bctx.ctxt.tcx.hir_attrs(expr.hir_id)).is_some()
+            || block_attrs.trusted_call
+        {
+            return err_span(
+                expr.span,
+                "`#[verus::internal(tactic)]` is only for the block that a `by(tactic)` script expands to",
+            );
+        }
+        tactic_bctx = BodyCtxt { in_tactic: true, ..bctx.clone() };
+        &tactic_bctx
+    } else {
+        bctx
+    };
+    if block_attrs.trusted_call {
         // a block whose calls of `#[verifier::trusted_only]` functions are trusted (the rest of
         // the block is verified as usual)
         if bctx.ctxt.cmd_line_args.no_cheating {
@@ -4709,6 +4731,14 @@ pub(crate) fn stmt_to_vir<'tcx>(
                         return Ok(vec![]);
                     }
                     ItemKind::Fn { .. } | ItemKind::Const(..) => {
+                        if bctx.in_tactic {
+                            // its body would be checked on its own, outside the tactic block, so
+                            // it could assume what the script may not
+                            return err_span(
+                                stmt.span,
+                                "functions and constants may not be declared in a `by(tactic)` script",
+                            );
+                        }
                         // Nested functions and constants are handled elsewhere as standalone items
                         // It doesn't matter that they also appear here as statements
                         return Ok(vec![]);

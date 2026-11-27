@@ -3530,6 +3530,38 @@ impl Visitor {
             return true;
         }
 
+        // `assert(P) by(tactic) { .. }`: expand the script into `assert(P) by { .. }` first, so
+        // that what it expands to is visited and expanded below like any other proof code
+        if let Expr::Assert(assert) = &*expr {
+            if assert.prover.as_ref().map_or(false, |(_, prover)| prover == "tactic") {
+                let Expr::Assert(assert) = take_expr(expr) else { unreachable!() };
+                match crate::tactic::expand_tactic_assert(assert, |block| {
+                    // `#[verus::internal(tactic)]` marks the block for rust_verify, which then
+                    // allows no `assume`, `admit` or inline AIR inside it
+                    let span = block.brace_token.span.join();
+                    Block {
+                        brace_token: block.brace_token,
+                        stmts: vec![Stmt::Expr(
+                            Expr::Block(ExprBlock {
+                                attrs: vec![mk_verus_attr(span, quote! { tactic })],
+                                label: None,
+                                block,
+                            }),
+                            None,
+                        )],
+                    }
+                }) {
+                    Ok(expanded) => *expr = expanded,
+                    Err(error) => {
+                        let span = error.span();
+                        *expr = Expr::Verbatim(error.to_compile_error());
+                        self.auto_proof_block(expr, span);
+                        return true;
+                    }
+                }
+            }
+        }
+
         self.inside_ghost += 1;
         self.visit_expr_with_arith(expr, InsideArith::None);
         self.inside_ghost -= 1;
@@ -3598,7 +3630,7 @@ impl Visitor {
                     *expr = Expr::Verbatim(quote_spanned!(span => {#assert_x_by}));
                 }
                 _ => {
-                    *expr = quote_verbatim!(span, attrs => ::core::compile_error!("unknown prover name for assert-by (supported provers: 'compute_only', 'compute', 'bit_vector', and 'nonlinear_arith')"));
+                    *expr = quote_verbatim!(span, attrs => ::core::compile_error!("unknown prover name for assert-by (supported provers: 'compute_only', 'compute', 'bit_vector', 'nonlinear_arith', and 'tactic')"));
                 }
             }
         } else if let Some(block) = &assert.body {

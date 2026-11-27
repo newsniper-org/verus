@@ -144,6 +144,9 @@ pub(crate) struct BodyCtxt<'tcx> {
     pub(crate) in_ghost: bool,
     /// inside a `#[verifier::trusted_call]` block
     pub(crate) in_trusted_call: bool,
+    /// inside the block that a `by(tactic)` script expands to, where `assume`, `admit` and
+    /// inline AIR are not allowed
+    pub(crate) in_tactic: bool,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

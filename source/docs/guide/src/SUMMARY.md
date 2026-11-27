@@ -173,6 +173,8 @@
     - [assert ... by](./reference-assert-by.md)
     - [assert forall ... by](./reference-assert-forall-by.md)
     - [assert ... by(...)](./reference-assert-by-prover.md)
+    - [assert ... by(tactic) (fork)](./reference-assert-by-tactic.md)
+      - [assert ... by(tactic) (한국어)](./reference-assert-by-tactic.ko.md)
     - [reveal, reveal_with_fuel, hide](./reference-reveal-hide.md)
     - [reveal_strlit](./reference-reveal-strlit.md)
   - [Prover modes]()
