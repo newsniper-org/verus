@@ -41,7 +41,7 @@ use verus_syn::{Assert, BinOp, Block, Error, Expr, ExprCall, ExprMatch, Pat, Stm
 
 const STEP_NAMES: &[&str] = &[
     "have", "split", "intro", "cases", "unfold", "apply", "inst", "smt", "compute", "show",
-    "isolate",
+    "isolate", "induct",
 ];
 
 type Result<T> = std::result::Result<T, Error>;
@@ -70,6 +70,9 @@ enum StepKind {
     Show,
     /// the options of `#[verus::internal(isolate(..))]`, such as `rlimit(30)`
     Isolate(TokenStream),
+    /// `induct(n)` on a `nat`, or `induct(i, from(lo))` on an `int`, with the base case and the
+    /// step as blocks, or else the rest of the script for both
+    Induct(verus_syn::Ident, Option<Expr>, Option<(Vec<Item>, Vec<Item>)>),
 }
 
 impl StepKind {
@@ -209,6 +212,54 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
                 );
             }
         },
+        "induct" => {
+            let usage = "`induct(n)`, `induct(i, from(lo))`, with the base case and the step as blocks or not: `induct(n, { .. }, { .. })`";
+            let mut args = args.into_iter();
+            let var = match args.next() {
+                Some(Expr::Path(p))
+                    if p.qself.is_none()
+                        && p.path.leading_colon.is_none()
+                        && p.path.segments.len() == 1
+                        && p.path.segments[0].arguments.is_none() =>
+                {
+                    p.path.segments[0].ident.clone()
+                }
+                Some(e) => {
+                    return Err(Error::new(
+                        e.span(),
+                        "`induct`: expected the name of a variable (of type `nat`, or `int` with `from(lo)`)",
+                    ));
+                }
+                None => return wrong_args(usage),
+            };
+            let mut rest: Vec<Expr> = args.collect();
+            let from = match rest.first() {
+                Some(Expr::Call(c))
+                    if c.args.len() == 1
+                        && matches!(&*c.func, Expr::Path(p) if p.path.is_ident("from")) =>
+                {
+                    let lo = c.args[0].clone();
+                    rest.remove(0);
+                    if mentions(&lo, &var) {
+                        return Err(Error::new(
+                            lo.span(),
+                            format!("`induct`: the start in `from(..)` may not use `{}`", var),
+                        ));
+                    }
+                    Some(lo)
+                }
+                _ => None,
+            };
+            let scripts = match rest.len() {
+                0 => None,
+                2 => Some((
+                    block_script(&rest[0], "the base case")?,
+                    block_script(&rest[1], "the step")?,
+                )),
+                _ => return wrong_args(usage),
+            };
+            StepKind::Induct(var, from, scripts)
+        }
         "unfold" => match n {
             1 | 2 => {
                 let mut args = args.into_iter();
@@ -773,6 +824,59 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                         )?);
                     }
                 }
+                return Ok(stmts);
+            }
+            StepKind::Induct(x, from, scripts) => {
+                // the goal as a function of `x` (a closure whose parameter is `x`), proved for the
+                // base case and for the step by `assert forall`, which are the `requires` of a vstd
+                // lemma that then gives it for `x`
+                if scripts.is_some() {
+                    no_rest("`induct` with blocks")?;
+                }
+                let (base_script, step_script) = match scripts {
+                    Some((b, s)) => (&b[..], &s[..]),
+                    None => (rest, rest),
+                };
+                let p = verus_syn::Ident::new("tactic_induct_p", Span::mixed_site());
+                let (base_fact, step_fact) = match from {
+                    None => (format!("{x} == 0"), format!("{x} > 0")),
+                    Some(lo) => {
+                        (format!("{x} == {}", show_expr(lo)), format!("{x} > {}", show_expr(lo)))
+                    }
+                };
+                let base_note = format!("induct: the base case, `{base_fact}`");
+                let step_note =
+                    format!("induct: the step, `{step_fact}`, with the goal for `{x} - 1`");
+                // (in the cases, `x` is bound anew: the facts above about `x` are about the
+                // outer one)
+                let facts = facts.with(format!(
+                    "{x}: {} (bound by `induct`; the facts above that use `{x}` are about the outer `{x}`)",
+                    if from.is_none() { "nat" } else { "int" }
+                ));
+                let base_body = expand_items(goal, base_script, &facts.with(base_fact))?;
+                let base = assert_stmt(span, &base_note, goal, base_body)?;
+                let step_facts =
+                    facts.with(step_fact).with(format!("the goal for `{x} - 1` (as `{x}`)"));
+                let step_body = expand_items(goal, step_script, &step_facts)?;
+                let step_stmt = assert_stmt(span, &step_note, goal, step_body)?;
+                let tokens = match from {
+                    None => quote_spanned_vstd!(vstd, span =>
+                        let #p = |#x: nat| #goal;
+                        assert forall|#x: nat| #x == 0 implies #[trigger] #p(#x) by { #base }
+                        assert forall|#x: nat| #x > 0 && #p((#x - 1) as nat)
+                            implies #[trigger] #p(#x) by { #step_stmt }
+                        #vstd::tactic::lemma_induct_nat(#p, #x);
+                    ),
+                    Some(lo) => quote_spanned_vstd!(vstd, span =>
+                        let #p = |#x: int| #goal;
+                        assert forall|#x: int| #x == (#lo) implies #[trigger] #p(#x) by { #base }
+                        assert forall|#x: int| #x > (#lo) && #p(#x - 1)
+                            implies #[trigger] #p(#x) by { #step_stmt }
+                        #vstd::tactic::lemma_induct_int_from(#p, #lo, #x);
+                    ),
+                };
+                let block: Block = verus_syn::parse2(quote_spanned!(span => { #tokens }))?;
+                stmts.extend(block.stmts);
                 return Ok(stmts);
             }
             StepKind::Cases(b, None) => {

@@ -1003,3 +1003,161 @@ test_verify_one_file! {
         }
     } => Err(err) => assert_vir_error_msg(err, "is only for the block that a `by(tactic)` script expands to")
 }
+
+// `induct(n)` on a `nat`, `induct(i, from(lo))` on an `int`: the goal as a function of the
+// variable, its base case and step proved by `assert forall`, and a vstd lemma
+
+const POW2: &str = verus_code_str! {
+    spec fn pow2(n: nat) -> int decreases n { if n == 0 { 1 } else { 2 * pow2((n - 1) as nat) } }
+};
+
+test_verify_one_file_with_options! {
+    // what a plain proof does not get
+    #[test] induct_nat ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n); }
+        }
+        proof fn blocks(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n, { smt(); }, { have(pow2(n) == 2 * pow2((n - 1) as nat)); }); }
+        }
+        proof fn without(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { smt(); } // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
+    // a wrong base case and a wrong step fail, each with its note
+    #[test] induct_nat_fails ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn bad_base(n: nat) {
+            assert(pow2(n) >= 2) by(tactic) { induct(n); } // FAILS
+        }
+        proof fn bad_step(n: nat) {
+            assert(pow2(n) <= 1) by(tactic) { induct(n); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `induct` (the base case, `n == 0`)")));
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `induct` (the step, `n > 0`")));
+    }
+}
+
+test_verify_one_file_with_options! {
+    // the base case and the step see the function's `requires` and the conditions around the
+    // assertion; a bound variable, from `intro`, can be the one
+    #[test] induct_context ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn r(n: nat, m: nat) requires m <= 1 {
+            assert(pow2(n) >= m) by(tactic) { induct(n); }
+        }
+        proof fn s(n: nat, m: nat) {
+            if m <= 1 {
+                assert(pow2(n) >= m) by(tactic) { induct(n); }
+            }
+        }
+        proof fn bound() {
+            assert(forall|k: nat| pow2(k) >= 1) by(tactic) { intro(); induct(k); }
+        }
+        proof fn inner(n: nat) {
+            // (the step needs `pow2(n - 1)`, for the goal for `n - 1` to apply)
+            assert(forall|j: nat| j <= n ==> #[trigger] pow2(j) >= 1) by(tactic) {
+                induct(n, { }, { have(pow2(n) == 2 * pow2((n - 1) as nat)); });
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] induct_int_from ["vstd"] => POW2.to_string() + verus_code_str! {
+        spec fn tri(i: int) -> int decreases i when i >= 0 { if i <= 0 { 0 } else { i + tri(i - 1) } }
+        proof fn t(i: int) requires i >= 0 {
+            assert(tri(i) >= 0) by(tactic) { induct(i, from(0)); }
+        }
+        proof fn below(i: int) {
+            assert(tri(i) >= 0) by(tactic) { induct(i, from(0)); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("precondition not satisfied"));
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_not_a_variable ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n + 1) >= 1) by(tactic) { induct(n + 1); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("`induct`: expected the name of a variable"))
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_not_nat ["vstd"] => verus_code! {
+        proof fn t(x: int) {
+            assert(x * 0 == 0) by(tactic) { induct(x); }
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("mismatched types")))
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_from_uses_var ["vstd"] => verus_code! {
+        proof fn t(x: int) {
+            assert(x + 0 == x) by(tactic) { induct(x, from(x - 1)); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("may not use `x`"))
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_assume_in_rest ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n) >= 5) by(tactic) { induct(n); admit(); }
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("are not allowed in a `by(tactic)` script")))
+}
+
+test_verify_one_file_with_options! {
+    // a variable start, with blocks; a hypothesis about the induction variable goes in the goal
+    #[test] induct_from_var_and_hypothesis ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(i: int, lo: int) requires lo <= i, lo >= 0 {
+            assert(i >= 0) by(tactic) { induct(i, from(lo), { }, { }); }
+        }
+        proof fn h(n: nat) requires n >= 1 {
+            assert(n >= 1 ==> pow2(n) >= 2) by(tactic) {
+                induct(n);
+                intro();
+                have(pow2(n) == 2 * pow2((n - 1) as nat));
+                have(pow2(0) == 1);
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a fact about the induction variable does not hold in the cases (the variable is new there)
+    #[test] induct_hypothesis_not_carried ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) requires n >= 1 {
+            assert(pow2(n) >= 2) by(tactic) { induct(n); } // FAILS
+        }
+        proof fn u(i: int, lo: int) requires lo <= i {
+            assert(i >= 0) by(tactic) { induct(i, from(lo)); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().any(|e| e.rendered.contains("(the base case, `n == 0`)")));
+        assert!(err.errors.iter().any(|e| e.rendered.contains("(the base case, `i == lo`)")));
+    }
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_blocks_then_more ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n, { }, { }); smt(); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("no steps may follow `induct` with blocks"))
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_arguments ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n, { }); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("expected `induct(n)`"))
+}

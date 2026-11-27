@@ -50,6 +50,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `cases(b)` (a `bool`) | any | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
 | `cases(e)` (a value of an enum) | any | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`, an arm for each variant ([below](#cases-on-an-enum)) |
 | `cases(match e { P => { .. }, .. })` | any | the `match`, with `G` asserted in every arm |
+| `induct(n)` (a `nat`), `induct(i, from(lo))` (an `int`) | any | the base case and the step of an induction on the variable, each `assert(G) by { .. }`, and a vstd lemma ([below](#induction-induct)) |
 | `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);` |
 | `apply(L(a))` | any | `L(a);` (its `ensures` become facts) |
 | `inst(forall\|x: T\| Q, t)` | any | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
@@ -71,6 +72,24 @@ The `..` in a step's expansion is where the rest of the script goes.
   the steps in the rest add ``where `e` is `E::C` ``. The `match` also checks that its arms cover every value. The arms do not bind the
   fields; to name them, use `cases(match ..)`. An enum with one variant has nothing to split
   (an error), and for a reference, write `cases(*e)`.
+- <a id="induction-induct"></a>**Induction: `induct`.** `induct(n)` proves the goal `G` for a
+  variable `n` of type `nat` by induction on `n`. The goal as a function of `n`
+  (`let p = |n: nat| G`) is proved for `n == 0` (the base case) and, for `n > 0`, from the goal
+  for `n - 1` (the step), each as an `assert forall`; then
+  `vstd::tactic::lemma_induct_nat(p, n)` gives the goal for `n`. These `assert forall`
+  statements are the lemma's `requires`, so nothing is assumed.
+  - The rest of the script proves both cases; `induct(n, { .. }, { .. })` takes a block for each
+    instead, and then nothing may follow it.
+  - `induct(i, from(lo))` does the same for an `int` from `lo`. It needs `lo <= i`: if that does
+    not hold, the error is a failed precondition of `vstd::tactic::lemma_induct_int_from`. `lo`
+    may not use `i`.
+  - The cases see the function's `requires` and the conditions around the assertion. But in the
+    cases, `n` is a new variable: what those facts say about `n` is about the `n` outside, and
+    does not hold for it (the base case is checked at `n == 0` whatever they say). To use a
+    hypothesis about `n`, put it in the goal, `assert(H ==> G) by(tactic) { induct(n); intro(); .. }`,
+    or, for an `int`, start at its bound with `from(lo)`. Other variables are not generalized
+    either: a variable defined from `n` before the assertion keeps its value in the step.
+  - It needs vstd.
 - **Steps that close the goal.** `smt(..)` and `compute()` prove the goal; nothing may follow
   them, neither a step nor a statement.
 - **When the script ends.** If the script ends without closing the goal, the solver proves it
@@ -88,8 +107,9 @@ proof fn t(x: int, y: int) {
 }
 ```
 
-When an assertion that `have`, `inst`, `split`, `cases`, `smt()` or `intro` (on an `==>`) generated
-fails, the error says which step it came from. For `intro` on a `forall`, `smt(<prover>, ..)` and
+When an assertion that `have`, `inst`, `split`, `cases`, `induct`, `smt()` or `intro` (on an `==>`)
+generated fails, the error says which step it came from (for `induct`, whether it was the base case
+or the step). For `intro` on a `forall`, `smt(<prover>, ..)` and
 `compute()`, it points at the goal without naming the step.
 
 ```

@@ -51,6 +51,7 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `cases(b)` (`bool`) | 무엇이든 | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
 | `cases(e)` (enum 값) | 무엇이든 | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`. variant마다 갈래가 하나씩 있습니다(아래 참고) |
 | `cases(match e { P => { .. }, .. })` | 무엇이든 | 그 `match`. 모든 갈래에서 `G`를 assert합니다 |
+| `induct(n)` (`nat`), `induct(i, from(lo))` (`int`) | 무엇이든 | 그 변수에 대한 귀납의 기저 경우와 단계. 각각 `assert(G) by { .. }`이고, 마지막에 vstd 보조정리를 부릅니다(아래 참고) |
 | `unfold(f)`, `unfold(f, k)` | 무엇이든 | `reveal(f);`, `reveal_with_fuel(f, k);` |
 | `apply(L(a))` | 무엇이든 | `L(a);` (그 `ensures`가 사실이 됩니다) |
 | `inst(forall\|x: T\| Q, t)` | 무엇이든 | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
@@ -71,6 +72,21 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
   ``(`e` is `E::C`)``가, 나머지 step이 만든 assertion의 오류에는 ``where `e` is `E::C` ``가 붙습니다. 이 `match`는 갈래들이 모든 값을 덮는지도
   검사합니다. 갈래는 field를 묶지 않으니, field에 이름을 붙이려면 `cases(match ..)`를 쓰세요. variant가
   하나뿐인 enum은 나눌 것이 없어 오류이고, 참조에는 `cases(*e)`라고 쓰세요.
+- **귀납: `induct`:** `induct(n)`은 `nat` 타입 변수 `n`에 대한 귀납으로 goal `G`를 증명합니다. `n`의
+  함수로 본 goal(`let p = |n: nat| G`)을 `n == 0`일 때(기저 경우)와, `n > 0`일 때 `n - 1`에 대한 goal로부터
+  (단계) 각각 `assert forall`로 증명합니다. 그다음 `vstd::tactic::lemma_induct_nat(p, n)`이 `n`에 대한
+  goal을 줍니다. 이 `assert forall`들이 바로 그 보조정리의 `requires`이므로, 가정하는 것은 없습니다.
+  - script의 나머지가 두 경우를 모두 증명합니다. `induct(n, { .. }, { .. })`는 경우마다 블록을 따로
+    받으며, 그 뒤에는 아무것도 올 수 없습니다.
+  - `induct(i, from(lo))`는 `lo`부터 `int`에 대해 같은 일을 합니다. `lo <= i`가 필요하고, 성립하지 않으면
+    `vstd::tactic::lemma_induct_int_from`의 precondition 실패로 오류가 납니다. `lo`는 `i`를 쓸 수 없습니다.
+  - 두 경우 모두 함수의 `requires`와 assertion을 둘러싼 조건을 봅니다. 하지만 각 경우에서 `n`은 새
+    변수입니다. 그 사실들이 `n`에 대해 말하는 것은 바깥의 `n`에 대한 것이라 새 `n`에는 성립하지 않습니다
+    (기저 경우는 그 사실들과 상관없이 `n == 0`에서 검사됩니다). `n`에 대한 가정을 쓰려면 goal에 넣으세요:
+    `assert(H ==> G) by(tactic) { induct(n); intro(); .. }`. `int`라면 `from(lo)`로 그 경계에서 시작할 수도
+    있습니다. 다른 변수도 일반화하지 않습니다. assertion 전에 `n`으로 정의한 변수는 단계에서도 원래 값을
+    유지합니다.
+  - vstd가 필요합니다.
 - **goal을 닫는 step:** `smt(..)`와 `compute()`는 goal을 증명합니다. 그 뒤에는 step도 평범한 문장도
   올 수 없습니다.
 - **script가 끝날 때:** goal을 닫지 않고 script가 끝나면, solver가 script가 세운 사실로 goal을
@@ -88,8 +104,8 @@ proof fn t(x: int, y: int) {
 }
 ```
 
-`have`, `inst`, `split`, `cases`, `smt()`, `==>`에 쓴 `intro`가 만든 assertion이 실패하면, 오류가 그
-assertion을 만든 step을 알려 줍니다. `forall`에 쓴 `intro`, `smt(<prover>, ..)`, `compute()`는 step
+`have`, `inst`, `split`, `cases`, `induct`, `smt()`, `==>`에 쓴 `intro`가 만든 assertion이 실패하면, 오류가
+그 assertion을 만든 step을 알려 줍니다(`induct`는 기저 경우인지 단계인지도 알려 줍니다). `forall`에 쓴 `intro`, `smt(<prover>, ..)`, `compute()`는 step
 이름 없이 goal을 가리킵니다.
 
 ```
