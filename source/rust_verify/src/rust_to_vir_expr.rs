@@ -1189,7 +1189,9 @@ pub(crate) fn block_expr_to_vir_inner<'tcx>(
                 "`#[verus::internal(tactic)]` is only for the block that a `by(tactic)` script expands to",
             );
         }
-        tactic_bctx = BodyCtxt { in_tactic: true, ..bctx.clone() };
+        // (a script starts with its own goal: `tactic_goal()` of an enclosing script does not
+        // reach into it)
+        tactic_bctx = BodyCtxt { in_tactic: true, tactic_goal: None, ..bctx.clone() };
         &tactic_bctx
     } else {
         bctx

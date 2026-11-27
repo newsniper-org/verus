@@ -81,9 +81,11 @@ impl StepKind {
     }
 }
 
-/// The facts that the script added so far, for `show()`.
+/// The facts that the script added so far, for `show()`; and whether the steps are in the rest
+/// of a script shared by the parts of a `split` of the goal after `unfold` (whose goal is not
+/// known when the rest is lowered: there, no step may look at the goal)
 #[derive(Clone, Default)]
-struct Facts(Vec<String>);
+struct Facts(Vec<String>, bool);
 
 impl Facts {
     fn with(&self, fact: String) -> Facts {
@@ -91,6 +93,89 @@ impl Facts {
         facts.0.push(fact);
         facts
     }
+
+    fn shared(&self) -> Facts {
+        Facts(self.0.clone(), true)
+    }
+}
+
+/// The goal after an `unfold` that later steps work on: the macro cannot write it, so it writes
+/// `tactic_goal()` (rust_verify's `tactic_to_vir.rs` has it)
+fn hole(span: Span) -> Result<Expr> {
+    parse_expr(quote_spanned_builtin!(verus_builtin, span => #verus_builtin::tactic_goal()))
+}
+
+fn is_hole(goal: &Expr) -> bool {
+    match strip_parens(goal) {
+        Expr::Call(c) if c.args.is_empty() => match &*c.func {
+            Expr::Path(p) => p.path.segments.last().map_or(false, |s| s.ident == "tactic_goal"),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Is `unfold(f)` (at the start of `rest`) to work on the goal, for a later step that needs it?
+/// Yes if the next step that looks at the goal is a `split` that cannot work on the goal as
+/// written (in the source; or the goal is already the one after an `unfold`). The steps that
+/// keep the goal are passed over, and so is another `unfold` when the goal calls `f` (`f` is
+/// unfolded first, and the next `unfold` works on the result).
+fn unfold_is_semantic(goal: &Expr, f: &Expr, rest: &[Item]) -> bool {
+    for item in rest {
+        let Item::Step(step) = item else { continue };
+        match &step.kind {
+            StepKind::Split(_) => {
+                return is_hole(goal) || split_goal(goal, step.span).is_err();
+            }
+            StepKind::Unfold(..) if is_hole(goal) || calls(goal, f) => {}
+            StepKind::Intro
+            | StepKind::Cases(_, Some(_))
+            | StepKind::CasesMatch(..)
+            | StepKind::Induct(..)
+            | StepKind::Unfold(..)
+            | StepKind::Smt(..)
+            | StepKind::Compute => return false,
+            StepKind::Have(_)
+            | StepKind::Apply(_)
+            | StepKind::Inst(..)
+            | StepKind::Show
+            | StepKind::Cases(_, None)
+            | StepKind::Isolate(_) => {}
+        }
+    }
+    false
+}
+
+/// Does `e` call the function `f` (a path: compared by its last segment)?
+fn calls(e: &Expr, f: &Expr) -> bool {
+    let Expr::Path(fp) = f else { return false };
+    let Some(name) = fp.path.segments.last().map(|s| s.ident.clone()) else { return false };
+    struct Finder(verus_syn::Ident, bool);
+    impl<'ast> verus_syn::visit::Visit<'ast> for Finder {
+        fn visit_expr_call(&mut self, c: &'ast verus_syn::ExprCall) {
+            if let Expr::Path(p) = &*c.func {
+                if p.path.segments.last().map_or(false, |s| s.ident == self.0) {
+                    self.1 = true;
+                }
+            }
+            verus_syn::visit::visit_expr_call(self, c);
+        }
+    }
+    let mut finder = Finder(name, false);
+    verus_syn::visit::Visit::visit_expr(&mut finder, e);
+    finder.1
+}
+
+/// A step that looks at the goal after `unfold` in the rest of a script shared by the parts of a
+/// `split`
+fn shared_err(span: Span, what: &str) -> Error {
+    Error::new(
+        span,
+        format!(
+            "{} cannot be used here: after `unfold` and `split()`, the rest of the script is shared by the parts, whose goals are not known yet; give each part its own block, `split({{ .. }}, {{ .. }})`",
+            what
+        ),
+    )
 }
 
 /// Expand `assert(P) by(tactic) { .. }` into `assert(P) by { .. }`. `mark` wraps the generated
@@ -655,6 +740,23 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 stmts.push(assert_stmt(span, "have", q, vec![])?);
                 facts = facts.with(show_expr(q));
             }
+            StepKind::Unfold(f, fuel) if unfold_is_semantic(goal, f, rest) => {
+                // the goal with `f` unfolded, for the later steps: rust_verify unfolds it
+                // (`tactic_to_vir.rs`), and the rest of the script proves it
+                if facts.1 {
+                    return Err(shared_err(span, "`unfold` (with a `split` after it)"));
+                }
+                let reveal = match fuel {
+                    None => quote_spanned!(span => reveal(#f);),
+                    Some(k) => quote_spanned!(span => reveal_with_fuel(#f, #k);),
+                };
+                let facts = facts.with(format!("`{}` unfolded in the goal", show_expr(f)));
+                let body = expand_items(&hole(span)?, rest, &facts)?;
+                stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                    #verus_builtin::tactic_unfold(#goal, { #reveal }, { #(#body)* });
+                ))?);
+                return Ok(stmts);
+            }
             StepKind::Unfold(f, None) => {
                 stmts.push(parse_stmt(quote_spanned!(span => reveal(#f);))?);
                 facts = facts.with(format!("`{}` unfolded", show_expr(f)));
@@ -733,6 +835,12 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
             StepKind::Compute => {
                 stmts.push(parse_stmt(quote_spanned!(span => assert(#goal) by(compute);))?);
             }
+            StepKind::Intro if is_hole(goal) => {
+                return Err(Error::new(
+                    span,
+                    "`intro()` on the goal after `unfold` is not supported yet: introduce the variables before `unfold`, or use `assert forall` in the script",
+                ));
+            }
             StepKind::Intro => {
                 if let Some((pats, attrs, body)) = as_forall(goal) {
                     let bound = pats.iter().map(show_pat).collect::<Vec<_>>().join(", ");
@@ -764,6 +872,29 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                             show_expr(goal)
                         ),
                     ));
+                }
+                return Ok(stmts);
+            }
+            StepKind::Split(scripts) if is_hole(goal) => {
+                // the goal after `unfold`: rust_verify splits it (`tactic_to_vir.rs`)
+                if facts.1 {
+                    return Err(shared_err(span, "`split`"));
+                }
+                if scripts.is_empty() {
+                    let body = expand_items(goal, rest, &facts.shared())?;
+                    stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                        #verus_builtin::tactic_split({ #(#body)* });
+                    ))?);
+                } else {
+                    no_rest("`split` with blocks")?;
+                    let mut blocks = vec![];
+                    for script in scripts.iter() {
+                        let body = expand_items(goal, script, &facts)?;
+                        blocks.push(quote_spanned!(span => { #(#body)* }));
+                    }
+                    stmts.push(parse_stmt(quote_spanned_builtin!(verus_builtin, span =>
+                        #verus_builtin::tactic_split_each((#(#blocks,)*));
+                    ))?);
                 }
                 return Ok(stmts);
             }
@@ -825,6 +956,12 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                     }
                 }
                 return Ok(stmts);
+            }
+            StepKind::Induct(..) if is_hole(goal) => {
+                return Err(Error::new(
+                    span,
+                    "`induct` on the goal after `unfold` is not supported: put `induct` before `unfold`",
+                ));
             }
             StepKind::Induct(x, from, scripts) => {
                 // the goal as a function of `x` (a closure whose parameter is `x`), proved for the
@@ -921,7 +1058,12 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                 for (k, (arm, script)) in m.arms.iter_mut().zip(scripts.iter()).enumerate() {
                     // the goal is asserted inside the arm, where a name the pattern binds
                     // would mean the new variable, not the one the goal is about
-                    if let Some(x) = pat_names(&arm.pat).into_iter().find(|x| mentions(goal, x)) {
+                    // (after `unfold`, the goal is not written here: its variables are rust_verify's,
+                    // which a pattern cannot capture)
+                    if let Some(x) = pat_names(&arm.pat)
+                        .into_iter()
+                        .find(|x| !is_hole(goal) && mentions(goal, x))
+                    {
                         return Err(Error::new(
                             x.span(),
                             format!(
@@ -962,7 +1104,12 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
 
 /// `show()`: a note at the step with the goal and the facts that the script added.
 fn show_note(span: Span, goal: &Expr, facts: &Facts) {
-    let mut msg = format!("tactic: the goal here is\n    {}", show_expr(goal));
+    let mut msg = if is_hole(goal) {
+        "tactic: the goal here is the one after `unfold`, which this note cannot show yet"
+            .to_string()
+    } else {
+        format!("tactic: the goal here is\n    {}", show_expr(goal))
+    };
     if facts.0.is_empty() {
         msg.push_str("\nthe script has added no facts before this step");
     } else {

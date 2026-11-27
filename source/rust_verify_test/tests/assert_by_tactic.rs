@@ -1188,3 +1188,231 @@ test_verify_one_file! {
         assert!(err.errors[0].rendered.contains("`e` is `E::A`"));
     }
 }
+
+// `unfold(f)` followed by `split`: the goal with `f` unfolded (one level), split into its parts
+// (rust_verify's `tactic_to_vir.rs`)
+
+const INV: &str = verus_code_str! {
+    #[verifier::opaque]
+    spec fn inv(x: int) -> bool { x > 0 && x < 10 && x != 5 }
+    spec fn sel(b: bool, x: int) -> bool { if b { x > 0 } else { x < 0 } }
+    spec fn r(n: nat) -> bool decreases n { n >= 0 && (n > 0 ==> r((n - 1) as nat)) }
+};
+
+test_verify_one_file! {
+    // a part that does not hold fails, with its note (the split of the text goal `inv(x)`, a
+    // call, was an error before)
+    #[test] unfold_split INV.to_string() + verus_code_str! {
+        proof fn ok(x: int) requires x == 3 {
+            assert(inv(x)) by(tactic) { unfold(inv); split(); }
+        }
+        proof fn bad(x: int) requires x == 5 {
+            assert(inv(x)) by(tactic) { unfold(inv); split(); }
+        }
+        proof fn blocks(y: int) requires 0 < y < 4 {
+            assert(inv(y + 1)) by(tactic) {
+                unfold(inv);
+                split({ }, { have(y + 1 < 10); }, { smt(); });
+            }
+        }
+        proof fn ite(b: bool, x: int) requires b ==> x == 1, !b ==> x == -1 {
+            assert(sel(b, x)) by(tactic) { unfold(sel); split(); }
+        }
+        // one level: `r(n - 1)` stays a call
+        proof fn one_level(n: nat) requires n > 1 {
+            assert(r(n)) by(tactic) { unfold(r); split(); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `split` (part 3 of 3, after `unfold`)")));
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `split` (part 2 of 2, after `unfold`)")));
+    }
+}
+
+test_verify_one_file! {
+    // the steps after `unfold` and `split` (cases, and isolate in the rest shared by the parts),
+    // in an exec function (erasure); the caller's argument has the source name of `f`'s bound
+    // variable (a different variable)
+    #[test] unfold_split_more INV.to_string() + SUM + verus_code_str! {
+        #[verifier::opaque]
+        spec fn allpos(s: spec_fn(int) -> int, n: int, i: int) -> bool {
+            i >= 0 && forall|j: int| 0 <= j < n ==> #[trigger] s(j) > i
+        }
+        proof fn capture(j: int, s: spec_fn(int) -> int, n: int)
+            requires j == 0, forall|k: int| 0 <= k < n ==> #[trigger] s(k) > 0
+        {
+            assert(allpos(s, n, j)) by(tactic) { unfold(allpos); split(); }
+        }
+        fn e(x: u64) requires x == 3 {
+            proof {
+                assert(inv(x as int)) by(tactic) { unfold(inv); split(); cases(x > 2); }
+            }
+        }
+        #[verifier::rlimit(0.02)]
+        proof fn isolated_shared(x: int) requires x == 3 {
+            assert(inv(x)) by(tactic) { unfold(inv); split(); isolate(rlimit = 10); }
+        }
+        #[verifier::rlimit(0.02)]
+        proof fn isolated(x: int) requires x == 3 {
+            assert(inv(x) && sum(12) == 78) by(tactic) {
+                split({ unfold(inv); split(); }, { isolate(rlimit = 10); unfold(sum, 13); });
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a generic function of another crate (vstd)
+    #[test] unfold_split_imported ["vstd"] => verus_code! {
+        use vstd::relations::*;
+        proof fn po(r: spec_fn(int, int) -> bool)
+            requires reflexive(r), transitive(r), antisymmetric(r)
+        {
+            assert(partial_ordering(r)) by(tactic) { unfold(partial_ordering); split(); }
+        }
+        proof fn not_po(r: spec_fn(int, int) -> bool) requires reflexive(r), transitive(r) {
+            assert(partial_ordering(r)) by(tactic) { unfold(partial_ordering); split(); }
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].rendered.contains("from the tactic step `split` (part 3 of 3, after `unfold`)"));
+    }
+}
+
+test_verify_one_file! {
+    // a `split` of the goal as written expands the rest for each part: there, `unfold` and
+    // `split` work on each part's goal
+    #[test] unfold_split_after_text_split INV.to_string() + verus_code_str! {
+        proof fn t(x: int, y: int) requires x == 3, y == 4 {
+            assert(inv(x) && inv(y)) by(tactic) { split(); unfold(inv); split(); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_split_shared_twice INV.to_string() + verus_code_str! {
+        proof fn t(x: int) requires x == 3 {
+            assert(inv(x)) by(tactic) { unfold(inv); split(); split(); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("give each part its own block"))
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_no_call INV.to_string() + verus_code_str! {
+        proof fn t(x: int) requires x == 3 {
+            assert(sel(true, x)) by(tactic) { unfold(inv); split(); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the goal has no call of `inv`")
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_not_visible verus_code! {
+        mod m {
+            use super::*;
+            pub closed spec fn c(x: int) -> bool { x > 0 && x < 10 }
+        }
+        proof fn t(x: int) {
+            assert(m::c(x)) by(tactic) { unfold(m::c); split(); }
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("`unfold(c)`: the body of `c` is not visible here")))
+}
+
+test_verify_one_file! {
+    // the proofs of two spec functions unfold each other: an error, not an endless lowering
+    #[test] error_unfold_cycle verus_code! {
+        spec fn f(n: nat) -> bool decreases n {
+            proof { assert(g(n) || true) by(tactic) { unfold(g); split(); } }
+            n >= 0 && n >= 0
+        }
+        spec fn g(n: nat) -> bool decreases n {
+            proof { assert(f(n) || true) by(tactic) { unfold(f); split(); } }
+            n >= 0 && n >= 0
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("a cycle") || e.message.contains("its definition has errors")))
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_then_intro INV.to_string() + verus_code_str! {
+        spec fn q(x: int) -> bool { forall|i: int| i > x ==> i > x - 1 }
+        proof fn t(x: int) {
+            assert(q(x)) by(tactic) { unfold(q); split({ intro(); }, { }); }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("`intro()` on the goal after `unfold` is not supported yet"))
+}
+
+test_verify_one_file! {
+    #[test] error_tactic_markers_direct verus_code! {
+        proof fn t(x: int) {
+            ::verus_builtin::tactic_split({ });
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is a step of a `by(tactic)` script, and is not used directly")
+}
+
+test_verify_one_file! {
+    // a parameter used several times, through fields, and an argument that is not a variable:
+    // each copy of it gets its own ids
+    #[test] unfold_split_fields verus_code! {
+        struct P { a: u64, b: u64 }
+        #[verifier::opaque]
+        spec fn ok(p: P) -> bool { p.a > 0 && p.b > p.a && p.a + p.b < 100 }
+        proof fn t(q: P) requires q.a == 1, q.b == 2 {
+            assert(ok(q)) by(tactic) { unfold(ok); split(); }
+            assert(ok(P { a: q.a, b: (q.b + 1) as u64 })) by(tactic) { unfold(ok); split(); }
+        }
+        fn e(x: u64) requires x == 1 {
+            let p = P { a: x, b: 2 };
+            proof {
+                assert(ok(p)) by(tactic) { unfold(ok); split(); }
+            }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    // `unfold(f)` before another `unfold` and `cases`: `f` is unfolded first (the goal calls it),
+    // and the next `unfold` works on the result
+    #[test] unfold_twice_and_cases verus_code! {
+        #[verifier::opaque]
+        spec fn g(x: int) -> bool { x > 0 && x < 10 }
+        #[verifier::opaque]
+        spec fn f(x: int) -> bool { g(x) && x != 5 }
+        proof fn t(x: int) requires x == 3 {
+            assert(f(x)) by(tactic) { unfold(f); unfold(g); split(); }
+            assert(f(x)) by(tactic) { unfold(f); cases(x > 1); split(); }
+        }
+        proof fn u(x: int) requires x == 10 {
+            assert(f(x)) by(tactic) { unfold(f); unfold(g); split(); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].rendered.contains("from the tactic step `split` (part 2 of 3, after `unfold`)"));
+    }
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_when verus_code! {
+        spec fn p(i: int) -> bool decreases i when i >= 0 { i >= 0 && (i == 0 || p(i - 1)) }
+        proof fn t(x: int) requires x == 0 {
+            assert(p(x)) by(tactic) { unfold(p); split(); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "has a `decreases .. when` clause")
+}
+
+test_verify_one_file! {
+    #[test] error_unfold_trigger_arg verus_code! {
+        spec fn allpos(s: spec_fn(int) -> int, n: int) -> bool {
+            n >= 0 && forall|j: int| 0 <= j < n ==> #[trigger] s(j) > 0
+        }
+        proof fn t(n: int) {
+            assert(allpos(|k: int| k + 1, n)) by(tactic) { unfold(allpos); split(); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is used in a trigger of `allpos`'s body")
+}
+
+test_verify_one_file! {
+    #[test] error_tactic_markers_in_script verus_code! {
+        proof fn t(x: int) {
+            assert(x == x) by(tactic) { ::verus_builtin::tactic_split({ }); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is not used directly")
+}

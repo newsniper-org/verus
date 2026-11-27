@@ -289,6 +289,11 @@ pub(crate) enum AssertItem {
     AssertBitVector,
     // the `cases(e)` step of a `by(tactic)` script
     TacticCases,
+    // the steps of a `by(tactic)` script on the goal after `unfold` (`tactic_to_vir.rs`)
+    TacticUnfold,
+    TacticSplit,
+    TacticSplitEach,
+    TacticGoal,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -650,6 +655,10 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::assert_forall_by",        VerusItem::Assert(AssertItem::AssertForallBy)),
         ("verus::verus_builtin::assert_bit_vector",       VerusItem::Assert(AssertItem::AssertBitVector)),
         ("verus::verus_builtin::tactic_cases",            VerusItem::Assert(AssertItem::TacticCases)),
+        ("verus::verus_builtin::tactic_unfold",           VerusItem::Assert(AssertItem::TacticUnfold)),
+        ("verus::verus_builtin::tactic_split",            VerusItem::Assert(AssertItem::TacticSplit)),
+        ("verus::verus_builtin::tactic_split_each",       VerusItem::Assert(AssertItem::TacticSplitEach)),
+        ("verus::verus_builtin::tactic_goal",             VerusItem::Assert(AssertItem::TacticGoal)),
         ("verus::verus_builtin::use_type_invariant",      VerusItem::UseTypeInvariant),
 
         ("verus::verus_builtin::with_triggers",           VerusItem::WithTriggers),

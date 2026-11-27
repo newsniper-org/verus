@@ -424,6 +424,7 @@ fn mk_bctx<'tcx>(
         in_trusted_call: false,
         in_tactic: false,
         in_assert_by_proof: false,
+        tactic_goal: None,
         atomically: None,
         migrate_postcondition_vars,
         in_fn_sig: false,

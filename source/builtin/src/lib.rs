@@ -516,6 +516,40 @@ pub fn tactic_cases<A>(_e: A, _case: ()) {
     unimplemented!();
 }
 
+/// The `unfold(f)` step of a `by(tactic)` script, when later steps work on the result: the goal
+/// with the calls of `f` replaced by its body (one level), proved by `rest`
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_unfold"]
+#[verifier::proof]
+pub fn tactic_unfold(_goal: bool, _reveal: (), _rest: ()) {
+    unimplemented!();
+}
+
+/// The `split()` step of a `by(tactic)` script on the goal after `unfold`: `rest` proves each part
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_split"]
+#[verifier::proof]
+pub fn tactic_split(_rest: ()) {
+    unimplemented!();
+}
+
+/// The `split({ .. }, ..)` step of a `by(tactic)` script on the goal after `unfold`: a tuple of
+/// blocks, one for each part
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_split_each"]
+#[verifier::proof]
+pub fn tactic_split_each<A>(_parts: A) {
+    unimplemented!();
+}
+
+/// The current goal of a `by(tactic)` script, after `unfold` (which the macro cannot write)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_goal"]
+#[verifier::spec]
+pub fn tactic_goal() -> bool {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::assert_bit_vector"]
 #[verifier::proof]

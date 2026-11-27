@@ -151,6 +151,9 @@ pub(crate) struct BodyCtxt<'tcx> {
     /// spec one and allows no assignment (`in_assert_by_body`): the only place for the block
     /// of a `by(tactic)` script, since its steps (`tactic_cases`) are erased as spec code
     pub(crate) in_assert_by_proof: bool,
+    /// the goal of a `by(tactic)` script after `unfold`, which `tactic_goal()` stands for
+    /// (`tactic_to_vir.rs`)
+    pub(crate) tactic_goal: Option<vir::ast::Expr>,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

@@ -63,6 +63,9 @@ pub(crate) struct State<'tcx> {
     cache_anon_const_infos: HashMap<Fun, Res<Arc<FunctionOrConstInfo<'tcx>>>>,
     /// Pre-check functions, immediately after translation from HIR
     cache_unchecked_functions: HashMap<Fun, Res<(Function, Arc<ErasureInfo>)>>,
+    /// Functions being translated from HIR (`finish_item` has not returned): the `unfold` step
+    /// of a `by(tactic)` script reads another function's body, which must not be one of these
+    in_progress_unchecked: HashSet<Fun>,
     /// Completed functions
     cache_checked_functions: HashMap<
         Fun,
@@ -124,6 +127,7 @@ impl<'tcx> Query<'tcx> {
                 cache_all_function_stubs: None,
                 cache_anon_const_infos: HashMap::new(),
                 cache_unchecked_functions: HashMap::new(),
+                in_progress_unchecked: HashSet::new(),
                 cache_checked_functions: HashMap::new(),
                 cache_exportable_crate: None,
                 cache_merged_crate: None,
@@ -416,11 +420,18 @@ impl<'tcx> Query<'tcx> {
         Ok(self.get_unchecked_function_pair(fun)?.1.clone())
     }
 
+    /// Is the function being translated from HIR? (`get_unchecked_function` on it would not end)
+    pub fn unchecked_function_in_progress(&self, fun: &Fun) -> bool {
+        self.state.borrow().in_progress_unchecked.contains(fun)
+    }
+
     pub fn get_unchecked_function_pair(&self, fun: &Fun) -> Res<(Function, Arc<ErasureInfo>)> {
         let state = self.state.borrow();
         if let Some(f) = state.cache_unchecked_functions.get(fun) {
             return f.clone();
         }
+        // (a cycle, which the callers that can make one, `unfold`, rule out first)
+        assert!(!state.in_progress_unchecked.contains(fun), "cycle in translating {:?}", fun);
         std::mem::drop(state);
 
         let pre_crate = self.get_pre_crate()?;
@@ -434,7 +445,19 @@ impl<'tcx> Query<'tcx> {
             }
         };
         let mut new_functions = vec![];
+        {
+            let mut state = self.state.borrow_mut();
+            for stub in info.iter_stubs() {
+                state.in_progress_unchecked.insert(stub.x.name.clone());
+            }
+        }
         let result = finish_item(ctxt, &info, &mut new_functions);
+        {
+            let mut state = self.state.borrow_mut();
+            for stub in info.iter_stubs() {
+                state.in_progress_unchecked.remove(&stub.x.name);
+            }
+        }
         ctxt.flush_diagnostics(&*self.reporter);
 
         match result {

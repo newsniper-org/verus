@@ -1997,7 +1997,7 @@ where
     }
 }
 
-pub(crate) fn map_expr_visitor_env<E, FE, FS, FT, FPL, FP>(
+pub fn map_expr_visitor_env<E, FE, FS, FT, FPL, FP>(
     expr: &Expr,
     map: &mut VisitorScopeMap,
     env: &mut E,

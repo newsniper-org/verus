@@ -52,7 +52,7 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `cases(e)` (enum 값) | 무엇이든 | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`. variant마다 갈래가 하나씩 있습니다(아래 참고) |
 | `cases(match e { P => { .. }, .. })` | 무엇이든 | 그 `match`. 모든 갈래에서 `G`를 assert합니다 |
 | `induct(n)` (`nat`), `induct(i, from(lo))` (`int`) | 무엇이든 | 그 변수에 대한 귀납의 기저 경우와 단계. 각각 `assert(G) by { .. }`이고, 마지막에 vstd 보조정리를 부릅니다(아래 참고) |
-| `unfold(f)`, `unfold(f, k)` | 무엇이든 | `reveal(f);`, `reveal_with_fuel(f, k);` |
+| `unfold(f)`, `unfold(f, k)` | 무엇이든 | `reveal(f);`, `reveal_with_fuel(f, k);`. 그것이 필요한 `split` 앞에서는 `f`를 펼친 goal도 만듭니다(아래 참고) |
 | `apply(L(a))` | 무엇이든 | `L(a);` (그 `ensures`가 사실이 됩니다) |
 | `inst(forall\|x: T\| Q, t)` | 무엇이든 | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
 | `smt()` | 무엇이든 | `assert(G);` |
@@ -72,6 +72,35 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
   ``(`e` is `E::C`)``가, 나머지 step이 만든 assertion의 오류에는 ``where `e` is `E::C` ``가 붙습니다. 이 `match`는 갈래들이 모든 값을 덮는지도
   검사합니다. 갈래는 field를 묶지 않으니, field에 이름을 붙이려면 `cases(match ..)`를 쓰세요. variant가
   하나뿐인 enum은 나눌 것이 없어 오류이고, 참조에는 `cases(*e)`라고 쓰세요.
+- **goal 펼치기: `unfold` 다음 `split`:** `unfold(f)` 뒤에 `split`이 오는데, 쓰여 있는 goal이 `split`이 나눌
+  수 있는 것(conjunction, `<==>`, `if`)이 아니면(예를 들어 `f`의 호출이면), `unfold(f)`는 goal에도
+  작용합니다. rust_verify가 goal 안의 각 `f` 호출을 `f`의 본문으로 바꾸고(한 단계만: 본문 안의 `f` 호출은
+  그대로 둡니다) 매개변수 자리에 인자를 넣습니다. script의 나머지가 그 goal을 증명하고, `split`은 그것을
+  부분으로 나눕니다(conjunction, 또는 `else`가 있는 `if`. 거기서 `<==>`는 아직 나누지 않습니다).
+  - `unfold`와 `split` 사이에는 `have`, `apply`, `inst`, `show`, `cases(b)`, `isolate`가 올 수 있습니다.
+    goal이 `f`를 부르면 그 사이의 다른 `unfold(g)`도 결과에 작용합니다(`unfold(f); unfold(g); split()`).
+    그렇지 않으면 `split`에 가장 가까운 `unfold`만 goal에 작용하고, 그 앞의 것들은 함수를 reveal만
+    합니다. 한 부분 안의 함수에는 블록을 쓰세요: `unfold(f); split({ unfold(g); split(); }, { .. })`.
+  ```rust
+  #[verifier::opaque]
+  spec fn inv(x: int) -> bool { x > 0 && x < 10 && x != 5 }
+  proof fn p(x: int) requires x == 5 {
+      assert(inv(x)) by(tactic) { unfold(inv); split(); }
+      // error: assertion failed, `inv` 본문의 `x != 5`에서
+      // (from the tactic step `split` (part 3 of 3, after `unfold`))
+  }
+  ```
+  - 펼친 goal은 `f`를 reveal한 뒤에 assert되고, 그 뒤에 step의 goal도 여전히 assert됩니다. 그래서 펼치기는
+    goal을 증명하는 방법만 바꿉니다.
+  - `f`는 trait 메서드가 아닌 spec 함수여야 하고, 여기서 본문이 보여야 합니다. 다른 crate의 함수(본문이
+    public인 것), generic, opaque, 재귀 함수도 됩니다(`decreases .. when` 절이 있는 것은 아직 안 됩니다).
+    본문은 식이어야 합니다(proof 블록이 없어야 함). `f` 안의 증명(또는 `f`가 펼치는 함수 안의 증명)이 지금
+    정의 중인 함수를 펼치면 오류입니다. `f` 본문의 trigger에 들어가는 인자는 trigger가 담을 수 있는 것이어야
+    합니다(closure, 비교, boolean 연산자는 안 됨). 먼저 변수에 묶으세요.
+  - `unfold`와 `split()` 뒤의 script 나머지는 여러 부분이 같이 씁니다. 나머지를 펼칠 때는 각 부분의 goal을
+    아직 모르므로, 거기서는 goal을 들여다보는 step(`split` 앞의 `unfold`, `split`)을 쓸 수 없습니다. 그런
+    step에는 부분마다 블록을 주세요: `split({ .. }, { .. })`. 이런 `unfold` 뒤의 `intro()`와 `induct`는
+    아직 지원하지 않고, `show()`도 아직 펼친 goal을 보여 주지 못합니다.
 - **귀납: `induct`:** `induct(n)`은 `nat` 타입 변수 `n`에 대한 귀납으로 goal `G`를 증명합니다. `n`의
   함수로 본 goal(`let p = |n: nat| G`)을 `n == 0`일 때(기저 경우)와, `n > 0`일 때 `n - 1`에 대한 goal로부터
   (단계) 각각 `assert forall`로 증명합니다. 그다음 `vstd::tactic::lemma_induct_nat(p, n)`이 `n`에 대한

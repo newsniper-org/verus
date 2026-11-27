@@ -1704,6 +1704,15 @@ fn verus_item_to_vir<'tcx, 'a>(
                     let exp = expr_to_vir_consume(bctx, &args[0])?;
                     mk_expr(ExprX::AssertAssume { is_assume: false, expr: exp, msg: None })
                 }
+                AssertItem::TacticUnfold
+                | AssertItem::TacticSplit
+                | AssertItem::TacticSplitEach
+                | AssertItem::TacticGoal => mk_expr(crate::tactic_to_vir::tactic_step_to_vir(
+                    bctx,
+                    expr,
+                    *assert_item,
+                    &args,
+                )?),
                 AssertItem::TacticCases => {
                     internal_err_unless!(
                         args_len == 2,

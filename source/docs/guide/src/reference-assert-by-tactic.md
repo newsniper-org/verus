@@ -51,7 +51,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `cases(e)` (a value of an enum) | any | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`, an arm for each variant ([below](#cases-on-an-enum)) |
 | `cases(match e { P => { .. }, .. })` | any | the `match`, with `G` asserted in every arm |
 | `induct(n)` (a `nat`), `induct(i, from(lo))` (an `int`) | any | the base case and the step of an induction on the variable, each `assert(G) by { .. }`, and a vstd lemma ([below](#induction-induct)) |
-| `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);` |
+| `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);`; before a `split` that needs it, also the goal with `f` unfolded ([below](#unfolding-the-goal-unfold-then-split)) |
 | `apply(L(a))` | any | `L(a);` (its `ensures` become facts) |
 | `inst(forall\|x: T\| Q, t)` | any | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
 | `smt()` | any | `assert(G);` |
@@ -72,6 +72,40 @@ The `..` in a step's expansion is where the rest of the script goes.
   the steps in the rest add ``where `e` is `E::C` ``. The `match` also checks that its arms cover every value. The arms do not bind the
   fields; to name them, use `cases(match ..)`. An enum with one variant has nothing to split
   (an error), and for a reference, write `cases(*e)`.
+- <a id="unfolding-the-goal-unfold-then-split"></a>**Unfolding the goal: `unfold` then `split`.**
+  When a `split` comes after `unfold(f)` and the goal as written is not one that `split` can
+  split (a conjunction, an `<==>` or an `if`; a call of `f`, say), `unfold(f)` also works on the
+  goal: rust_verify replaces each call of `f` in it by `f`'s body (one level: the calls of `f` in
+  the body stay calls), with the arguments in place of the parameters, and the rest of the
+  script proves that goal. `split` then splits it into its parts (a conjunction, or an `if` with
+  an `else`; an `<==>` is not split there yet).
+  - Between the `unfold` and the `split` there may be `have`, `apply`, `inst`, `show`, `cases(b)`
+    and `isolate`. Another `unfold(g)` there works on the result when the goal calls `f`
+    (`unfold(f); unfold(g); split()`); otherwise only the `unfold` nearest the `split` works on the
+    goal, and the ones before it only reveal their function. For a function inside one part, use
+    a block: `unfold(f); split({ unfold(g); split(); }, { .. })`.
+  ```rust
+  #[verifier::opaque]
+  spec fn inv(x: int) -> bool { x > 0 && x < 10 && x != 5 }
+  proof fn p(x: int) requires x == 5 {
+      assert(inv(x)) by(tactic) { unfold(inv); split(); }
+      // error: assertion failed, at `x != 5` in `inv`'s body
+      // (from the tactic step `split` (part 3 of 3, after `unfold`))
+  }
+  ```
+  - The unfolded goal is asserted after `f` is revealed, and the goal of the step is still
+    asserted after it, so the unfolding changes only how the goal is proved.
+  - `f` is a spec function that is not a trait method, whose body is visible here; it may be in
+    another crate (with a public body), generic, opaque or recursive (but not with a
+    `decreases .. when` clause, yet). Its body must be an expression (no proof block). A proof
+    in `f` (or in a function that it unfolds) may not unfold the function being defined: that is
+    an error. An argument that goes into a trigger of `f`'s body must be one that a trigger can
+    hold (not a closure, a comparison or a boolean operator): bind it to a variable first.
+  - After `unfold` and `split()`, the rest of the script is shared by the parts, whose goals are
+    not known when it is expanded: there, no step may look at the goal (`unfold` before a
+    `split`, `split`). Give each part its own block, `split({ .. }, { .. })`, for such steps.
+    `intro()` and `induct` after such an `unfold` are not supported yet, and `show()` does not
+    show the unfolded goal yet.
 - <a id="induction-induct"></a>**Induction: `induct`.** `induct(n)` proves the goal `G` for a
   variable `n` of type `nat` by induction on `n`. The goal as a function of `n`
   (`let p = |n: nat| G`) is proved for `n == 0` (the base case) and, for `n > 0`, from the goal
