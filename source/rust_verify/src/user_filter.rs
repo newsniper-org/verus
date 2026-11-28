@@ -182,6 +182,8 @@ impl UserFilter {
                 None => false,
                 Some(m) => module_id == &m.segments,
             })
+            // (a generated principle lemma is verified with its function, below; it is not named)
+            .filter(|f| vir::def::tactic_induct_lemma_parent(&f.x.name).is_none())
             .map(|f| {
                 let name = friendly_fun_name_crate_relative(
                     f.x.owning_module.as_ref().unwrap(),
@@ -297,9 +299,14 @@ impl UserFilter {
     /// Check if the function is included in the filter.
     /// This assumes the function is already in the correct module
     /// (i.e., it only checks the function name).
+    /// A principle lemma generated for the step `induct` of a function is included exactly when
+    /// that function is: its proof is the function's, which relies on it.
     pub fn includes_function(&self, function_name: &Fun) -> bool {
         if let UserFilter::Function(_module_id, _function, matches) = self {
-            matches.contains(function_name)
+            match vir::def::tactic_induct_lemma_parent(function_name) {
+                Some(parent) => matches.contains(&parent),
+                None => matches.contains(function_name),
+            }
         } else {
             true
         }

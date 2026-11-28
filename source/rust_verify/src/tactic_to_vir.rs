@@ -45,6 +45,9 @@ pub(crate) fn tactic_step_to_vir<'tcx>(
         AssertItem::TacticGoal => ("tactic_goal", 0),
         AssertItem::TacticIntro => ("tactic_intro", 1),
         AssertItem::TacticShow => ("tactic_show", 1),
+        AssertItem::TacticMotive => ("tactic_motive", 2),
+        AssertItem::TacticInductHyp => ("tactic_induct_hyp", 2),
+        AssertItem::TacticInduct => ("tactic_induct", 3),
         _ => unreachable!(),
     };
     if !bctx.in_tactic || !bctx.in_assert_by_proof {
@@ -72,6 +75,9 @@ pub(crate) fn tactic_step_to_vir<'tcx>(
         AssertItem::TacticSplitEach => split_each_to_vir(bctx, expr, args[0]),
         AssertItem::TacticIntro => intro_to_vir(bctx, expr, args[0]),
         AssertItem::TacticShow => show_to_vir(bctx, expr, args[0]),
+        AssertItem::TacticMotive => crate::tactic_induct::motive_to_vir(bctx, expr, args),
+        AssertItem::TacticInductHyp => crate::tactic_induct::hyp_to_vir(bctx, expr, args),
+        AssertItem::TacticInduct => crate::tactic_induct::induct_to_vir(bctx, expr, args),
         _ => unreachable!(),
     }
 }

@@ -73,7 +73,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 | 스택 증가 린터 | `-V fip-lint`, `-V fip-lint=fix` | `fip-beta` | [FIP와 FBIP](./fip-fbip.ko.md)의 "도구" 절 |
 | 안전 조건을 명세할 수 없는 호출 | `#[verifier::trusted_only]`, `#[verifier::trusted_call]` | `fip-beta` | [Attributes](./reference-attributes.md#verifiertrusted_only-and-verifiertrusted_call) (영어) |
 | solver가 막힌 proof obligation 찾기 | `-V triage` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `-V triage` 절 |
-| tactic script (검사되는 증명 코드로 펼쳐짐) | `assert(P) by(tactic) { split(); intro(); cases(e); induct(n); unfold(f, k); unfold(f); split(); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md) |
+| tactic script (검사되는 증명 코드로 펼쳐짐) | `assert(P) by(tactic) { split(); intro(); cases(e); induct(n); induct(t); unfold(f, k); unfold(f); split(); apply(L(a)); inst(..); smt(..); show(); .. }` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md) |
 | 증명을 따로, 자기 rlimit이나 solver로 검사 | `by(tactic)` script 안의 `isolate()`, `isolate(rlimit = N, backend = cvc5)`. `ensures` 절의 `#![verifier::tactic(isolate(..))]`, 함수의 `#[verifier::tactic(isolate(..))]` | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절 |
 | rlimit과 `isolate`를 소스 밖에 두고, hash로 코드에 묶기 | `.verus-hints` 파일 (`-V hints=<path>`, `-V hints-locked`) | `fip` (1.100) | [assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `.verus-hints` 절 |
 

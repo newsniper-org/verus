@@ -560,6 +560,33 @@ pub fn tactic_show(_facts: &str) {
     unimplemented!();
 }
 
+/// The goal of the step `induct(x)` of a `by(tactic)` script as a function of `x`: rust_verify
+/// makes it the closure `|x| goal` (the macro cannot write it: the type of `x` is not known there)
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_motive"]
+#[verifier::spec]
+pub fn tactic_motive<A>(_x: A, _goal: bool) -> FnSpec<(A,), bool> {
+    unimplemented!();
+}
+
+/// The hypothesis of a case of the step `induct(x)` (in the `assert forall` that is the argument of
+/// `tactic_induct`): rust_verify replaces it by the hypothesis for the type of `x`
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_induct_hyp"]
+#[verifier::spec]
+pub fn tactic_induct_hyp<A>(_p: FnSpec<(A,), bool>, _x: A) -> bool {
+    unimplemented!();
+}
+
+/// The step `induct(x)` of a `by(tactic)` script: `p(x)` by induction on `x` (a `nat` or a value of
+/// a datatype), with `step` (an `assert forall`) proving each case
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::tactic_induct"]
+#[verifier::proof]
+pub fn tactic_induct<A>(_p: FnSpec<(A,), bool>, _x: A, _step: ()) {
+    unimplemented!();
+}
+
 /// The current goal of a `by(tactic)` script, after `unfold` (which the macro cannot write)
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::tactic_goal"]

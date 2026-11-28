@@ -157,6 +157,10 @@ pub(crate) struct BodyCtxt<'tcx> {
     /// what `show()` says of that goal, besides its text: the arguments of the functions that
     /// `unfold` put into it, and the parts of a `split` that share the rest of the script
     pub(crate) tactic_goal_desc: Arc<Vec<String>>,
+    /// the principle lemmas that this function's `induct` steps may call, by datatype (made with
+    /// the function's stub: `tactic_induct::lemma_stubs`); `None` in a body that is not a
+    /// function's (a `const` or `static`, which gets no lemmas)
+    pub(crate) tactic_induct_lemmas: Option<Arc<Vec<(rustc_span::def_id::DefId, vir::ast::Fun)>>>,
     pub(crate) atomically: Option<Arc<AtomicallyCtxt>>,
     pub(crate) migrate_postcondition_vars: Option<std::collections::HashSet<vir::ast::VarIdent>>,
     /// Context to interpret a header if we encounter one

@@ -10,6 +10,7 @@ verus! {
 
 /// Induction on a `nat` (the step `induct(n)`): `p(n)` holds if `p(0)` holds, and if `p(k)`
 /// holds for every `k > 0` for which `p(k - 1)` holds.
+#[cfg_attr(verus_keep_ghost, rustc_diagnostic_item = "verus::vstd::tactic::lemma_induct_nat")]
 pub proof fn lemma_induct_nat(p: spec_fn(nat) -> bool, n: nat)
     requires
         forall|k: nat| k == 0 ==> #[trigger] p(k),

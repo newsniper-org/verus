@@ -793,6 +793,14 @@ fn make_trait_decl<'tcx>(
             "Verus does not currently support autospec on traits",
         ));
     }
+    if !spec_method_info.tactic_induct_lemmas.is_empty()
+        || !method_info.tactic_induct_lemmas.is_empty()
+    {
+        return Err(error(
+            &spec_method.span,
+            "`induct` in a `by(tactic)` script is not supported in the specification of a trait method",
+        ));
+    }
 
     methodx.opaqueness = opaqueness;
     methodx.params = params; // this is important; the correct parameter modes are in spec_method
@@ -810,6 +818,7 @@ fn make_trait_decl<'tcx>(
     Ok(FunctionInfo {
         function: vir::def::Spanned::new(method.span.clone(), methodx),
         function_for_autospec: None,
+        tactic_induct_lemmas: vec![],
         pre_header: spec_method_info.pre_header.clone(),
         def_id: spec_method_info.def_id,
         body_id: spec_method_info.body_id.clone(),

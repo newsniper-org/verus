@@ -50,7 +50,7 @@ The steps work on the current goal (`G` below), which starts as the asserted exp
 | `cases(b)` (a `bool`) | any | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
 | `cases(e)` (a value of an enum) | any | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`, an arm for each variant ([below](#cases-on-an-enum)) |
 | `cases(match e { P => { .. }, .. })` | any | the `match`, with `G` asserted in every arm |
-| `induct(n)` (a `nat`), `induct(i, from(lo))` (an `int`) | any | the base case and the step of an induction on the variable, each `assert(G) by { .. }`, and a vstd lemma ([below](#induction-induct)) |
+| `induct(n)` (a `nat`), `induct(i, from(lo))` (an `int`), `induct(t)` (a value of a datatype) | any | the cases of an induction on the variable, each `assert(G) by { .. }`, and a lemma: vstd's, or for a datatype one generated for the function ([below](#induction-induct)) |
 | `unfold(f)`, `unfold(f, k)` | any | `reveal(f);`, `reveal_with_fuel(f, k);`; before a `split` or an `intro()` that needs it, also the goal with `f` unfolded ([below](#unfolding-the-goal-unfold-then-split)) |
 | `apply(L(a))` | any | `L(a);` (its `ensures` become facts) |
 | `inst(forall\|x: T\| Q, t)` | any | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
@@ -125,7 +125,27 @@ The `..` in a step's expansion is where the rest of the script goes.
     hypothesis about `n`, put it in the goal, `assert(H ==> G) by(tactic) { induct(n); intro(); .. }`,
     or, for an `int`, start at its bound with `from(lo)`. Other variables are not generalized
     either: a variable defined from `n` before the assertion keeps its value in the step.
-  - It needs vstd.
+  - It needs vstd (on a `nat` or an `int`).
+  - With `induct(x)` (no blocks, no `from`), the assertions of the steps in the rest also say
+    in which case they are: ``where `n == 0` `` or ``where `n > 0` `` on a `nat`, ``where `t` is
+    `E::V` `` on a datatype.
+  - `induct(t)` on a value of a datatype (an enum or a struct) is structural induction: there is
+    one case per variant, and in the case of a variant `V`, the goal holds for each field of `V`
+    whose type is the datatype itself or a `Box` of it (the hypothesis). The rest of the script
+    proves every case (no blocks), and an error names the variant (`` `t` is `List::Cons`, with
+    the goal for its field `1` ``). rust_verify then calls a principle lemma for the datatype,
+    which it generates for the function (`tactic_induct%<function>%..`): a proof function whose
+    `requires` are the cases, proved by recursion on its argument. It is verified like any other
+    function, with the function (also under `--verify-function`), and is private to its module.
+    - The type of `t` must be written where `t` is bound: a parameter of the function (also
+      `Ghost(t): Ghost<T>` or `Tracked(t): Tracked<T>`), or a `let` (also `let ghost`), closure or
+      `forall` variable with its type (the lemma is made before the function's body is
+      type-checked). `induct(self)` is not supported: write `let s: T = self;` first. It is
+      supported in functions only, not in the body of a `const` or `static`.
+    - The datatype must be visible, with all its fields, in the function's module (so not
+      `Seq`, whose fields are private); it may have no const parameters, and its type parameters
+      may have no trait bounds. Fields
+      of other types that contain the datatype (`Option<Box<T>>`, `Seq<T>`) get no hypothesis.
 - **Steps that close the goal.** `smt(..)` and `compute()` prove the goal; nothing may follow
   them, neither a step nor a statement.
 - **When the script ends.** If the script ends without closing the goal, the solver proves it
@@ -145,7 +165,7 @@ proof fn t(x: int, y: int) {
 
 When an assertion that `have`, `inst`, `split`, `cases`, `induct`, `smt()` or `intro` (on an `==>`)
 generated fails, the error says which step it came from (for `induct`, whether it was the base case
-or the step). For `intro` on a `forall` written in the goal, `smt(<prover>, ..)` and
+or the step, or which variant). For `intro` on a `forall` written in the goal, `smt(<prover>, ..)` and
 `compute()`, it points at the goal without naming the step; on the goal after `unfold`, `intro`
 names the step (`intro` (after `unfold`)).
 

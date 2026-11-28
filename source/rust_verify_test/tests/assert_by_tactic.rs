@@ -1094,7 +1094,7 @@ test_verify_one_file_with_options! {
         proof fn t(x: int) {
             assert(x * 0 == 0) by(tactic) { induct(x); }
         }
-    } => Err(err) => assert!(err.errors.iter().any(|e| e.message.contains("mismatched types")))
+    } => Err(err) => assert_vir_error_msg(err, "`induct(x)`: `x` is an `int`; write `induct(x, from(lo))`")
 }
 
 test_verify_one_file_with_options! {
@@ -1159,7 +1159,7 @@ test_verify_one_file_with_options! {
         proof fn t(n: nat) {
             assert(pow2(n) >= 1) by(tactic) { induct(n, { }); }
         }
-    } => Err(err) => assert!(err.errors[0].message.contains("expected `induct(n)`"))
+    } => Err(err) => assert!(err.errors[0].message.contains("expected `induct(x)`"))
 }
 
 test_verify_one_file! {
@@ -1515,4 +1515,263 @@ test_verify_one_file_with_options! {
         assert!(note.message.contains("reflexive(r)"));
         assert!(!note.message.contains("\n    ?"));
     }
+}
+
+// `induct(x)` on a value of a datatype: one case per variant, with the goal for each field of
+// the datatype's type (or a `Box` of it), by a principle lemma that rust_verify generates (and
+// verifies) for the function
+const LIST: &str = verus_code_str! {
+    pub enum List { Nil, Cons(int, Box<List>) }
+    pub open spec fn len(l: List) -> nat decreases l {
+        match l { List::Nil => 0, List::Cons(_, t) => 1 + len(*t) }
+    }
+    pub open spec fn sum(l: List) -> int decreases l {
+        match l { List::Nil => 0, List::Cons(h, t) => h + sum(*t) }
+    }
+    pub open spec fn allpos(l: List) -> bool decreases l {
+        match l { List::Nil => true, List::Cons(h, t) => h > 0 && allpos(*t) }
+    }
+    pub open spec fn append(a: List, b: List) -> List decreases a {
+        match a { List::Nil => b, List::Cons(h, t) => List::Cons(h, Box::new(append(*t, b))) }
+    }
+};
+
+test_verify_one_file_with_options! {
+    #[test] induct_datatype ["vstd"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: List, b: List) {
+            assert(len(l) >= 0) by(tactic) { induct(l); }
+            // the goal may use other variables, and an implication carries a hypothesis
+            assert(allpos(l) ==> sum(l) >= len(l)) by(tactic) { induct(l); }
+            assert(sum(append(l, b)) == sum(l) + sum(b)) by(tactic) { induct(l); }
+            assert(len(append(l, b)) == len(l) + len(b)) by(tactic) { induct(l); smt(); }
+            // after `intro`, on the variable that it binds
+            assert(forall|k: List| len(k) >= 0) by(tactic) { intro(); induct(k); }
+        }
+        proof fn u(l: List, b: List) {
+            let k: List = l;
+            assert(sum(append(k, b)) == sum(k) + sum(b)) by(tactic) { induct(k); }
+        }
+        // a `forall` variable is the only source of the datatype's lemma
+        proof fn by_intro(b: List) {
+            assert(forall|k: List| #[trigger] sum(append(k, b)) == sum(k) + sum(b)) by(tactic) {
+                intro();
+                induct(k);
+            }
+        }
+        proof fn by_assert_forall(b: List) {
+            assert forall|k: List| #[trigger] sum(append(k, b)) == sum(k) + sum(b) by {
+                assert(sum(append(k, b)) == sum(k) + sum(b)) by(tactic) { induct(k); }
+            }
+        }
+        // `Ghost(x)` and `Tracked(x)` parameters and `let ghost` in an exec function
+        fn eg(Ghost(l): Ghost<List>, Ghost(b): Ghost<List>) {
+            proof { assert(sum(append(l, b)) == sum(l) + sum(b)) by(tactic) { induct(l); } }
+        }
+        fn et(Tracked(l): Tracked<List>, Ghost(b): Ghost<List>) {
+            proof { assert(sum(append(l, b)) == sum(l) + sum(b)) by(tactic) { induct(l); } }
+        }
+        fn el(l: List, b: List) {
+            let ghost k: List = l;
+            proof { assert(sum(append(k, b)) == sum(k) + sum(b)) by(tactic) { induct(k); } }
+        }
+        // in the proof of an exec function (erasure)
+        fn e(l: List) {
+            proof { assert(len(l) >= 0) by(tactic) { induct(l); } }
+        }
+        // on a `nat` too, in the same function
+        spec fn pow2(n: nat) -> nat decreases n { if n == 0 { 1 } else { 2 * pow2((n - 1) as nat) } }
+        proof fn both(n: nat, l: List) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n); }
+            assert(len(l) >= 0) by(tactic) { induct(l); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    // a failing case names its variant, and the other assertions of the script say where they are
+    #[test] induct_datatype_fails ["vstd"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: List) {
+            assert(len(l) > 0) by(tactic) { induct(l); } // FAILS
+        }
+        proof fn u(l: List) {
+            assert(sum(l) >= 0) by(tactic) { induct(l); have(sum(l) >= 0); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 2);
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `induct` (`l` is `List::Nil`)")));
+        assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `have`, where `l` is `List::Cons`")));
+    }
+}
+
+test_verify_one_file_with_options! {
+    // a tree (two recursive fields, named), a generic list, and a struct
+    #[test] induct_datatype_shapes ["vstd"] => verus_code! {
+        pub enum Tree { Leaf, Node { left: Box<Tree>, val: int, right: Box<Tree> } }
+        pub open spec fn size(t: Tree) -> nat decreases t {
+            match t { Tree::Leaf => 1, Tree::Node { left, right, .. } => size(*left) + 1 + size(*right) }
+        }
+        pub open spec fn leaves(t: Tree) -> nat decreases t {
+            match t { Tree::Leaf => 1, Tree::Node { left, right, .. } => leaves(*left) + leaves(*right) }
+        }
+        proof fn t(t: Tree) {
+            assert(size(t) + 1 == 2 * leaves(t)) by(tactic) { induct(t); }
+        }
+        pub enum L<A> { Nil, Cons(A, Box<L<A>>) }
+        pub open spec fn llen<A>(l: L<A>) -> nat decreases l {
+            match l { L::Nil => 0, L::Cons(_, t) => 1 + llen(*t) }
+        }
+        pub open spec fn lappend<A>(a: L<A>, b: L<A>) -> L<A> decreases a {
+            match a { L::Nil => b, L::Cons(h, t) => L::Cons(h, Box::new(lappend(*t, b))) }
+        }
+        proof fn g<B>(l: L<B>, l2: L<B>, m: L<u8>, m2: L<u8>, d: L<Box<u8>>, d2: L<Box<u8>>) {
+            assert(llen(lappend(l, l2)) == llen(l) + llen(l2)) by(tactic) { induct(l); }
+            assert(llen(lappend(m, m2)) == llen(m) + llen(m2)) by(tactic) { induct(m); }
+            assert(llen(lappend(d, d2)) == llen(d) + llen(d2)) by(tactic) { induct(d); }
+        }
+        pub struct P { a: int, b: int }
+        proof fn s(p: P) {
+            assert(p.a + p.b == p.b + p.a) by(tactic) { induct(p); }
+        }
+    } => Ok(())
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_untyped_let ["vstd"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: List) {
+            let k = l;
+            assert(len(k) >= 0) by(tactic) { induct(k); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "write the type of `k` where `k` is bound")
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_private_fields ["vstd"] => verus_code! {
+        mod m {
+            use vstd::prelude::*;
+            pub enum E { A, B(Box<E>) }
+            pub struct S { x: int }
+        }
+        use m::*;
+        proof fn t(s: S) {
+            assert(s == s) by(tactic) { induct(s); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "the field `x` of `m::S` is not visible here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_seq ["vstd"] => verus_code! {
+        use vstd::seq::*;
+        proof fn t(q: Seq<int>) {
+            assert(q.len() >= 0) by(tactic) { induct(q); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "`induct(q)`: the field `inner` of `vstd::seq::Seq` is not visible here")
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_bounded ["vstd"] => verus_code! {
+        pub trait Tr { }
+        pub enum E<A: Tr> { A(A), B(Box<E<A>>) }
+        pub open spec fn n<A: Tr>(e: E<A>) -> nat decreases e { match e { E::A(_) => 0, E::B(b) => 1 + n(*b) } }
+        proof fn t<A: Tr>(e: E<A>) {
+            assert(n(e) >= 0) by(tactic) { induct(e); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "has a type parameter with a trait bound")
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_reference ["vstd"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: &List) {
+            assert(len(*l) >= 0) by(tactic) { induct(l); }
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is a reference")
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_self ["vstd"] => LIST.to_string() + verus_code_str! {
+        impl List {
+            proof fn t(self) {
+                assert(len(self) >= 0) by(tactic) { induct(self); }
+            }
+        }
+    } => Err(err) => assert!(err.errors[0].message.contains("`induct(self)` is not supported"))
+}
+
+test_verify_one_file_with_options! {
+    // with `--verify-function`, the principle lemma is verified with its function
+    #[test] induct_datatype_verify_function ["vstd", "--verify-function-at-root t", "--output-json"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: List) {
+            assert(len(l) >= 0) by(tactic) { induct(l); }
+        }
+        proof fn other(l: List) {
+            assert(len(l) > 0); // (not verified)
+        }
+    } => Ok(err) => {
+        // `t` and its principle lemma
+        assert_eq!(err.json_output.as_ref().unwrap()["verification-results"]["verified"], 2);
+    }
+}
+
+test_verify_one_file_with_options! {
+    // the principle lemma of a function that is not selected is not verified either
+    #[test] induct_datatype_verify_function_other ["vstd", "--verify-function-at-root other", "--output-json"] => LIST.to_string() + verus_code_str! {
+        proof fn t(l: List) {
+            assert(len(l) >= 0) by(tactic) { induct(l); }
+        }
+        proof fn other(l: List) {
+            assert(len(l) >= 0);
+        }
+    } => Ok(err) => {
+        assert_eq!(err.json_output.as_ref().unwrap()["verification-results"]["verified"], 1);
+    }
+}
+
+test_verify_one_file_with_options! {
+    // three variants, two of them with fields of the datatype's type: the hypotheses of both are
+    // needed, and a failure in the middle variant names it
+    #[test] induct_datatype_three_variants ["vstd"] => verus_code! {
+        pub enum Ex { Num(int), Neg(Box<Ex>), Add(Box<Ex>, Box<Ex>) }
+        pub open spec fn ev(e: Ex) -> int decreases e {
+            match e { Ex::Num(n) => n, Ex::Neg(a) => -ev(*a), Ex::Add(a, b) => ev(*a) + ev(*b) }
+        }
+        pub open spec fn neg(e: Ex) -> Ex decreases e {
+            match e {
+                Ex::Num(n) => Ex::Num(-n),
+                Ex::Neg(a) => Ex::Neg(Box::new(neg(*a))),
+                Ex::Add(a, b) => Ex::Add(Box::new(neg(*a)), Box::new(neg(*b))),
+            }
+        }
+        pub open spec fn nonneg(e: Ex) -> bool decreases e {
+            match e { Ex::Num(n) => n >= 0, Ex::Neg(_) => true, Ex::Add(a, b) => nonneg(*a) && nonneg(*b) }
+        }
+        proof fn t(e: Ex) {
+            assert(ev(neg(e)) == -ev(e)) by(tactic) { induct(e); }
+        }
+        proof fn u(e: Ex) {
+            assert(nonneg(e) ==> ev(e) >= 0) by(tactic) { induct(e); } // FAILS
+        }
+    } => Err(err) => {
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].rendered.contains("from the tactic step `induct` (`e` is `Ex::Neg`, with the goal for its field `0`)"));
+    }
+}
+
+test_verify_one_file_with_options! {
+    // the assertions of the steps in the rest say in which case they are, on a `nat` too
+    #[test] induct_nat_where ["vstd"] => POW2.to_string() + verus_code_str! {
+        proof fn t(n: nat) {
+            assert(pow2(n) >= 1) by(tactic) { induct(n); have(pow2(n) >= 2); } // FAILS
+        }
+    } => Err(err) => assert!(err.errors.iter().any(|e| e.rendered.contains("from the tactic step `have`, where `n == 0`")))
+}
+
+test_verify_one_file_with_options! {
+    #[test] error_induct_in_const ["vstd"] => LIST.to_string() + verus_code_str! {
+        exec const C: u8 ensures C == 0 {
+            proof {
+                let k: List = List::Nil;
+                assert(len(k) >= 0) by(tactic) { induct(k); }
+            }
+            0
+        }
+    } => Err(err) => assert_vir_error_msg(err, "is supported only in the body of a function")
 }

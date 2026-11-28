@@ -141,6 +141,9 @@ pub const SUFFIX_SNAP_WHILE_END: &str = "_while_end";
 pub const CLOSURE_RETURN_VALUE_NAME: &str = "closure_return%";
 
 pub const AUTOSPEC_FUNC_PREFIX: &str = "returns_clause_autospec%";
+/// The prefix of the principle lemma that rust_verify generates for the step `induct(x)` of a
+/// `by(tactic)` script on a value of a datatype (one per function and datatype)
+pub const TACTIC_INDUCT_FUNC_PREFIX: &str = "tactic_induct%";
 
 pub const FNDEF_TYPE: &str = "fndef";
 pub const FNDEF_SINGLETON: &str = "fndef_singleton";
@@ -1302,6 +1305,34 @@ pub(crate) fn dummy_param_name() -> VarIdent {
 
 pub(crate) fn is_dummy_param_name(v: &VarIdent) -> bool {
     v.0.to_string() == DUMMY_PARAM
+}
+
+/// The principle lemma for induction on the datatype `dt` that the function `parent` uses: its
+/// last segment is `tactic_induct%<parent's name>%<dt's crate>%<dt's segments>` (`%` is not in
+/// any Rust name, and the name has no `.`, `!` or `:`, which AIR names use)
+pub fn tactic_induct_lemma_name(parent: &Fun, dt: &Path) -> Fun {
+    let krate = krate_to_string_ignore_stable_id(&dt.krate);
+    let segs: Vec<String> = dt.segments.iter().map(|s| s.friendly_name()).collect();
+    let name = parent.path.last_segment().map_name(|f| {
+        format!("{}{}%{}%{}", TACTIC_INDUCT_FUNC_PREFIX, f, krate, segs.join("%"))
+    });
+    Arc::new(FunX { path: parent.path.replace_last(name) })
+}
+
+/// The function whose `induct` step a principle lemma is for (`None` if `fun` is not one)
+pub fn tactic_induct_lemma_parent(fun: &Fun) -> Option<Fun> {
+    let last = fun.path.last_segment();
+    let name = last.name()?;
+    let rest = name.strip_prefix(TACTIC_INDUCT_FUNC_PREFIX)?;
+    let (parent, _) = rest.split_once('%')?;
+    let parent = parent.to_string();
+    Some(Arc::new(FunX { path: fun.path.replace_last(last.map_name(|_| parent)) }))
+}
+
+/// vstd's `tactic::lemma_induct_nat`, which the step `induct(n)` on a `nat` calls
+pub fn tactic_lemma_induct_nat_fun() -> Fun {
+    let name = Segment::V(Arc::new("lemma_induct_nat".to_string()), 0);
+    Arc::new(FunX { path: path!(CrateId::Vstd => "tactic").push_segment(name) })
 }
 
 pub fn autospec_return_clause_spec_fn_name(path: &Path) -> Fun {

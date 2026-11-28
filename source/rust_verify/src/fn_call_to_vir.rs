@@ -1709,7 +1709,10 @@ fn verus_item_to_vir<'tcx, 'a>(
                 | AssertItem::TacticSplitEach
                 | AssertItem::TacticGoal
                 | AssertItem::TacticIntro
-                | AssertItem::TacticShow => mk_expr(crate::tactic_to_vir::tactic_step_to_vir(
+                | AssertItem::TacticShow
+                | AssertItem::TacticMotive
+                | AssertItem::TacticInductHyp
+                | AssertItem::TacticInduct => mk_expr(crate::tactic_to_vir::tactic_step_to_vir(
                     bctx,
                     expr,
                     *assert_item,

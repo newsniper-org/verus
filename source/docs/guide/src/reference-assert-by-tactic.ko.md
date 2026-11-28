@@ -51,7 +51,7 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
 | `cases(b)` (`bool`) | 무엇이든 | `if b { assert(G) by { .. } } else { assert(G) by { .. } }` |
 | `cases(e)` (enum 값) | 무엇이든 | `match e { E::A => assert(G) by { .. }, E::B(..) => assert(G) by { .. }, .. }`. variant마다 갈래가 하나씩 있습니다(아래 참고) |
 | `cases(match e { P => { .. }, .. })` | 무엇이든 | 그 `match`. 모든 갈래에서 `G`를 assert합니다 |
-| `induct(n)` (`nat`), `induct(i, from(lo))` (`int`) | 무엇이든 | 그 변수에 대한 귀납의 기저 경우와 단계. 각각 `assert(G) by { .. }`이고, 마지막에 vstd 보조정리를 부릅니다(아래 참고) |
+| `induct(n)` (`nat`), `induct(i, from(lo))` (`int`), `induct(t)` (datatype 값) | 무엇이든 | 그 변수에 대한 귀납의 경우들. 각각 `assert(G) by { .. }`이고, 마지막에 보조정리를 부릅니다. vstd의 것이거나, datatype이면 그 함수를 위해 생성한 것입니다(아래 참고) |
 | `unfold(f)`, `unfold(f, k)` | 무엇이든 | `reveal(f);`, `reveal_with_fuel(f, k);`. 그것이 필요한 `split`이나 `intro()` 앞에서는 `f`를 펼친 goal도 만듭니다(아래 참고) |
 | `apply(L(a))` | 무엇이든 | `L(a);` (그 `ensures`가 사실이 됩니다) |
 | `inst(forall\|x: T\| Q, t)` | 무엇이든 | `assert(forall\|x: T\| Q); assert({ let x: T = t; Q });` |
@@ -117,7 +117,24 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
     `assert(H ==> G) by(tactic) { induct(n); intro(); .. }`. `int`라면 `from(lo)`로 그 경계에서 시작할 수도
     있습니다. 다른 변수도 일반화하지 않습니다. assertion 전에 `n`으로 정의한 변수는 단계에서도 원래 값을
     유지합니다.
-  - vstd가 필요합니다.
+  - `nat`이나 `int`에서는 vstd가 필요합니다.
+  - `induct(x)`(블록도 `from`도 없는 것)에서는 나머지 step이 만든 assertion도 어느 경우에 있는지 알려
+    줍니다. `nat`에서는 ``where `n == 0` ``이나 ``where `n > 0` ``, datatype에서는 ``where `t` is `E::V` ``입니다.
+  - datatype(enum이나 struct) 값에 대한 `induct(t)`는 구조적 귀납입니다. variant마다 경우가 하나씩
+    있고, variant `V`의 경우에서는 `V`의 필드 중 타입이 그 datatype 자신이거나 그것의 `Box`인 필드마다
+    goal이 성립합니다(귀납 가정). script의 나머지가 모든 경우를 증명하며(블록은 받지 않습니다), 오류는
+    variant를 알려 줍니다(`` `t` is `List::Cons`, with the goal for its field `1` ``). 그다음 rust_verify가
+    그 datatype의 귀납 원리 보조정리를 부릅니다. 이 보조정리는 rust_verify가 그 함수를 위해 생성하는
+    proof 함수(`tactic_induct%<함수>%..`)로, `requires`가 그 경우들이고, 인자에 대한 재귀로 증명됩니다.
+    다른 함수처럼 그 함수와 함께 검증되며(`--verify-function`에서도), 그 모듈 밖에서는 보이지 않습니다.
+    - `t`가 묶이는 곳에 그 타입이 쓰여 있어야 합니다. 함수의 매개변수(`Ghost(t): Ghost<T>`,
+      `Tracked(t): Tracked<T>`도 됩니다)이거나, 타입을 쓴 `let`(`let ghost`도 됩니다), closure, `forall`
+      변수여야 합니다(보조정리는 함수 본문의 타입 검사 전에 만들어지기 때문입니다). `induct(self)`는
+      지원하지 않으므로, 먼저 `let s: T = self;`라고 쓰세요. 함수 안에서만 쓸 수 있고, `const`나 `static`의
+      본문에서는 쓸 수 없습니다.
+    - datatype과 그 모든 필드가 함수의 모듈에서 보여야 하고(그래서 필드가 private인 `Seq`는 안 됩니다),
+      const 매개변수가 없어야 하고, 타입 매개변수에 trait bound가 없어야 합니다. 그 datatype을 담은 다른 타입의 필드(`Option<Box<T>>`,
+      `Seq<T>`)에는 귀납 가정이 없습니다.
 - **goal을 닫는 step:** `smt(..)`와 `compute()`는 goal을 증명합니다. 그 뒤에는 step도 평범한 문장도
   올 수 없습니다.
 - **script가 끝날 때:** goal을 닫지 않고 script가 끝나면, solver가 script가 세운 사실로 goal을
@@ -136,7 +153,7 @@ proof fn t(x: int, y: int) {
 ```
 
 `have`, `inst`, `split`, `cases`, `induct`, `smt()`, `==>`에 쓴 `intro`가 만든 assertion이 실패하면, 오류가
-그 assertion을 만든 step을 알려 줍니다(`induct`는 기저 경우인지 단계인지도 알려 줍니다). goal에 쓰인 `forall`에 쓴 `intro`,
+그 assertion을 만든 step을 알려 줍니다(`induct`는 기저 경우인지 단계인지, 또는 어느 variant인지도 알려 줍니다). goal에 쓰인 `forall`에 쓴 `intro`,
 `smt(<prover>, ..)`, `compute()`는 step 이름 없이 goal을 가리킵니다. `unfold` 뒤의 goal에 쓴 `intro`는 step을
 알려 줍니다(`intro` (after `unfold`)).
 

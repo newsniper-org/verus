@@ -307,7 +307,7 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
             }
         },
         "induct" => {
-            let usage = "`induct(n)`, `induct(i, from(lo))`, with the base case and the step as blocks or not: `induct(n, { .. }, { .. })`";
+            let usage = "`induct(x)` (on a `nat` or a value of a datatype), `induct(i, from(lo))`, or on a `nat` or an `int` with the base case and the step as blocks: `induct(n, { .. }, { .. })`";
             let mut args = args.into_iter();
             let var = match args.next() {
                 Some(Expr::Path(p))
@@ -316,12 +316,19 @@ fn parse_step(name: verus_syn::Ident, call: ExprCall) -> Result<Step> {
                         && p.path.segments.len() == 1
                         && p.path.segments[0].arguments.is_none() =>
                 {
-                    p.path.segments[0].ident.clone()
+                    let x = p.path.segments[0].ident.clone();
+                    if x == "self" {
+                        return Err(Error::new(
+                            x.span(),
+                            "`induct(self)` is not supported: the cases rebind the variable, and `self` cannot be rebound; bind it first, `let s: T = self;`, and use `induct(s)`",
+                        ));
+                    }
+                    x
                 }
                 Some(e) => {
                     return Err(Error::new(
                         e.span(),
-                        "`induct`: expected the name of a variable (of type `nat`, or `int` with `from(lo)`)",
+                        "`induct`: expected the name of a variable (of type `nat`, `int` with `from(lo)`, or a datatype)",
                     ));
                 }
                 None => return wrong_args(usage),
@@ -987,6 +994,31 @@ fn expand_items(goal: &Expr, items: &[Item], facts: &Facts) -> Result<Vec<Stmt>>
                     span,
                     "`induct` on the goal after `unfold` is not supported: put `induct` before `unfold`",
                 ));
+            }
+            StepKind::Induct(x, None, None) => {
+                // the type of `x` (a `nat` or a datatype) is not known here: rust_verify makes the
+                // goal a function of `x` (`tactic_motive`), and the cases from the `assert forall`
+                // of the one proof below, with the hypothesis for that type (`tactic_induct_to_vir`)
+                let p = verus_syn::Ident::new("tactic_induct_p", Span::mixed_site());
+                let facts = facts
+                    .with(format!(
+                        "{x}: bound by `induct` (the facts above that use `{x}` are about the outer `{x}`)"
+                    ))
+                    .with(format!(
+                        "one case of the induction on `{x}` (for a `nat`: `{x} == 0`, or `{x} > 0` with the goal for `{x} - 1`; for a datatype: one variant, with the goal for each of its fields of the same type); each case is checked on its own, and an error names its case"
+                    ));
+                let body = expand_items(goal, rest, &facts)?;
+                let case = assert_stmt(span, "induct: %case%", goal, body)?;
+                let tokens = quote_spanned_builtin!(verus_builtin, span =>
+                    let #p = #verus_builtin::tactic_motive(#x, #goal);
+                    #verus_builtin::tactic_induct(#p, #x, {
+                        assert forall|#x| #verus_builtin::tactic_induct_hyp(#p, #x)
+                            implies #[trigger] #p(#x) by { #case }
+                    });
+                );
+                let block: Block = verus_syn::parse2(quote_spanned!(span => { #tokens }))?;
+                stmts.extend(block.stmts);
+                return Ok(stmts);
             }
             StepKind::Induct(x, from, scripts) => {
                 // the goal as a function of `x` (a closure whose parameter is `x`), proved for the

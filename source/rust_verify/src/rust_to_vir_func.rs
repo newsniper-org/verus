@@ -412,6 +412,7 @@ fn mk_bctx<'tcx>(
     migrate_postcondition_vars: Option<HashSet<VarIdent>>,
     param_names: Vec<VarIdent>,
     external_opaque_type_map: Option<HashMap<Path, Path>>,
+    tactic_induct_lemmas: Option<Arc<Vec<(DefId, vir::ast::Fun)>>>,
 ) -> BodyCtxt<'tcx> {
     BodyCtxt {
         ctxt: ctxt.clone(),
@@ -426,6 +427,7 @@ fn mk_bctx<'tcx>(
         in_assert_by_proof: false,
         tactic_goal: None,
         tactic_goal_desc: Arc::new(vec![]),
+        tactic_induct_lemmas,
         atomically: None,
         migrate_postcondition_vars,
         in_fn_sig: false,
@@ -453,6 +455,7 @@ fn body_to_vir<'tcx>(
     params: &[vir::ast::Param],
     external_opaque_type_map: Option<HashMap<Path, Path>>,
     is_async: bool,
+    tactic_induct_lemmas: Option<Arc<Vec<(DefId, vir::ast::Fun)>>>,
 ) -> Result<(vir::ast::Expr, Vec<(vir::ast::Stmt, vir::ast::Stmt)>, BodyCtxt<'tcx>), VirErr> {
     let param_names = params.iter().map(|p| p.x.name.clone()).collect();
     let bctx = mk_bctx(
@@ -465,6 +468,7 @@ fn body_to_vir<'tcx>(
         migrate_postcondition_vars,
         param_names,
         external_opaque_type_map,
+        tactic_induct_lemmas,
     );
     let body_expr =
         if is_async { extract_desugared_async_body(&bctx.ctxt, body)? } else { &body.value };
@@ -1653,6 +1657,9 @@ pub(crate) fn fixup_unerased_proxy_path(
 pub(crate) struct FunctionInfo<'tcx> {
     pub function: vir::ast::FunctionStub,
     pub function_for_autospec: Option<vir::ast::FunctionStub>,
+    /// the principle lemmas for the function's `induct` steps on datatypes (made here, with the
+    /// function's stub, and finished with its body)
+    pub tactic_induct_lemmas: Vec<crate::tactic_induct::TacticInductLemma>,
 
     pub pre_header: PreHeader,
     pub def_id: DefId,
@@ -1697,12 +1704,14 @@ pub(crate) enum FunctionOrConstInfo<'tcx> {
 
 impl<'tcx> FunctionOrConstInfo<'tcx> {
     pub(crate) fn iter_stubs<'a>(&'a self) -> impl Iterator<Item = &'a vir::ast::FunctionStub> {
-        let (f, opt_f) = match self {
-            FunctionOrConstInfo::Function(f) => (&f.function, f.function_for_autospec.as_ref()),
-            FunctionOrConstInfo::Const(f) => (&f.function, f.function_for_autospec.as_ref()),
-            FunctionOrConstInfo::ForeignFunction(f) => (&f.function_stub, None),
+        let (f, opt_f, lemmas): (_, _, &[crate::tactic_induct::TacticInductLemma]) = match self {
+            FunctionOrConstInfo::Function(f) => {
+                (&f.function, f.function_for_autospec.as_ref(), &f.tactic_induct_lemmas)
+            }
+            FunctionOrConstInfo::Const(f) => (&f.function, f.function_for_autospec.as_ref(), &[]),
+            FunctionOrConstInfo::ForeignFunction(f) => (&f.function_stub, None, &[]),
         };
-        std::iter::once(f).chain(opt_f.into_iter())
+        std::iter::once(f).chain(opt_f.into_iter()).chain(lemmas.iter().map(|l| &l.stub))
     }
 }
 
@@ -2106,6 +2115,7 @@ pub(crate) fn check_item_fn<'tcx>(
             &vir_params,
             assume_specification_opaque_type_map.clone(),
             false,
+            None,
         )?;
         create_reveal_group(
             ctxt,
@@ -2397,9 +2407,23 @@ pub(crate) fn check_item_fn<'tcx>(
         state.insert_fun_warn_config(ctxt, &f.x.name, id);
     }
 
+    // the principle lemmas of the `induct` steps on datatypes in the body (its stub is fixed now)
+    let tactic_induct_lemmas = match body_id {
+        CheckItemFnEither::BodyId(body_id)
+            if !vattrs.external_body && !vattrs.external_fn_specification =>
+        {
+            crate::tactic_induct::lemma_stubs(ctxt, id, body_id, &function.x)
+        }
+        _ => vec![],
+    };
+    for lemma in tactic_induct_lemmas.iter() {
+        state.insert_fun_warn_config(ctxt, &lemma.stub.x.name, id);
+    }
+
     infos.push(FunctionOrConstInfo::Function(FunctionInfo {
         function,
         function_for_autospec: autospec.new_func,
+        tactic_induct_lemmas,
         pre_header,
 
         body_id: match body_id {
@@ -2449,6 +2473,7 @@ pub(crate) fn finish_function<'tcx>(
     let FunctionInfo {
         ref function,
         ref function_for_autospec,
+        ref tactic_induct_lemmas,
         ref pre_header,
         ref body_id,
         ref sig,
@@ -2505,6 +2530,9 @@ pub(crate) fn finish_function<'tcx>(
                 &params,
                 assume_specification_opaque_type_map.clone(),
                 is_async,
+                Some(Arc::new(
+                    tactic_induct_lemmas.iter().map(|l| (l.adt, l.stub.x.name.clone())).collect(),
+                )),
             )?;
             let mut header =
                 vir::headers::read_header(&mut vir_body, &vir::headers::HeaderAllows::All)?;
@@ -2790,6 +2818,9 @@ pub(crate) fn finish_function<'tcx>(
 
     if let Some(f) = &function_for_autospec {
         functions.push((finish_autospec(sig.span, &function, f)?, ErasureInfo::new()));
+    }
+    for lemma in tactic_induct_lemmas.iter() {
+        functions.push((crate::tactic_induct::lemma_function(ctxt, lemma)?, ErasureInfo::new()));
     }
 
     Ok(())
@@ -3718,6 +3749,7 @@ pub(crate) fn finish_const_or_static<'tcx>(
         &[],
         None,
         false,
+        None,
     )?;
     let header = vir::headers::read_header(
         &mut vir_body,

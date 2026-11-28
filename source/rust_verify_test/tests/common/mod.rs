@@ -379,6 +379,10 @@ pub fn run_verus(
     for option in options.iter() {
         if let Some(name) = option.strip_prefix("--crate-name=") {
             crate_name = name;
+        } else if let Some(function) = option.strip_prefix("--verify-function-at-root ") {
+            verus_args.push("--verify-root".to_string());
+            verus_args.push("--verify-function".to_string());
+            verus_args.push(function.to_string());
         } else if let Some(module) = option.strip_prefix("--verify-only-module ") {
             verus_args.push("--verify-only-module".to_string());
             verus_args.push(module.to_string());

@@ -296,6 +296,9 @@ pub(crate) enum AssertItem {
     TacticGoal,
     TacticIntro,
     TacticShow,
+    TacticMotive,
+    TacticInductHyp,
+    TacticInduct,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -384,6 +387,7 @@ pub(crate) enum VstdItem {
     BranchBool,
     ExecNonstaticCall,
     ProofNonstaticCall,
+    TacticLemmaInductNat,
     ArrayIndexGet,
     ArrayAsSlice,
     ArrayFillForCopyTypes,
@@ -663,6 +667,9 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::verus_builtin::tactic_goal",             VerusItem::Assert(AssertItem::TacticGoal)),
         ("verus::verus_builtin::tactic_intro",            VerusItem::Assert(AssertItem::TacticIntro)),
         ("verus::verus_builtin::tactic_show",             VerusItem::Assert(AssertItem::TacticShow)),
+        ("verus::verus_builtin::tactic_motive",           VerusItem::Assert(AssertItem::TacticMotive)),
+        ("verus::verus_builtin::tactic_induct_hyp",       VerusItem::Assert(AssertItem::TacticInductHyp)),
+        ("verus::verus_builtin::tactic_induct",           VerusItem::Assert(AssertItem::TacticInduct)),
         ("verus::verus_builtin::use_type_invariant",      VerusItem::UseTypeInvariant),
 
         ("verus::verus_builtin::with_triggers",           VerusItem::WithTriggers),
@@ -749,6 +756,7 @@ fn verus_items_map() -> Vec<(&'static str, VerusItem)> {
         ("verus::vstd::invariant::spend_open_invariant_credit_in_proof", VerusItem::Vstd(VstdItem::Invariant(InvariantItem::SpendOpenInvariantCreditInProof), Some(Arc::new("invariant::spend_open_invariant_credit_in_proof".to_owned())))),
         ("verus::vstd::vstd::exec_nonstatic_call", VerusItem::Vstd(VstdItem::ExecNonstaticCall, Some(Arc::new("pervasive::exec_nonstatic_call".to_owned())))),
         ("verus::vstd::vstd::proof_nonstatic_call", VerusItem::Vstd(VstdItem::ProofNonstaticCall, Some(Arc::new("pervasive::proof_nonstatic_call".to_owned())))),
+        ("verus::vstd::tactic::lemma_induct_nat", VerusItem::Vstd(VstdItem::TacticLemmaInductNat, Some(Arc::new("tactic::lemma_induct_nat".to_owned())))),
 
         ("verus::vstd::atomic::atomically",               VerusItem::Spec(SpecItem::Atomically)),
         ("verus::vstd::atomic::pred_args",                VerusItem::Vstd(VstdItem::PredArgs,                                              Some(Arc::new("atomic::pred_args".to_owned())))),
