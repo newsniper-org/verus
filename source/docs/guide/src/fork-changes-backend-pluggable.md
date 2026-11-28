@@ -1,10 +1,11 @@
 # Pluggable SMT backends (fork)
 
-> **This page describes a fork of Verus.** The branch `backend-pluggable` (and likewise
-> `backend-pluggable-beta`) is `fip` (see [Changes from upstream Verus](./fork-changes.md)) plus
-> the changes on this page: two more SMT solvers that Verus can run, adsmt and OxiZ, and the
-> options that go with adsmt. A Korean version of this page is
-> [here](./fork-changes-backend-pluggable.ko.md).
+> **This page describes a fork of Verus.** The branch `backend-pluggable` is `fip` (see
+> [Changes from upstream Verus](./fork-changes.md)) plus the changes on this page: two more SMT
+> solvers that Verus can run, adsmt and OxiZ, and the options that go with adsmt.
+> `backend-pluggable-beta` (frozen) is `fip-beta` plus the same changes, so it has none of what
+> the column "since" of that page marks as `fip` (1.100), such as `-V triage` and `by(tactic)`.
+> A Korean version of this page is [here](./fork-changes-backend-pluggable.ko.md).
 >
 > All of this is experimental. Z3 stays the default solver. A result from adsmt or OxiZ is not a
 > substitute for a result from Z3.
@@ -28,6 +29,22 @@ uninterpreted sort as a finite domain of about 52 elements. A larger `distinct` 
 has one over the fuel identifiers) then made every query unsatisfiable, so every function
 "verified". The limit is `[package.metadata.adsmt] distinct_max_arity` in
 `source/air/Cargo.toml`, read at build time. The other solvers get the queries unchanged.
+
+## Fork features that need Z3 or cvc5
+
+Some features of `fip` check a query in a way that only Z3 and cvc5 support: they read `unknown`
+and the labels of the failed checks as these two report them. With `-V oxiz` or `-V adsmt` as
+the run's solver:
+
+* **`isolate(..)` does not split the query into parts.** This covers the step of a `by(tactic)`
+  script, `#[verifier::tactic(isolate(..))]` on a function or an `ensures` clause, and `isolate`
+  in a `.verus-hints` entry. The isolated proof is still checked, as part of the whole query, by
+  the run's solver, and a warning (one per function) says so. The options of `isolate` do not
+  apply either: a part's `rlimit` is not used, and a part with `backend = z3` or `backend = cvc5`
+  is not checked by that solver. So in the source, `backend = cvc5` without the encoding for cvc5
+  is not an error then. In `.verus-hints` it still is, unless the queries are in the encoding for
+  cvc5 (with `-V cvc5-smtlib`, or with `-V adsmt`, whose queries are in that encoding).
+* **`-V triage`** does nothing, and says nothing. Its help says "Z3 and cvc5 only".
 
 ## A fourth verdict: abductive
 

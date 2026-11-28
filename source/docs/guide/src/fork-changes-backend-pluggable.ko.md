@@ -1,9 +1,10 @@
 # 교체 가능한 SMT backend (fork)
 
-> **이 페이지는 Verus의 fork를 설명합니다.** `backend-pluggable` 브랜치(`backend-pluggable-beta`도 마찬가지)는
+> **이 페이지는 Verus의 fork를 설명합니다.** `backend-pluggable` 브랜치는
 > `fip`([업스트림 Verus 대비 변경 사항](./fork-changes.ko.md))에 이 페이지의 변경을 더한 것입니다. Verus가
-> 실행할 수 있는 SMT solver 두 개(adsmt, OxiZ)와 adsmt에 딸린 옵션들입니다. 영어판은
-> [여기](./fork-changes-backend-pluggable.md)에 있습니다.
+> 실행할 수 있는 SMT solver 두 개(adsmt, OxiZ)와 adsmt에 딸린 옵션들입니다. 동결된 `backend-pluggable-beta`는
+> `fip-beta`에 같은 변경을 더한 것이라, 그 페이지의 "도입" 열이 `fip` (1.100)인 것(예: `-V triage`,
+> `by(tactic)`)은 없습니다. 영어판은 [여기](./fork-changes-backend-pluggable.md)에 있습니다.
 >
 > 모두 실험적입니다. 기본 solver는 여전히 Z3입니다. adsmt나 OxiZ의 결과가 Z3의 결과를 대신하지는 않습니다.
 
@@ -24,6 +25,20 @@ Verus는 실행 파일을 Z3, cvc5와 같은 방법으로 찾습니다. 변수�
 모델링했습니다. 그래서 더 큰 `distinct`가 있으면(Verus의 prelude에 fuel 식별자에 대한 것이 하나 있습니다) 모든
 질의가 unsat이 되었고, 모든 함수가 "검증"되었습니다. 이 한계는 `source/air/Cargo.toml`의
 `[package.metadata.adsmt] distinct_max_arity`이고, 빌드할 때 읽습니다. 다른 solver에는 질의가 그대로 갑니다.
+
+## Z3나 cvc5가 필요한 fork 기능
+
+`fip`의 기능 가운데 몇 가지는 Z3와 cvc5만 지원하는 방식으로 질의를 검사합니다. 두 solver가 알려 주는 방식대로
+`unknown`과 실패한 검사의 label을 읽습니다. 실행 solver가 `-V oxiz`나 `-V adsmt`이면 다음과 같습니다.
+
+* **`isolate(..)`는 질의를 부분으로 나누지 않습니다.** `by(tactic)` script의 step, 함수나 `ensures` 절의
+  `#[verifier::tactic(isolate(..))]`, `.verus-hints` 항목의 `isolate`가 모두 해당합니다. isolate된 증명은 그래도
+  질의 전체의 일부로 실행 solver가 검사하고, 그렇다는 경고가 함수마다 하나 나옵니다. `isolate`의 옵션도 적용되지
+  않습니다. 부분의 `rlimit`은 쓰이지 않고, `backend = z3`나 `backend = cvc5`인 부분도 그 solver로 검사되지
+  않습니다. 그래서 소스에서 cvc5용 인코딩 없이 쓴 `backend = cvc5`는 이때 오류가 아닙니다. `.verus-hints`에서는
+  여전히 오류입니다. 단, 질의가 cvc5용 인코딩이면(`-V cvc5-smtlib`일 때, 또는 질의가 그 인코딩인 `-V adsmt`일
+  때) 오류가 아닙니다.
+* **`-V triage`**는 아무 일도 하지 않고, 아무것도 알리지 않습니다. 도움말에는 "Z3 and cvc5 only"라고 나옵니다.
 
 ## 네 번째 판정: abductive
 
