@@ -3,6 +3,8 @@
 [Verus overview](./overview.md)
 [Changes from upstream Verus (fork)](./fork-changes.md)
 [업스트림 Verus 대비 변경 사항 (fork, 한국어)](./fork-changes.ko.md)
+[Walkthrough: tactic scripts, induction, isolate, hints, triage (fork)](./tutorial-tactics.md)
+[따라 하기: tactic script, 귀납, isolate, hints, triage (fork, 한국어)](./tutorial-tactics.ko.md)
 
 # Getting started
 

@@ -1,6 +1,6 @@
 # assert ... by(tactic) (fork)
 
-> **Fork extension, experimental.** `by(tactic)` and `-V triage` exist only in this Verus fork.
+> **Fork extension, experimental.** `by(tactic)`, `#[verifier::tactic(isolate(..))]`, `.verus-hints` (`-V hints`, `-V hints-locked`) and `-V triage` exist only in this Verus fork.
 > The Korean version of this page is [here](./reference-assert-by-tactic.ko.md).
 
 When the SMT solver does not find a proof, you can tell it how to proceed, step by step, the
@@ -13,13 +13,21 @@ assert(forall|i: int| 0 <= i < n ==> #[trigger] f(i) > i) by(tactic) {
 }
 ```
 
-Each step expands into ordinary proof code before the rest of `verus!` sees it: `assert`,
-`assert ... by`, `assert forall ... implies ... by`, `if`, `match`, `reveal_with_fuel` and lemma
-calls. That code is then checked like any other proof, and the block still ends with the
-assertion of the goal. **A step changes how the goal is proved, never what is proved**: a
-wrong step makes the proof fail, it cannot make a false assertion pass. The expansion is not
-part of what you have to trust. (`isolate(..)` adds one small trusted check; see
-[below](#checking-a-proof-on-its-own-isolate).)
+Each step becomes ordinary proof code: `assert`, `assert ... by`,
+`assert forall ... implies ... by`, `if`, `match`, `reveal`, `reveal_with_fuel` and lemma calls.
+`verus!` expands most steps itself. Some steps need something the macro cannot see, the type of
+a value or the body of a function. These are `cases(b)` and `cases(e)` without blocks, `induct(x)`
+without blocks or `from`, and `unfold(f)` before a `split` or `intro()` that needs it, together
+with the `split`, `intro()` and `show()` that work on its goal. The macro passes these to
+rust_verify, which turns them into the same kinds of code. `induct` on a datatype also calls a
+principle lemma that rust_verify generates and verifies with the function
+([below](#induction-induct)). That code is then checked like any other proof, and the block
+still ends with the assertion of the goal. **A step changes how the goal is proved, never what
+is proved**: a wrong step makes the proof fail, it cannot make a false assertion pass. You do
+not have to trust the expansion or what rust_verify does with these steps. (`isolate(..)` adds
+one small trusted check; see [below](#checking-a-proof-on-its-own-isolate).)
+
+To learn these features by following examples, see the [walkthrough](./tutorial-tactics.md).
 
 ### Syntax
 
@@ -80,12 +88,13 @@ The `..` in a step's expansion is where the rest of the script goes.
   script proves that goal. `split` then splits it into its parts (a conjunction, or an `if` with
   an `else`; an `<==>` is not split there yet), and `intro()` proves the body of its `forall`
   (whose variables are not named in the script) or the conclusion of its `==>` under the
-  condition. `show()` shows the goal as the text of `f`'s body, with the arguments in place of
-  the parameters listed after it.
-  - Between the `unfold` and the `split` there may be `have`, `apply`, `inst`, `show`, `cases(b)`
-    and `isolate`. Another `unfold(g)` there works on the result when the goal calls `f`
-    (`unfold(f); unfold(g); split()`); otherwise only the `unfold` nearest the `split` works on the
-    goal, and the ones before it only reveal their function. For a function inside one part, use
+  condition. Between the `unfold` and the `split`, `show()` shows the goal as the text of `f`'s
+  body, with the arguments in place of the parameters listed after it (after the `split`, see
+  [`show()`](#show)).
+  - Between the `unfold` and the `split` (or the `intro()`) there may be `have`, `apply`, `inst`,
+    `show`, a bare `cases(b)` or `cases(e)`, and `isolate`. Another `unfold(g)` there works on the
+    result when the goal calls `f` (`unfold(f); unfold(g); split()`); otherwise only the `unfold`
+    nearest the `split` (or the `intro()`) works on the goal, and the ones before it only reveal their function. For a function inside one part, use
     a block: `unfold(f); split({ unfold(g); split(); }, { .. })`.
   ```rust
   #[verifier::opaque]
@@ -103,7 +112,8 @@ The `..` in a step's expansion is where the rest of the script goes.
     `decreases .. when` clause, yet). Its body must be an expression (no proof block). A proof
     in `f` (or in a function that it unfolds) may not unfold the function being defined: that is
     an error. An argument that goes into a trigger of `f`'s body must be one that a trigger can
-    hold (not a closure, a comparison or a boolean operator): bind it to a variable first.
+    hold: it may not be or contain a closure, a quantifier or `choose`, an `if` or a `match`, a
+    comparison, a boolean operator or `!`, or a block with a `let`. Bind it to a variable first.
   - After `unfold` and `split()`, the rest of the script is shared by the parts, whose goals are
     not known when it is expanded: there, no step may look at the goal (`unfold` before a
     `split` or an `intro`, `split`, `intro`). Give each part its own block, `split({ .. }, { .. })`, for such
@@ -128,12 +138,12 @@ The `..` in a step's expansion is where the rest of the script goes.
   - It needs vstd (on a `nat` or an `int`).
   - With `induct(x)` (no blocks, no `from`), the assertions of the steps in the rest also say
     in which case they are: ``where `n == 0` `` or ``where `n > 0` `` on a `nat`, ``where `t` is
-    `E::V` `` on a datatype.
+    `E::V` `` on an enum, ``where `t` is a `S` `` on a struct.
   - `induct(t)` on a value of a datatype (an enum or a struct) is structural induction: there is
     one case per variant, and in the case of a variant `V`, the goal holds for each field of `V`
     whose type is the datatype itself or a `Box` of it (the hypothesis). The rest of the script
     proves every case (no blocks), and an error names the variant (`` `t` is `List::Cons`, with
-    the goal for its field `1` ``). rust_verify then calls a principle lemma for the datatype,
+    the goal for its field `1` ``; on a struct, `` `t` is a `S` ``). rust_verify then calls a principle lemma for the datatype,
     which it generates for the function (`tactic_induct%<function>%..`): a proof function whose
     `requires` are the cases, proved by recursion on its argument. It is verified like any other
     function, with the function (also under `--verify-function`), and is private to its module.
@@ -163,11 +173,17 @@ proof fn t(x: int, y: int) {
 }
 ```
 
-When an assertion that `have`, `inst`, `split`, `cases`, `induct`, `smt()` or `intro` (on an `==>`)
-generated fails, the error says which step it came from (for `induct`, whether it was the base case
-or the step, or which variant). For `intro` on a `forall` written in the goal, `smt(<prover>, ..)` and
-`compute()`, it points at the goal without naming the step; on the goal after `unfold`, `intro`
-names the step (`intro` (after `unfold`)).
+When an assertion that `have`, `inst`, `split`, `cases`, `induct`, `isolate`, `smt()` or `intro`
+(on an `==>`) generated fails, the error says which step it came from (for `cases`, which case:
+``the condition holds`` or ``the condition does not hold`` for a `bool`, ``(`e` is `E::C`)`` for an
+enum, ``arm k`` for `cases(match ..)`; for `induct`, whether it was the base case or the step, or
+which variant). When `unfold(f)` works on the goal, the unfolded goal is asserted with
+``from the tactic step `unfold` (`f`, one level)`` (with ``, fuel k`` for `unfold(f, k)`). After
+`cases(b)` or `cases(e)` with no blocks, or `induct(x)` (no blocks, no `from`), the assertions of
+the later steps also say in which case they are: ``where `b` holds`` or ``where `b` does not hold``,
+``where `e` is `E::C` ``, ``where `n == 0` ``. For `intro` on a `forall` written in the goal,
+`smt(<prover>, ..)` and `compute()`, it points at the goal without naming the step; on the goal
+after `unfold`, `intro` names the step (`intro` (after `unfold`)).
 
 ```
 error: assertion failed
@@ -180,8 +196,11 @@ error: assertion failed
 
 The goal is asserted where the step puts it, so a name means what it means there. A `let` in the
 script that reuses a name the goal uses changes what the later steps assert (the goal itself is
-still checked as written, at the end). A pattern in `cases(match ..)` may not bind a name the goal
-uses; that is an error. `split()` does not take an `if let` goal; use `cases(match ..)`.
+still checked as written, at the end). This does not apply to the goal after an `unfold` that
+works on it: that goal is not text, and its names keep the meaning they had at the `unfold`. A
+pattern in `cases(match ..)` may not bind a name the goal uses; that is an error (but not on the
+goal after such an `unfold`, whose names a pattern cannot capture). `split()` does not take an
+`if let` goal; use `cases(match ..)`.
 
 ### What a script may not do
 
@@ -204,9 +223,15 @@ with the arguments in place of the parameters listed after it), so:
   not listed;
 - nothing it prints has been checked yet;
 - it prints even when the proof later fails, and also when verification passes;
-- after a bare `cases(e)`, the rest of the script is expanded once for all the cases (the type of
-  `e` is not known yet), so `show()` prints one note that names `e` but not the case. To see
-  each case's condition, use `cases(b, { ..; show(); }, { ..; show(); })` or `cases(match ..)`.
+- after a bare `cases(b)` or `cases(e)` (on a `bool` or an enum), or a bare `induct(x)` (no
+  blocks, no `from`), the rest of the script is expanded once for all the cases (the type is not
+  known yet), so `show()` prints one note that names the variable but not the case (an error
+  still names its case). To see each case's condition, use
+  `cases(b, { ..; show(); }, { ..; show(); })` or `cases(match ..)`, and on a `nat`,
+  `induct(n, { ..; show(); }, { ..; show(); })` (`induct(i, from(lo))` on an `int` is already
+  expanded once per case). On a datatype there is no such form;
+- in the rest of the script after `unfold(f); split();`, which the parts share, `show()` prints
+  "the goal here is each part of the `split` after `unfold`", followed by the parts.
 
 ### Checking a proof on its own: `isolate`
 
@@ -259,8 +284,9 @@ For why the second holds, see `smt_check_partitions` in `air/src/smt_verify.rs`.
   own, as for `backend = cvc5`.
 - **`ensures` clauses.** `#![verifier::tactic(isolate(..))]` at the start of an `ensures` clause
   makes the clause's checks, at every return, a part of their own, with the same options. On a
-  function, `#[verifier::tactic(isolate(..))]` does this for all its `ensures` clauses together
-  (not on a trait method declaration: put it on the implementations).
+  function, `#[verifier::tactic(isolate(..))]` does this for all its `ensures` clauses together,
+  except for a clause with its own attribute, which is a part of its own. It is not allowed on a
+  trait method declaration: put it on the implementations.
   See [the attribute](./reference-attributes.md#verifiertacticisolate-and-verifiertacticisolate).
 - **Not checked in parts.** Queries that only report are checked as a whole: recommends,
   `--expand-errors`, the `--profile` rerun and `-V triage`. A `by(bit_vector)` assertion, and a
@@ -296,7 +322,8 @@ isolate = {}                 # all its `ensures` clauses, as #[verifier::tactic(
 
 - **Where.** `-V hints=<path>` (relative to the directory Verus runs in), or else the first
   `.verus-hints` found in the directory of the crate root file and its parents, up to the nearest
-  one with a `Cargo.toml`. With cargo, `-V hints` is for the packages being verified (the primary
+  one with a `Cargo.toml`. With no `Cargo.toml` there or in any parent, only the root file's own
+  directory is searched. With cargo, `-V hints` is for the packages being verified (the primary
   packages); a crate that is not verified (`--no-verify`, such as a dependency) takes no hints.
   When the file changes, cargo checks the crate again.
 - **Names.** A function is named by its path in the crate (`m::f`, `S::f`), with or without
@@ -355,11 +382,13 @@ The kinds of answer:
 
 When the query exceeded the rlimit, up to three obligations that are proved alone but use at
 least a tenth of the rlimit are listed too (Z3 only: cvc5 does not report the resources a check
-used). If every obligation is proved alone, the summary says that only all of them together
-exceed the rlimit.
+used). If every obligation is proved alone, the summary says so and says why the query was not
+proved. If the query exceeded the rlimit, the reason is that only all of them together exceed it
+(with one obligation: the proof is close to the limit). If it did not, the reason is that the
+solver searches differently for the query as a whole.
 
 This is diagnostics only:
 - the result of verification does not change;
 - the checks run in a solver process of their own, so the other queries are not affected;
 - only Z3 and cvc5 are triaged;
-- `by(bit_vector)` queries, recommends checks and `--expand-errors` reruns are not triaged.
+- `by(bit_vector)` assertions, `#[verifier::bit_vector]` and `#[verifier::integer_ring]` functions, recommends checks, and the `--expand-errors` and `--profile` reruns are not triaged.

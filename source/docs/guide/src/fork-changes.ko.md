@@ -81,6 +81,9 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 `FipAdd`, `FipOrd` 같은 연산자 marker)와 `vstd::tactic`(`by(tactic)` script의 `induct` step이 부르는
 `lemma_induct_nat`, `lemma_induct_int_from`)에 있습니다.
 
+tactic 관련 기능을 예제를 따라 한 단계씩 익히려면 [따라 하기](./tutorial-tactics.ko.md)를 보세요. 그 코드는
+시험이 검증하는 `examples/guide/tactics_tutorial.rs`와 `tactics_tutorial_errors.rs`에 있습니다.
+
 ## 새 옵션 없이도 적용되는 변경
 
 새 검사는 해당 옵션(`-V alloc-check`, `-V alloc-check-strict`, `-V fip-lint`)을 줄 때만 돕니다. 다음은 모든
@@ -122,7 +125,7 @@ Rust 1.100.0이 나오면서 `fip-beta`를 그 버전으로 옮겼고, `fip`을 
 * **SMT 쪽.** solver는 같습니다. 업스트림이 고정한 버전의 Z3입니다. SMT 질의로의 인코딩을 맡는 `air`는
   업스트림과 같은 방식으로 질의를 만듭니다. 다만 두 가지가 더해졌습니다.
   - `-V triage`는 진단 검사를 별도 solver 프로세스에서 돌립니다.
-  - `isolate(..)`는 질의를 부분으로 나눠 검사합니다. 이 검사가 신뢰해야 할 대상에 새로 들어간 유일한 것입니다([assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절).
+  - `isolate(..)`는 질의를 부분으로 나눠 검사합니다. 이 검사가 신뢰해야 할 대상에 새로 들어간 유일한 것입니다([assert ... by(tactic)](./reference-assert-by-tactic.ko.md)의 `isolate` 절). `backend = cvc5`인 부분(소스에서, 또는 `.verus-hints`에서)은 Z3로 실행해도(`-V cvc5-smtlib`) cvc5만 증명합니다. 그래서 그 부분에서는 `-V cvc5`로 실행할 때처럼 cvc5를 신뢰하게 됩니다. (`-V cvc5` 실행에서 `backend = z3`인 부분은 마찬가지로 Z3를 신뢰합니다.)
 * **명령줄 옵션.** 업스트림 옵션 가운데 없어지거나 뜻이 바뀐 것은 없습니다. fork는 옵션을 더하기만 합니다.
 
 이 저장소의 테스트 밖에 있는 코드에서 업스트림과 fork를 비교해 본 적은 아직 없습니다.

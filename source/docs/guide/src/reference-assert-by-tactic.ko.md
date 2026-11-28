@@ -1,6 +1,6 @@
 # assert ... by(tactic) (fork)
 
-> **fork 확장, 실험적 기능.** `by(tactic)`과 `-V triage`는 이 Verus fork에만 있습니다.
+> **fork 확장, 실험적 기능.** `by(tactic)`, `#[verifier::tactic(isolate(..))]`, `.verus-hints`(`-V hints`, `-V hints-locked`), `-V triage`는 이 Verus fork에만 있습니다.
 > 이 문서의 영어판은 [여기](./reference-assert-by-tactic.md)에 있습니다.
 
 SMT solver가 증명을 찾지 못하면, 어떻게 나아갈지 한 단계씩 직접 지시할 수 있습니다. 대화형 정리
@@ -13,13 +13,21 @@ assert(forall|i: int| 0 <= i < n ==> #[trigger] f(i) > i) by(tactic) {
 }
 ```
 
-각 step은 `verus!`의 나머지 처리보다 먼저 평범한 증명 코드로 펼쳐집니다. 펼친 결과는 `assert`,
-`assert ... by`, `assert forall ... implies ... by`, `if`, `match`, `reveal_with_fuel`, lemma 호출입니다.
-이 코드는 다른 증명과 똑같이 검사되고, 블록의 끝에서는 여전히 goal을 assert합니다.
+각 step은 평범한 증명 코드가 됩니다. 그 결과는 `assert`, `assert ... by`,
+`assert forall ... implies ... by`, `if`, `match`, `reveal`, `reveal_with_fuel`, lemma 호출입니다.
+대부분의 step은 `verus!`가 직접 펼칩니다. 몇몇 step은 매크로가 볼 수 없는 것, 곧 값의 타입이나
+함수의 본문이 필요합니다. 블록 없는 `cases(b)`와 `cases(e)`, 블록과 `from`이 없는 `induct(x)`,
+그것이 필요한 `split`이나 `intro()` 앞의 `unfold(f)`, 그리고 그 goal에 작용하는 `split`, `intro()`,
+`show()`가 그렇습니다. 매크로는 이것들을 rust_verify에 넘기고, rust_verify가 같은 종류의 코드로
+바꿉니다. datatype에 대한 `induct`는 rust_verify가 생성해 그 함수와 함께 검증하는 귀납 원리
+보조정리도 호출합니다(아래 `induct` 절). 이 코드는 다른 증명과 똑같이 검사되고, 블록의 끝에서는
+여전히 goal을 assert합니다.
+
+예제를 따라 하며 익히려면 [따라 하기](./tutorial-tactics.ko.md)를 보세요.
 
 **step은 goal을 "어떻게" 증명할지만 바꾸고, "무엇을" 증명할지는 바꾸지 않습니다.** 잘못된 step은
-증명을 실패하게 할 뿐, 거짓인 assertion을 통과시키지 못합니다. 따라서 펼치는 과정은 신뢰해야 할 대상이
-아닙니다. 다만 `isolate(..)`는 작은 검사 하나를 신뢰 대상에 더합니다(아래 `isolate` 절).
+증명을 실패하게 할 뿐, 거짓인 assertion을 통과시키지 못합니다. 따라서 매크로가 펼치는 과정도, rust_verify가 이 step들을 바꾸는 과정도 신뢰해야 할
+대상이 아닙니다. 다만 `isolate(..)`는 작은 검사 하나를 신뢰 대상에 더합니다(아래 `isolate` 절).
 
 ### 구문
 
@@ -78,10 +86,12 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
   그대로 둡니다) 매개변수 자리에 인자를 넣습니다. script의 나머지가 그 goal을 증명하고, `split`은 그것을
   부분으로 나눕니다(conjunction, 또는 `else`가 있는 `if`. 거기서 `<==>`는 아직 나누지 않습니다). `intro()`는
   그 `forall`의 본문(변수는 script에서 이름이 없습니다)이나, 조건 아래에서 `==>`의 결론을 증명합니다.
-  `show()`는 goal을 `f` 본문의 텍스트로 보여 주고, 그 뒤에 매개변수 자리에 들어간 인자를 나열합니다.
-  - `unfold`와 `split` 사이에는 `have`, `apply`, `inst`, `show`, `cases(b)`, `isolate`가 올 수 있습니다.
-    goal이 `f`를 부르면 그 사이의 다른 `unfold(g)`도 결과에 작용합니다(`unfold(f); unfold(g); split()`).
-    그렇지 않으면 `split`에 가장 가까운 `unfold`만 goal에 작용하고, 그 앞의 것들은 함수를 reveal만
+  `unfold`와 `split` 사이에서 `show()`는 goal을 `f` 본문의 텍스트로 보여 주고, 그 뒤에 매개변수 자리에
+  들어간 인자를 나열합니다(`split` 뒤는 아래 `show()` 절 참고).
+  - `unfold`와 `split`(또는 `intro()`) 사이에는 `have`, `apply`, `inst`, `show`, 블록 없는 `cases(b)`나
+    `cases(e)`, `isolate`가 올 수 있습니다. goal이 `f`를 부르면 그 사이의 다른 `unfold(g)`도 결과에
+    작용합니다(`unfold(f); unfold(g); split()`). 그렇지 않으면 `split`(또는 `intro()`)에 가장 가까운
+    `unfold`만 goal에 작용하고, 그 앞의 것들은 함수를 reveal만
     합니다. 한 부분 안의 함수에는 블록을 쓰세요: `unfold(f); split({ unfold(g); split(); }, { .. })`.
   ```rust
   #[verifier::opaque]
@@ -98,7 +108,8 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
     public인 것), generic, opaque, 재귀 함수도 됩니다(`decreases .. when` 절이 있는 것은 아직 안 됩니다).
     본문은 식이어야 합니다(proof 블록이 없어야 함). `f` 안의 증명(또는 `f`가 펼치는 함수 안의 증명)이 지금
     정의 중인 함수를 펼치면 오류입니다. `f` 본문의 trigger에 들어가는 인자는 trigger가 담을 수 있는 것이어야
-    합니다(closure, 비교, boolean 연산자는 안 됨). 먼저 변수에 묶으세요.
+    합니다. closure, quantifier나 `choose`, `if`나 `match`, 비교, boolean 연산자나 `!`, `let`이 있는 블록은
+    인자 자체로도, 인자 안에 들어 있어도 안 됩니다. 먼저 변수에 묶으세요.
   - `unfold`와 `split()` 뒤의 script 나머지는 여러 부분이 같이 씁니다. 나머지를 펼칠 때는 각 부분의 goal을
     아직 모르므로, 거기서는 goal을 들여다보는 step(`split`이나 `intro` 앞의 `unfold`, `split`, `intro`)을 쓸 수 없습니다. 그런
     step에는 부분마다 블록을 주세요: `split({ .. }, { .. })`. 이런 `unfold` 뒤의 `induct`는
@@ -119,11 +130,12 @@ step은 현재 goal(아래 표의 `G`)에 작용합니다. 처음 goal은 assert
     유지합니다.
   - `nat`이나 `int`에서는 vstd가 필요합니다.
   - `induct(x)`(블록도 `from`도 없는 것)에서는 나머지 step이 만든 assertion도 어느 경우에 있는지 알려
-    줍니다. `nat`에서는 ``where `n == 0` ``이나 ``where `n > 0` ``, datatype에서는 ``where `t` is `E::V` ``입니다.
+    줍니다. `nat`에서는 ``where `n == 0` ``이나 ``where `n > 0` ``, enum에서는 ``where `t` is `E::V` ``,
+    struct에서는 ``where `t` is a `S` ``입니다.
   - datatype(enum이나 struct) 값에 대한 `induct(t)`는 구조적 귀납입니다. variant마다 경우가 하나씩
     있고, variant `V`의 경우에서는 `V`의 필드 중 타입이 그 datatype 자신이거나 그것의 `Box`인 필드마다
     goal이 성립합니다(귀납 가정). script의 나머지가 모든 경우를 증명하며(블록은 받지 않습니다), 오류는
-    variant를 알려 줍니다(`` `t` is `List::Cons`, with the goal for its field `1` ``). 그다음 rust_verify가
+    variant를 알려 줍니다(`` `t` is `List::Cons`, with the goal for its field `1` ``. struct에서는 `` `t` is a `S` ``). 그다음 rust_verify가
     그 datatype의 귀납 원리 보조정리를 부릅니다. 이 보조정리는 rust_verify가 그 함수를 위해 생성하는
     proof 함수(`tactic_induct%<함수>%..`)로, `requires`가 그 경우들이고, 인자에 대한 재귀로 증명됩니다.
     다른 함수처럼 그 함수와 함께 검증되며(`--verify-function`에서도), 그 모듈 밖에서는 보이지 않습니다.
@@ -152,10 +164,16 @@ proof fn t(x: int, y: int) {
 }
 ```
 
-`have`, `inst`, `split`, `cases`, `induct`, `smt()`, `==>`에 쓴 `intro`가 만든 assertion이 실패하면, 오류가
-그 assertion을 만든 step을 알려 줍니다(`induct`는 기저 경우인지 단계인지, 또는 어느 variant인지도 알려 줍니다). goal에 쓰인 `forall`에 쓴 `intro`,
-`smt(<prover>, ..)`, `compute()`는 step 이름 없이 goal을 가리킵니다. `unfold` 뒤의 goal에 쓴 `intro`는 step을
-알려 줍니다(`intro` (after `unfold`)).
+`have`, `inst`, `split`, `cases`, `induct`, `isolate`, `smt()`, `==>`에 쓴 `intro`가 만든 assertion이 실패하면,
+오류가 그 assertion을 만든 step을 알려 줍니다. `cases`는 어느 경우인지도 알려 줍니다(`bool`에서는
+``(the condition holds)``나 ``(the condition does not hold)``, enum에서는 ``(`e` is `E::C`)``,
+`cases(match ..)`에서는 ``(arm 1)``처럼 몇 번째 갈래인지). `induct`는 기저 경우인지 단계인지, 또는 어느
+variant인지 알려 줍니다. 블록 없는 `cases(e)`나 `induct(x)` 뒤에서는 나머지 step이 만든 assertion도 어느 경우에
+있는지 알려 줍니다(``where `b` holds``, ``where `b` does not hold``, ``where `e` is `E::C` ``,
+``where `n == 0` ``). `unfold(f)`가 `split`이나 `intro()` 앞에서 goal에 작용하면, 펼친 goal의 assertion은
+``from the tactic step `unfold` (`f`, one level)``이라고 알려 줍니다(`unfold(f, k)`이면 ``, fuel k``가 붙습니다).
+goal에 쓰인 `forall`에 쓴 `intro`, `smt(<prover>, ..)`, `compute()`는 step 이름 없이 goal을 가리킵니다.
+`unfold` 뒤의 goal에 쓴 `intro`는 step을 알려 줍니다(`intro` (after `unfold`)).
 
 ```
 error: assertion failed
@@ -168,8 +186,10 @@ error: assertion failed
 
 goal은 step이 놓은 자리에서 assert되므로, 이름은 그 자리에서의 뜻을 가집니다. script 안의 `let`이
 goal이 쓰는 이름을 다시 쓰면, 그 뒤 step들이 assert하는 내용이 달라집니다. 끝에서는 goal을 쓰인
-그대로 검사합니다. `cases(match ..)`의 패턴이 goal이 쓰는 이름을 묶으면 오류입니다. `split()`은
-`if let` goal을 받지 않으니 `cases(match ..)`를 쓰세요.
+그대로 검사합니다. goal에 작용한 `unfold` 뒤의 goal에는 이것이 해당하지 않습니다: 그 goal은 텍스트가
+아니어서, 그 이름들은 `unfold` 자리에서의 뜻을 유지합니다. `cases(match ..)`의 패턴이 goal이 쓰는
+이름을 묶으면 오류입니다(그런 `unfold` 뒤의 goal에서는 예외: 패턴이 그 이름을 잡을 수 없습니다).
+`split()`은 `if let` goal을 받지 않으니 `cases(match ..)`를 쓰세요.
 
 ### script에서 할 수 없는 것
 
@@ -189,9 +209,15 @@ case의 조건, `intro`가 들여온 것입니다.
 - `requires`나 assertion 앞의 문장처럼 문맥에서 오는 사실은 나오지 않습니다.
 - 보여 주는 내용은 아직 아무것도 검사되지 않은 것입니다.
 - 나중에 증명이 실패해도, 검증이 통과해도 출력됩니다.
-- 그냥 `cases(e)`를 쓴 뒤에는 script의 나머지를 모든 경우에 대해 한 번만 펼칩니다(그때는 `e`의 타입을 아직
-  모릅니다). 그래서 `show()`는 `e`는 말하지만 어느 경우인지는 말하지 않는 note를 하나만 보여 줍니다. 경우마다
-  조건을 보려면 `cases(b, { ..; show(); }, { ..; show(); })`나 `cases(match ..)`를 쓰세요.
+- 블록 없는 `cases(b)`나 `cases(e)`, 또는 블록도 `from`도 없는 `induct(x)` 뒤에서는 script의 나머지를 모든
+  경우에 대해 한 번만 펼칩니다(그때는 그 변수의 타입을 아직 모릅니다). 그래서 `show()`는 그 변수는 말하지만
+  어느 경우인지는 말하지 않는 note를 하나만 보여 줍니다(오류는 여전히 경우를 말합니다). 경우마다 사실을 보려면
+  `cases(b, { ..; show(); }, { ..; show(); })`나 `cases(match ..)`를 쓰고, `nat`이라면
+  `induct(n, { ..; show(); }, { ..; show(); })`를 쓰세요(`induct(i, from(lo))`는 블록 없이도 경우마다
+  펼칩니다). datatype에 대한 `induct(t)`는 블록을 받지 않으므로 그런 형태가 없습니다.
+- `unfold(f); split();` 뒤에서 여러 부분이 같이 쓰는 script 나머지에서는 부분마다 goal이 다르므로,
+  `show()`는 goal 대신 "the goal here is each part of the `split` after `unfold`"와 그 부분들의 텍스트를
+  보여 줍니다.
 
 ### 증명을 따로 검사하기: `isolate`
 
@@ -282,7 +308,8 @@ isolate = {}                 # 모든 `ensures` 절. h의 #[verifier::tactic(iso
 
 - **위치:** `-V hints=<path>`(Verus를 실행하는 디렉터리 기준 상대 경로). 없으면 crate root 파일이 있는
   디렉터리부터 위로 올라가며, `Cargo.toml`이 있는 가장 가까운 디렉터리까지에서 처음 찾은 `.verus-hints`를
-  씁니다. cargo에서 `-V hints`는 검증하는 패키지(primary package)에만 적용됩니다. 검증하지 않는
+  씁니다. 그 디렉터리와 그 위 어디에도 `Cargo.toml`이 없으면 crate root 파일이 있는 디렉터리만 찾습니다.
+  cargo에서 `-V hints`는 검증하는 패키지(primary package)에만 적용됩니다. 검증하지 않는
   crate(`--no-verify`, 예를 들어 의존성)에는 hint가 적용되지 않습니다. 파일이 바뀌면 cargo가 crate를 다시
   검사합니다.
 - **이름:** 함수는 crate 안에서의 경로(`m::f`, `S::f`, 앞에 `crate::`를 붙여도 됨)나, rustc의 전체
@@ -338,10 +365,12 @@ note: triage (7/15): postcondition not satisfied: exceeded the rlimit alone
 
 질의가 rlimit을 넘으면, 혼자서는 증명되지만 rlimit의 10분의 1 이상을 쓰는 obligation도 셋까지
 보여 줍니다. 이것은 Z3에서만 됩니다. cvc5는 검사가 쓴 자원을 알려 주지 않습니다. 모든 obligation이
-혼자서 증명되면, 모두 합쳤을 때만 rlimit을 넘는다고 요약에 적습니다.
+혼자서 증명되면 요약에 그렇게 적고, 질의가 증명되지 않은 까닭도 적습니다. 질의가 rlimit을 넘었으면
+모두 합쳤을 때만 rlimit을 넘는다고 적습니다(obligation이 하나면 증명이 한계에 가깝다고 적습니다).
+넘지 않았으면 질의 전체에서는 solver가 다르게 탐색한다고 적습니다.
 
 이 기능은 진단용일 뿐입니다.
 - 검증 결과는 바뀌지 않습니다.
 - 검사는 별도 solver 프로세스에서 돌기 때문에, 다른 질의에 영향을 주지 않습니다.
 - Z3와 cvc5에서만 동작합니다.
-- `by(bit_vector)` 질의, recommends 검사, `--expand-errors`의 재실행은 triage하지 않습니다.
+- `by(bit_vector)` assertion과 `#[verifier::bit_vector]`·`#[verifier::integer_ring]` 함수의 질의, recommends 검사, `--expand-errors`와 `--profile`의 재실행은 triage하지 않습니다.

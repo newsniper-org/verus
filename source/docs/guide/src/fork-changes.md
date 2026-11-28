@@ -87,6 +87,10 @@ The new vstd items for these features are in `vstd::alloc_check` (marker traits 
 in `vstd::tactic` (`lemma_induct_nat` and `lemma_induct_int_from`, which the `induct` step of a
 `by(tactic)` script calls).
 
+To learn the tactic features by following examples, step by step, see the
+[walkthrough](./tutorial-tactics.md); its code is in `examples/guide/tactics_tutorial.rs` and
+`tactics_tutorial_errors.rs`, which the tests verify.
+
 ## Changes that apply without the new options
 
 The new checks run only when their option is given (`-V alloc-check`, `-V alloc-check-strict`,
@@ -137,6 +141,9 @@ The new checks run only when their option is given (`-V alloc-check`, `-V alloc-
   - `-V triage` runs its diagnostics in a solver process of its own;
   - `isolate(..)` checks a query in parts. This check is the one addition to what has to be
     trusted ([assert ... by(tactic)](./reference-assert-by-tactic.md#checking-a-proof-on-its-own-isolate)).
+    A part with `backend = cvc5` (in the source, or in `.verus-hints`) is proved by cvc5 alone,
+    also in a Z3 run (`-V cvc5-smtlib`). So for that part, cvc5 is trusted, as in a `-V cvc5`
+    run. (Likewise Z3, for `backend = z3` in a `-V cvc5` run.)
 * **Command-line options.** No upstream option is removed or changes its meaning. The fork only
   adds options.
 
